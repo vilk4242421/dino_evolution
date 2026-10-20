@@ -176,17 +176,30 @@
     if (a.ranged) return (p.st.y - this.W.heightAt(p.st.x, p.st.z)) < 4;              // дальнобойные только по низко летящим
     return false;
   };
+  // сильные враги (уровень выше игрока) замечают его с меньшей дальности: −12% за уровень разницы (минимум ×0.6); слабые — как обычно
+  RP.aggroK = function (e, p) {
+    var d = (e.lv || 0) - (p.profile ? p.profile.level : 0);
+    return d > 0 ? Math.max(0.6, 1 - 0.12 * d) : 1;
+  };
   RP.pickTarget = function (e) {
-    var best = null, bd = 1e9, self = this, a = e.arch, aggro = a.aggro || 20;
+    var best = null, bd = 1e9, self = this, a = e.arch, aggro = (a.aggro || 20) * (CF.AGGRO_MULT || 0.75);
+    // не больше MAX_CHASERS врагов гонятся за одним игроком одновременно: остальные ждут, пока кто-то отстанет или погибнет
+    if (this._chTick !== this.tick) {
+      this._chTick = this.tick; this._chN = {};
+      this.ents.forEach(function (q) { if (!q.dead && q.target && q.target.kind === 'p' && q.arch && q.arch.role === 'hostile') self._chN[q.target.id] = (self._chN[q.target.id] || 0) + 1; });
+    }
+    var maxCh = CF.MAX_CHASERS || 4;
     this.players.forEach(function (p) {
+      if ((self._chN[p.id] || 0) >= maxCh && e.target !== p) return;
       if (!p.alive || p.gone || p.shield > self.t || self.friendly(e, p)) return;
       if (p.st.clm) return;                                                          // на дереве не достать никому
       if (!self.canHitAir(e, p)) return;                                             // летающего с земли не достать
       if (a.water && !self.W.isWater(p.st.x, p.st.z)) return;                       // водные нападают только на тех, кто в воде
       var n = self.W.nest; if (Math.hypot(p.st.x - n.x, p.st.z - n.z) < 20) return;
-      if (!self.canSee(e, p, aggro)) return;
+      if (!self.canSee(e, p, aggro * self.aggroK(e, p))) return;
       var d = dist(e.st, p.st); if (d < bd) { bd = d; best = p; }
     });
+    if (best && e.target !== best && a.role === 'hostile') self._chN[best.id] = (self._chN[best.id] || 0) + 1;     // учитываем сразу, иначе в один тик целью выберут все
     return best;
   };
   RP.nearestPlayer = function (e, maxD) {
@@ -257,7 +270,7 @@
       if (!tgt || (this.tick + e.id) % 8 === 0) {
         var np = this.pickTarget(e);
         if (np) { tgt = e.target = np; e.lostT = t; }
-        else if (tgt && !this.canSee(e, tgt, (a.aggro || 20) * 1.6)) { if (t - (e.lostT || 0) > 4) tgt = e.target = null; }
+        else if (tgt && !this.canSee(e, tgt, (a.aggro || 20) * 1.6 * (CF.AGGRO_MULT || 0.75) * (tgt.kind === 'p' ? this.aggroK(e, tgt) : 1))) { if (t - (e.lostT || 0) > 4) tgt = e.target = null; }
       }
     }
     if (tgt) {
@@ -399,20 +412,23 @@
     this.ents.forEach(function (e) { if (e.fill && !e.dead) fills.push(e); });
     for (var h = 0; h < humans.length; h++) {
       var p = humans[h]; if (!p.alive || p.gone) continue;
-      var L = p.profile.level, aq = CF.isAqua(p.cls), cnt = 0;
+      var L = p.profile.level, hostile = { '-1': 0, '0': 0, '1': 0 }, others = 0, R = 90;
       this.ents.forEach(function (e) {
         if (e.dead || e.kind !== 'e' || e.owner || e.boss || e.arch.role === 'bug' || e.fromBoss) return;
-        if (e.lv < L - 1 || e.lv > L + 1) return;
-        if (Math.abs(e.st.x - p.st.x) < 110 && Math.abs(e.st.z - p.st.z) < 110) cnt++;
+        var dl = e.lv - L; if (dl < -1 || dl > 1) return;
+        if (Math.abs(e.st.x - p.st.x) < R && Math.abs(e.st.z - p.st.z) < R) { if (e.arch.role === 'hostile') hostile[dl]++; else others++; }
       });
-      var need = (CF.FILL_MIN || 24) - cnt;
-      for (var n = 0; n < Math.min(4, need); n++) {
-        var tl = Math.max(1, L + [-1, 0, 0, 0, 0, 0, 1, 1][(this.rng() * 8) | 0]), cands = [];
-        for (var i = 0; i < ids.length; i++) { var a = ARCH[ids[i]]; if (!!a.water !== !!W.ocean) continue; if (tl >= a.lv[0] - 2) cands.push(a); }
-        if (!cands.length) break;
+      // нужно: нападающих врагов вашего уровня ≥5, на уровень выше ≥4, на уровень ниже ≥3; добычи и стада (L−1…L+1) ≥8
+      var QH = { '0': CF.FILL_HOST0 || 5, '1': CF.FILL_HOST1 || 4, '-1': CF.FILL_HOST2 || 3 }, QO = CF.FILL_OTHER || 8, plan = [];
+      for (var dk = -1; dk <= 1; dk++) for (var q = hostile[dk]; q < QH[dk]; q++) plan.push({ lv: Math.max(1, L + dk), host: true });
+      for (var q2 = others; q2 < QO; q2++) plan.push({ lv: Math.max(1, L + [-1, 0, 0, 0, 1][(this.rng() * 5) | 0]), host: false });
+      for (var n = 0; n < Math.min(5, plan.length); n++) {
+        var tl = plan[n].lv, host = plan[n].host, cands = [];
+        for (var i = 0; i < ids.length; i++) { var a = ARCH[ids[i]]; if (!!a.water !== !!W.ocean) continue; if ((a.role === 'hostile') !== host) continue; if (tl >= a.lv[0] - 2) cands.push(a); }
+        if (!cands.length) continue;
         var arch = cands[(this.rng() * cands.length) | 0], pos = null;
         for (var k = 0; k < 14 && !pos; k++) {
-          var ang = this.rng() * 6.283, dd = 38 + this.rng() * 42, x = p.st.x + Math.cos(ang) * dd, z = p.st.z + Math.sin(ang) * dd;
+          var ang = this.rng() * 6.283, dd = host ? 40 + this.rng() * 35 : 35 + this.rng() * 40, x = p.st.x + Math.cos(ang) * dd, z = p.st.z + Math.sin(ang) * dd;
           if (Math.abs(x) > W.half - 30 || Math.abs(z) > W.half - 30 || Math.hypot(x, z) < CF.ARENA_R + 8) continue;
           var gh = W.heightAt(x, z);
           if (arch.water ? !W.isDeep(x, z) : (gh < W.waterY + 0.8 || W.isLava(x, z) || W.slopeAt(x, z) > 0.7)) continue;

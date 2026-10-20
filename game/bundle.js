@@ -4559,11 +4559,20 @@ function buildWorld(scene, biomeId, opts) {
       // каменные своды сквозных пещер (стены — рельеф, свод — отдельная глыба над туннелем)
       F.caves.forEach((c, i) => {
         const th = c.H - c.rb, wd = (c.w + 4) * 2;
-        const roofG = mergeSmooth([{ g: new THREE.BoxGeometry(c.L + 6, th, wd, 16, 5, 8), m: trs(0, 0, 0), c: 0x4a4e56, c2: 0x6c7078, jit: 1.3, jf: 0.22 },
-          { g: new THREE.DodecahedronGeometry(c.w * 0.9, 1), m: trs(c.L / 2 + 1, -th * 0.15, 0, 1, 0.9, 1), c: 0x454950, c2: 0x666a72, jit: 1.3, jf: 0.22 },
-          { g: new THREE.DodecahedronGeometry(c.w * 0.9, 1), m: trs(-c.L / 2 - 1, -th * 0.15, 0, 1, 0.9, 1), c: 0x454950, c2: 0x666a72, jit: 1.3, jf: 0.22 }]);
+        // свод: бугристая глыба; смещение вершин зависит только от их положения — швы между гранями не расходятся (раньше были видны чёрные трещины)
+        const lumpy = (geo, amp, f) => { const P = geo.attributes.position; for (let v = 0; v < P.count; v++) { const x = P.getX(v), y = P.getY(v), z = P.getZ(v); P.setXYZ(v, x + (snoise(x * f + 1.3, y * f + 7.1, z * f + 3.7) - 0.5) * amp, y + (snoise(x * f + 9.2, y * f + 2.4, z * f + 5.5) - 0.5) * amp, z + (snoise(x * f + 4.4, y * f + 8.8, z * f + 1.9) - 0.5) * amp); } geo.computeVertexNormals(); return geo; };
+        const roofG = mergeSmooth([{ g: lumpy(new THREE.BoxGeometry(c.L + 6, th, wd, 16, 5, 8), 3.2, 0.11), m: trs(0, 0, 0), c: 0x6a7076, c2: 0x80868c }]);
         const m = new THREE.Mesh(roofG, mkMat(null, detailTex('stone'), 1.6));
         m.position.set(c.x, c.f + c.rb + th / 2, c.z); m.rotation.y = -c.a; m.castShadow = true; m.receiveShadow = true; root.add(m);
+        // цвет свода берём с ландшафта вокруг (ближайшая вершина сетки): сверху — плавный переход со склонами, снизу — тот же цвет, но темнее
+        { const cp = m.geometry.attributes.position, cn = m.geometry.attributes.normal, cc = m.geometry.attributes.color, st = SIZE / SEG, ca = Math.cos(-c.a), sa = Math.sin(-c.a), tcol = tg.attributes.color;
+          for (let v = 0; v < cp.count; v++) {
+            const lx = cp.getX(v), lz = cp.getZ(v), lzs = cn.getY(v) > 0.2 ? (lz < 0 ? -1 : 1) * (c.w + 9) : lz, wx = c.x + lx * ca + lzs * sa, wz = c.z - lx * sa + lzs * ca;   // верх — цвет соседних скальных плато, низ — своя точка
+            const ix = Math.max(0, Math.min(SEG, Math.round((wx + SIZE / 2) / st))), iz = Math.max(0, Math.min(SEG, Math.round((wz + SIZE / 2) / st))), vi = iz * (SEG + 1) + ix;
+            const dk = cn.getY(v) < -0.35 ? 0.55 : 0.92, nz = 0.9 + 0.2 * Math.sin(lx * 0.7 + lz * 0.9);
+            cc.setXYZ(v, tcol.getX(vi) * dk * nz, tcol.getY(vi) * dk * nz, tcol.getZ(vi) * dk * nz);
+          }
+          cc.needsUpdate = true; }
       });
     }
     if (W.biome === 'arctic') {

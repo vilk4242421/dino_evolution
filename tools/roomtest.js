@@ -35,7 +35,7 @@ for (const cls of ['carn', 'herb', 'fly', 'mosa']) {
   tick(hub, 30);
   const w = conn.last('welcome'); ok(w && w.room.biome === bio && w.prof.cls === cls, cls + ': welcome с профилем');
   const p = r.player, room = r.room;
-  const prey = nearestEnt(room, p, e => e.arch && (e.role === 'prey' || e.role === 'herd' || e.role === 'hostile'));
+  const prey = nearestEnt(room, p, e => e.arch && e.lv <= 2 && (e.role === 'prey' || e.role === 'herd' || e.role === 'hostile'));
   put(room, p, prey.st.x - 3, prey.st.z);
   const xp0 = p.profile.totalXp; attackLoop(hub, p, prey, 600);
   ok(prey.dead || prey.hp <= 0, cls + ': враг побеждён (' + prey.arch.id + ')');
