@@ -29,7 +29,7 @@
       id: newId(), kind: 'e', arch: arch, role: arch.role, lv: lv, team: o.team || (arch.role === 'hostile' ? 'e' : 'n'),
       st: { x: x, y: y, z: z, face: this.rng() * 6.28 - 3.14 }, home: { x: x, z: z },
       hp: arch.hp * sc.hp * (o.hpMult || 1), mhp: arch.hp * sc.hp * (o.hpMult || 1), dmg: arch.dmg * sc.dmg * (o.dmgMult || 1), speed: arch.speed / 30,
-      radius: Math.max(0.35, arch.size * 0.55 + lv * 0.01), state: 'idle', target: null, atkCd: 0, atkAnim: 0, stunT: 0, fleeT: 0, aggroT: 0, wanderT: 0,
+      radius: Math.max(0.35, arch.size * Sim.enemySizeMul(lv) * 0.55 + lv * 0.01), state: 'idle', target: null, atkCd: 0, atkAnim: 0, stunT: 0, fleeT: 0, aggroT: 0, wanderT: 0,
       wx: x, wz: z, swimY: swimY, dots: [], hitBy: null, moving: false, dead: false, lastHurt: -99, bob: this.rng() * 6.28, owner: o.owner || null, expire: o.expire || 0, big: arch.size >= 1.4
     };
     this.ents.set(e.id, e);
@@ -81,7 +81,7 @@
         this.markDirty(p);
       }
     }
-    if (this.mode !== 'rush') this.queueRespawn(arch.id);
+    if (this.mode !== 'rush' && !e.fill) this.queueRespawn(arch.id);
   };
 
   // ---------------------------------------------------------------- движение
@@ -123,7 +123,7 @@
       if (W.ocean) {                                                         // в океане — в трёх измерениях: за целью на её глубину
         var tg = e.target && e.target.st, base = tg ? tg.y : (e.swimY !== undefined ? e.swimY : W.waterY - 1.0);
         if (e.role === 'prey' || e.role === 'fish') { var np = this.nearestPlayer(e, 10); if (np) base = s.y + (s.y > np.st.y ? 1.5 : -1.5); }
-        want = clamp(base + Math.sin(e.bob) * 0.3, g + 0.6, W.waterY - 0.6);
+        want = clamp(base + Math.sin(e.bob) * 0.3, g + 0.6, W.waterY - 0.6 - (a.size || 1) * 0.3);
         s.y += (want - s.y) * Math.min(1, 2.2 * DT);
       } else { want = Math.max(g + 0.4, W.waterY - 1.0 - Math.sin(e.bob) * 0.2); s.y += (want - s.y) * Math.min(1, 5 * DT); }
     }
@@ -180,7 +180,7 @@
     var best = null, bd = 1e9, self = this, a = e.arch, aggro = a.aggro || 20;
     this.players.forEach(function (p) {
       if (!p.alive || p.gone || p.shield > self.t || self.friendly(e, p)) return;
-      if (p.st.clm && !a.fly && !a.ranged) return;                                   // на дереве хищнику не достать
+      if (p.st.clm) return;                                                          // на дереве не достать никому
       if (!self.canHitAir(e, p)) return;                                             // летающего с земли не достать
       if (a.water && !self.W.isWater(p.st.x, p.st.z)) return;                       // водные нападают только на тех, кто в воде
       var n = self.W.nest; if (Math.hypot(p.st.x - n.x, p.st.z - n.z) < 20) return;
@@ -387,6 +387,48 @@
   RP.slowFor = function (p) { return p.slowT > this.t ? 0.65 : 1; };
 
   // ---------------------------------------------------------------- такт сущностей
+
+  // «подпитка» прокачки: рядом с каждым игроком всегда должно быть достаточно врагов, которых он может победить (уровень L-2…L+1).
+  // Если их мало — рядом появляются существа местных видов нужного уровня; убитые не возрождаются, далёкие со временем убираются.
+  RP.levelFill = function (humans) {
+    if (this.mode === 'rush' || this.W.duel) return;
+    var W = this.W, self = this, table = W.cfg.spawn, ids = [];
+    for (var id in table) if (ARCH[id] && ARCH[id].role !== 'bug') ids.push(id);
+    if (!ids.length) return;
+    var fills = [];
+    this.ents.forEach(function (e) { if (e.fill && !e.dead) fills.push(e); });
+    for (var h = 0; h < humans.length; h++) {
+      var p = humans[h]; if (!p.alive || p.gone) continue;
+      var L = p.profile.level, aq = CF.isAqua(p.cls), cnt = 0;
+      this.ents.forEach(function (e) {
+        if (e.dead || e.kind !== 'e' || e.owner || e.boss || e.arch.role === 'bug' || e.fromBoss) return;
+        if (e.lv < L - 1 || e.lv > L + 1) return;
+        if (Math.abs(e.st.x - p.st.x) < 110 && Math.abs(e.st.z - p.st.z) < 110) cnt++;
+      });
+      var need = (CF.FILL_MIN || 24) - cnt;
+      for (var n = 0; n < Math.min(4, need); n++) {
+        var tl = Math.max(1, L + [-1, 0, 0, 0, 0, 0, 1, 1][(this.rng() * 8) | 0]), cands = [];
+        for (var i = 0; i < ids.length; i++) { var a = ARCH[ids[i]]; if (!!a.water !== !!W.ocean) continue; if (tl >= a.lv[0] - 2) cands.push(a); }
+        if (!cands.length) break;
+        var arch = cands[(this.rng() * cands.length) | 0], pos = null;
+        for (var k = 0; k < 14 && !pos; k++) {
+          var ang = this.rng() * 6.283, dd = 38 + this.rng() * 42, x = p.st.x + Math.cos(ang) * dd, z = p.st.z + Math.sin(ang) * dd;
+          if (Math.abs(x) > W.half - 30 || Math.abs(z) > W.half - 30 || Math.hypot(x, z) < CF.ARENA_R + 8) continue;
+          var gh = W.heightAt(x, z);
+          if (arch.water ? !W.isDeep(x, z) : (gh < W.waterY + 0.8 || W.isLava(x, z) || W.slopeAt(x, z) > 0.7)) continue;
+          pos = { x: x, z: z };
+        }
+        if (!pos) continue;
+        var e = this.makeEnt(arch, pos.x, pos.z, tl); e.fill = true; fills.push(e);
+      }
+    }
+    // лимит и уборка: самых далёких от игроков «подпитывающих» убираем
+    var cap = 110 * Math.max(1, humans.length);
+    if (fills.length > cap) {
+      fills.sort(function (a, b) { var da = 1e9, db = 1e9; for (var i = 0; i < humans.length; i++) { da = Math.min(da, Math.hypot(a.st.x - humans[i].st.x, a.st.z - humans[i].st.z)); db = Math.min(db, Math.hypot(b.st.x - humans[i].st.x, b.st.z - humans[i].st.z)); } return db - da; });
+      for (var j = 0; j < fills.length - cap; j++) { fills[j].dead = true; this.ents.delete(fills[j].id); }
+    }
+  };
   RP.updateEnts = function () {
     var t = this.t, self = this, humans = [];
     this.players.forEach(function (p) { if (!p.bot && !p.gone) humans.push(p); });
@@ -399,6 +441,7 @@
       if (!near && !e.boss) return;                                              // далеко от игроков мир «спит»
       self.enemyThink(e);
     });
+    if (this.tick % 30 === 7) this.levelFill(humans);
     // союзники-короли
     if (this.tick % 25 === 0) this.players.forEach(function (p) { if (!p.bot && p.alive) self.ensureKingAllies(p); });
     // возрождение мира

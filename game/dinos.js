@@ -804,6 +804,7 @@ function marine(o) {
     kit.add(S.bones[bi], S.rest[bi], 'skin', df.geo, M_trs(dp.pos, 0, 0, 0, 1), null);
   }
   // ласты
+  rig.flipAmp = o.flipAmp || 0.3;
   if (o.flippers !== false) for (const [fx, front] of [[o.frontX || 0.75, true], [o.hindX || -1.1, false]]) for (const sd of [1, -1]) {
     const u = L.uAtX(fx * k), p = L.pointAtU(u, sd * 1.75, 0.04 * k), bi = nearestBone(S, u);
     const len = (front ? 0.75 : 0.55) * k * fs * (o.flipK || 1), wd = (front ? 0.2 : 0.16) * k * fs * (o.flipK || 1);
@@ -1031,7 +1032,7 @@ function buildMosa(o) {
 }
 function buildPlio(o) {
   const { color, stage, r } = o;
-  return marine({ k: 0.92, kind: 'marine', stage, r, q: o.q, ridge: 0, flipK: 2.6, finK: 0.15, eyeK: 1.1,
+  return marine({ k: 0.92, kind: 'marine', stage, r, q: o.q, ridge: 0, flipK: 2.6, flipAmp: 0.75, finK: 0.15, eyeK: 1.1,
     pal: pal4(color, { bellyTo: 0xe8ecdc, bellyK: 0.75, stripe: mulHex(color, 0.4) }), pat: { type: 'spots', amt: 0.5, freq: 3.6, from: 0, to: 0.8 },
     keys: SK([[-2.5, .68, .01, .01, .01], [-2.3, .68, .06, .06, .05], [-1.7, .72, .19, .2, .17], [-1.0, .78, .4, .43, .44], [-0.2, .84, .56 * (1 + (r.lungs || 0) * 0.04), .6, .62], [0.65, .88, .55, .56, .56], [1.2, .9, .4, .38, .42], [1.5, .92, .34, .3, .4, 2.1, 0],
       [1.8, .94, .4, .27, .52, 2.1, .1], [2.3, .9, .32, .21, .42, 2.2, .06], [2.85, .86, .21, .14, .27, 2.3], [3.25, .84, .1, .07, .13], [3.42, .84, .01, .01, .01]]),
@@ -1121,7 +1122,7 @@ function animRig(P, tt, sw, dt, o) {
   o = o || {};
   const bc = o.bc || null, fly = !!o.fly, swim = !!o.swim, roar = !!o.roar;
   const bk = bc ? Math.max(bc.lunge, bc.open * 0.6) : 0, lunge = bc ? bc.lunge : 0, pull = bc ? bc.pull : 0, open = bc ? bc.open : 0, shake = bc ? bc.shake * Math.sin(tt * 40) : 0;
-  const butt = P.gait === 'quad' && P.kind !== 'croc';   // травоядные бодаются головой, а не кусают
+  const LEGSIGN = 1, butt = P.gait === 'quad' && P.kind !== 'croc';   // травоядные бодаются головой, а не кусают
   // фазы шага, хвоста и крыльев НАКАПЛИВАЮТСЯ (фаза += dt·частота), а не считаются как t·частота(скорость):
   // иначе при любом изменении скорости (разгон с места) фаза прыгает и ноги «быстро перебирают»
   const ddt = Math.min(Math.max(dt || 0, 0), 0.1);
@@ -1129,7 +1130,12 @@ function animRig(P, tt, sw, dt, o) {
   P.sws += (sw - P.sws) * Math.min(1, ddt * 7); sw = P.sws;
   P.runS += ((o.run || 0) - P.runS) * Math.min(1, ddt * 5); const run = swim || fly ? 0 : P.runS;
   P.run = run;
-  const legF = (P.gait === 'quad' ? 7 : 8.5) * Math.max(0.35, Math.min(1.3, sw)) * (1 + 0.28 * run);
+  // частота шага = скорость / длина шага: ноги не «скользят» и не «буксуют». Длина цикла ~ высота бедра × масштаб динозавра.
+  let legF = (P.gait === 'quad' ? 7 : 8.5) * Math.max(0.35, Math.min(1.3, sw)) * (1 + 0.28 * run);
+  if (o.sc > 0 && o.v !== undefined && P.legs.length && !swim && !fly) {
+    const hip = P.hipY || (P.hipY = Math.max(0.3, P.legs[0].g.position.y)), D = (P.gait === 'quad' ? 4.2 : 5.0) * hip * o.sc * (1 + 0.3 * run);
+    legF = Math.max(0.8, Math.min(15, 6.2832 * o.v / D));
+  }
   P.gph = (P.gph + ddt * legF) % 62.832;
   const sp = P.spine;
   if (sp) {
@@ -1146,15 +1152,15 @@ function animRig(P, tt, sw, dt, o) {
     for (let i = 0; i < nk.length; i++) {
       nk[i].rotation.y = Math.sin(tt * 0.45 + i) * 0.08 * (1 - sw * 0.5) + shake * 0.1;
       // на бегу шея вытягивается вперёд и опускается к линии спины, голова чуть кивает в такт шагам
-      nk[i].rotation.z = pull * (butt ? 0.18 : 0.3) - lunge * (butt ? 0.22 : 0.34) + (roar ? 0.18 : 0) + Math.sin(tt * 0.7) * 0.02 * (1 - run) - run * (butt ? 0.07 : 0.11) / nk.length * 2;
+      nk[i].rotation.z = pull * (butt ? 0.05 : 0.3) - lunge * (butt ? 0.1 : 0.34) + (roar ? 0.18 : 0) + Math.sin(tt * 0.7) * 0.02 * (1 - run) - run * (butt ? 0.07 : 0.11) / nk.length * 2;
     }
-    sp.head.rotation.z = pull * 0.16 - lunge * (butt ? 0.2 : 0.16) + (roar ? 0.25 : 0) + run * (0.12 + Math.cos(P.gph * 2) * 0.03);
+    sp.head.rotation.z = pull * (butt ? 0.04 : 0.16) - lunge * (butt ? 0.08 : 0.16) + (roar ? 0.25 : 0) + run * (0.12 + Math.cos(P.gph * 2) * 0.03);
     sp.head.rotation.y = (swim ? -Math.sin(tP + 1.2) * 0.06 : 0) + shake * 0.16;
     sp.head.rotation.x = shake * 0.12;
   }
   if (P.jaw) P.jaw.rotation.z = (P.jawBase || 0) - open * (butt ? 0.45 : P.aquatic ? 0.55 : P.kind === 'ptero' ? 0.5 : 0.95) - (roar ? 0.6 : 0);
   // всё тело подаётся вперёд в броске и чуть откидывается назад на замахе
-  if (P.frame) { P.frame.position.x = (lunge * (butt ? 0.12 : 0.3) - pull * 0.07) * (P.k ? Math.min(1.6, P.k / 0.42) : 1); P.frame.rotation.z = -lunge * (butt ? 0.2 : 0.07) + pull * 0.035; }
+  if (P.frame) { P.frame.position.x = (lunge * (butt ? 0.12 : 0.3) - pull * 0.07) * (P.k ? Math.min(1.6, P.k / 0.42) : 1); P.frame.rotation.z = butt ? pull * 0.3 - lunge * 0.1 : -lunge * 0.07 + pull * 0.035; }
   // походка: корпус пружинит вверх-вниз на каждом шаге и слегка раскачивается с боку на бок; в воде/полёте — плавное покачивание
   if (P.frame && !P.aquatic) {
     const ws = Math.min(1.2, sw) * (fly ? 0 : 1), bobK = (P.k ? Math.min(1.6, P.k / 0.42) : 1);
@@ -1176,8 +1182,8 @@ function animRig(P, tt, sw, dt, o) {
     b[1].rotation.z = -sw1 * ((gait === 'quad' ? 0.45 : 0.6) + run * (gait === 'quad' ? 0.15 : 0.6)) * w + push * run * 0.15;
     b[2].rotation.z = (sw1 * (0.4 + run * 0.35) - push * run * 0.2) * w;
     if (b[3]) b[3].rotation.z = (-Math.sin(p) * (0.2 + run * 0.15) + sw1 * (0.15 + run * 0.25)) * w;
-    // травоядные бьют передними лапами: привстают и опускают лапы вниз
-    if (butt && lg.front) { const st = lunge * 1.0 + open * 0.3; b[0].rotation.z += -st * 0.95; b[1].rotation.z += -st * 0.5; if (b[2]) b[2].rotation.z += st * 0.4; }
+    // травоядные бьют передними лапами: привстают (замах — лапы вверх-вперёд), затем обрушивают их вниз
+    if (butt && lg.front) { const wd = pull, ht = lunge; b[0].rotation.z += LEGSIGN * (wd * 1.15 - ht * 0.55); b[1].rotation.z += -(wd * 0.9) + ht * 0.7; if (b[2]) b[2].rotation.z += wd * 0.5 - ht * 0.5; }
   }
   for (const a of P.arms) {
     if (a.scorp) { a.g.rotation.y = Math.sin(tt * 1.4 + a.s) * 0.08 - bk * 0.5 * a.s; a.arm.rotation.z = bk * 0.4; continue; }
@@ -1200,10 +1206,18 @@ function animRig(P, tt, sw, dt, o) {
       wg.b0.scale.set(1, 1, 0.3); wg.b0.rotation.set(s * 0.55 + Math.sin(tt * 1.2) * 0.02, -s * 0.75, 0.15); wg.b1.rotation.set(s * 0.6, 0, 0);
     }
   }
-  for (const f of P.flippers) {
-    const ph = tt * (swim ? 5 : 2.5) + (f.front ? 0 : 1.4);
-    f.g.rotation.z = Math.sin(ph) * (swim ? 0.35 : 0.2) * (0.4 + sw);
-    f.g.rotation.x = -f.side * 0.25 + Math.cos(ph) * 0.15 * f.side;
+  // ласты: у плиозавра — «подводный полёт» (большие взмахи вверх-вниз, передняя и задняя пары в противофазе, лопасть поворачивается),
+  // у мозазавра и прочих — лёгкая греблей; частота растёт со скоростью
+  if (P.flippers.length) {
+    const amp = P.flipAmp || 0.3, fr = swim ? 1.5 + sw * 2.2 : 1.2 + sw * 1.4;
+    P.fph = ((P.fph || 0) + ddt * fr) % 62.832;
+    for (const f of P.flippers) {
+      const ph = P.fph * (f.front ? 1 : 1) + (f.front ? 0 : 1.9), k = swim ? (0.55 + Math.min(1, sw) * 0.45) : 0.35;
+      const flap = Math.sin(ph), dn = Math.cos(ph);
+      f.g.rotation.x = -f.side * (0.25 + flap * amp * 0.8 * k * (f.front ? 1 : 0.7));          // взмах вверх-вниз
+      f.g.rotation.z = (dn * amp * 0.5 - 0.1) * k * (f.front ? 1 : 0.8);                        // ход вперёд-назад
+      f.g.rotation.y = f.side * dn * amp * 0.45 * k;                                            // поворот лопасти по ходу взмаха
+    }
   }
   if (P.frogLegs) for (const l of P.frogLegs) { l.hind.rotation.z = -Math.max(0, Math.sin(tt * 6)) * 0.5 * sw; l.front.rotation.z = Math.sin(tt * 6) * 0.2 * sw; }
   if (P.scorpTail) { const T = P.scorpTail; for (let i = 1; i < T.length; i++) T[i].rotation.z = Math.sin(tt * 1.6 - i * 0.6) * 0.05 - bk * 0.12; T[0].rotation.y = Math.sin(tt * 0.8) * 0.1; }
@@ -1226,7 +1240,7 @@ export function animateDino(dino, t, speed, dt, st) {
   // бег: явный флаг (свой динозавр — зажат «бег») или скорость заметно выше шага своего класса
   const base = ((CONFIG.CLASSES[cls] || {}).speed || 180) / 180;
   const run = st.run !== undefined ? (st.run ? 1 : 0) : sstep(1.18, 1.4, speed / base);
-  animRig(P, tt, sw, dt, { bc: biteCurve(bite), fly: st.fly, swim: st.swim && P.aquatic, run: st.guard || st.climb ? 0 : run });
+  animRig(P, tt, sw, dt, { bc: biteCurve(bite), fly: st.fly, swim: st.swim && P.aquatic, run: st.guard || st.climb ? 0 : run, sc: dino.scale.x, v: speed * 6 });
   if (P.aquatic) {
     // под водой нос смотрит туда, куда плывём: вверх при всплытии, вниз при погружении
     const pt = st.swim ? Math.max(-0.65, Math.min(0.65, -(st.vy || 0) * 0.09)) : 0;
@@ -1356,7 +1370,7 @@ function seaPlesio(o) {
   return marine(Object.assign({ kind: 'marine', ridge: 0, keys: plesioKeys(nk),
     bones: [-1.6, -0.8, 0.2, 1.3, N(1.9), N(2.5), N(3.0), hx], rootI: 2, headX: hx, eyeX: hx + 0.15, snoutX: hx + 0.55, hingeY: 1.38,
     jawKeys: SK([[hx - 0.05, 1.38, .04, .07, .12], [hx + 0.35, 1.36, .03, .04, .07], [hx + 0.57, 1.37, .005, .005, .005]]),
-    fluke: false, dorsal: false, frontX: 0.6, hindX: -0.9, flipK: 2.1 }, o));
+    fluke: false, dorsal: false, frontX: 0.6, hindX: -0.9, flipK: 2.1, flipAmp: 0.7 }, o));
 }
 // черепаха (архелон, генодус): плоское тело, панцирь с килями, клюв, огромные передние ласты
 function seaTurtle(o) {
@@ -1527,7 +1541,7 @@ export function animateEnemy(g, t, speed, dt, atk, flying, base) {
   const sw = Math.min(speed, 1.4);
   if (P.isBug) { animRig(P, tt, sw, dt, {}); P.body.position.y = Math.sin(tt * 3) * 0.08; return; }
   const swim = P.aquatic;
-  animRig(P, tt, swim ? Math.max(0.6, sw) : sw, dt, { bc: biteCurve(bite), fly: flying && P.flies, swim, run });
+  animRig(P, tt, swim ? Math.max(0.6, sw) : sw, dt, { bc: biteCurve(bite), fly: flying && P.flies, swim, run, sc: g.scale.x, v: speed * 6 });
   if (P.gait === 'hop') { P.body.position.y = Math.max(0, Math.sin(P.gph * 0.7)) * 0.25 * sw; return; }
   P.body.position.y = bodyBob(P, sw, swim, flying && P.flies) * 0.9 + (flying ? Math.sin(tt * 2) * 0.1 : 0);
   P.body.rotation.x = (flying && P.flies ? 0.15 : 0) + (P.run || 0) * (P.gait === 'quad' ? 0.03 + Math.sin(P.gph) * 0.04 : 0.11);
@@ -1648,4 +1662,39 @@ export function makeEggMesh(colorHex) {
     }
   };
   return grp;
+}
+
+// ---------- красный контур вокруг укушенного врага ----------
+// «обратный корпус»: копия каждой сетки (с тем же скелетом), вытолкнутая вдоль нормалей и видимая только изнутри, — получается тонкая обводка силуэта
+let _olMat = null;
+function outlineMat() {
+  if (_olMat) return _olMat;
+  _olMat = new THREE.MeshBasicMaterial({ color: 0xff2418, side: THREE.BackSide, fog: false, toneMapped: false, depthWrite: false });
+  _olMat.onBeforeCompile = (sh) => {
+    sh.uniforms.uOW = { value: 0.05 };
+    sh.vertexShader = 'uniform float uOW;\n' + sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\n transformed += normalize(normal) * uOW;');
+  };
+  return _olMat;
+}
+export function setOutline(root, on, color) {
+  if (!root) return;
+  let ol = root.userData.ol;
+  if (!ol) {
+    if (!on) return;
+    ol = root.userData.ol = [];
+    const src = [];
+    root.traverse(o => { if (o.isMesh && !o.userData.isOutline && !o.isSprite && o.geometry && o.geometry.attributes && o.geometry.attributes.normal && !(o.material && o.material.transparent && o.material.opacity < 0.5)) src.push(o); });
+    const bb = new THREE.Box3().setFromObject(root), sz = bb.getSize(new THREE.Vector3()), w = Math.max(0.02, Math.max(sz.x, sz.y, sz.z) * 0.018 / Math.max(0.01, root.scale.x));
+    const mat = outlineMat().clone(); root.userData.olMat = mat; mat.onBeforeCompile = (sh) => { sh.uniforms.uOW = { value: w }; sh.vertexShader = 'uniform float uOW;\n' + sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\n transformed += normalize(normal) * uOW;'); };
+    mat.customProgramCacheKey = () => 'ol' + w.toFixed(3);
+    for (const o of src) {
+      const m = o.isSkinnedMesh ? new THREE.SkinnedMesh(o.geometry, mat) : new THREE.Mesh(o.geometry, mat);
+      if (o.isSkinnedMesh) m.bind(o.skeleton, o.bindMatrix);
+      m.userData.isOutline = true; m.frustumCulled = false; m.renderOrder = 3; m.castShadow = false; m.receiveShadow = false;
+      m.position.copy(o.position); m.quaternion.copy(o.quaternion); m.scale.copy(o.scale); m.visible = false;
+      o.parent.add(m); ol.push(m);
+    }
+  }
+  if (on && root.userData.olMat) root.userData.olMat.color.setHex(color || 0xff2418);
+  for (const m of ol) m.visible = !!on;
 }

@@ -9,7 +9,7 @@
     // Адрес сервера. Пусто = тот же адрес, с которого открыта страница.
     // Для APK / открытия как файл укажите, например: 'https://dino-evolution.onrender.com'
     SERVER_URL: '',
-    VERSION: '1.7.0',
+    VERSION: '1.7.3',
     PROTO: 6,                 // увеличивайте при несовместимых изменениях сети
 
     // --- сеть ---
@@ -61,9 +61,9 @@
 
     // --- классы (hp, speed, dmg — из ТЗ) ---
     CLASSES: {
-      carn: { hp: 110, speed: 162, sprint: 1.51, dmg: 14, hpPerLevel: 0.05, dmgPerLevel: 0.05, atkCd: 0.5, reach: 3.0, diet: ['meat', 'smeat'] },
+      carn: { hp: 110, speed: 162, sprint: 1.51, dmg: 14, hpPerLevel: 0.05, dmgPerLevel: 0.05, atkCd: 0.5, reach: 3.0, diet: ['meat', 'smeat', 'fish'] },
       herb: { hp: 190, speed: 112, sprint: 1.91, dmg: 17, hpPerLevel: 0.05, dmgPerLevel: 0.05, atkCd: 1.05, reach: 2.8, diet: ['plant'] },
-      fly:  { hp: 60,  speed: 200, noSprint: true, dmg: 6, hpPerLevel: 0.05, dmgPerLevel: 0.05, atkCd: 0.33, reach: 2.8, diet: ['smeat', 'fish', 'bug'] },
+      fly:  { hp: 60,  speed: 200, noSprint: true, dmg: 6, hpPerLevel: 0.05, dmgPerLevel: 0.05, atkCd: 0.33, reach: 2.8, diet: ['smeat', 'fish', 'bug', 'meat'] },
       // водные: speed — скорость НА СУШЕ (намного ниже, чем у наземных), waterSpeed — в воде. aqua: true — морской вид
       mosa:  { aqua: true, hp: 115, speed: 56, dmg: 14, hpPerLevel: 0.05, dmgPerLevel: 0.05, atkCd: 0.55, reach: 3.2, diet: ['fish', 'smeat'], waterSpeed: 245 },
       plio:  { aqua: true, hp: 190, speed: 44, dmg: 11, hpPerLevel: 0.055, dmgPerLevel: 0.05, atkCd: 0.78, reach: 3.5, diet: ['fish', 'smeat'], waterSpeed: 185, armor: 12 },

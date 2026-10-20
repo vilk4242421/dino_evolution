@@ -1008,6 +1008,7 @@ function marine(o) {
     kit.add(S.bones[bi], S.rest[bi], 'skin', df.geo, M_trs(dp.pos, 0, 0, 0, 1), null);
   }
   // ласты
+  rig.flipAmp = o.flipAmp || 0.3;
   if (o.flippers !== false) for (const [fx, front] of [[o.frontX || 0.75, true], [o.hindX || -1.1, false]]) for (const sd of [1, -1]) {
     const u = L.uAtX(fx * k), p = L.pointAtU(u, sd * 1.75, 0.04 * k), bi = nearestBone(S, u);
     const len = (front ? 0.75 : 0.55) * k * fs * (o.flipK || 1), wd = (front ? 0.2 : 0.16) * k * fs * (o.flipK || 1);
@@ -1235,7 +1236,7 @@ function buildMosa(o) {
 }
 function buildPlio(o) {
   const { color, stage, r } = o;
-  return marine({ k: 0.92, kind: 'marine', stage, r, q: o.q, ridge: 0, flipK: 2.6, finK: 0.15, eyeK: 1.1,
+  return marine({ k: 0.92, kind: 'marine', stage, r, q: o.q, ridge: 0, flipK: 2.6, flipAmp: 0.75, finK: 0.15, eyeK: 1.1,
     pal: pal4(color, { bellyTo: 0xe8ecdc, bellyK: 0.75, stripe: mulHex(color, 0.4) }), pat: { type: 'spots', amt: 0.5, freq: 3.6, from: 0, to: 0.8 },
     keys: SK([[-2.5, .68, .01, .01, .01], [-2.3, .68, .06, .06, .05], [-1.7, .72, .19, .2, .17], [-1.0, .78, .4, .43, .44], [-0.2, .84, .56 * (1 + (r.lungs || 0) * 0.04), .6, .62], [0.65, .88, .55, .56, .56], [1.2, .9, .4, .38, .42], [1.5, .92, .34, .3, .4, 2.1, 0],
       [1.8, .94, .4, .27, .52, 2.1, .1], [2.3, .9, .32, .21, .42, 2.2, .06], [2.85, .86, .21, .14, .27, 2.3], [3.25, .84, .1, .07, .13], [3.42, .84, .01, .01, .01]]),
@@ -1325,7 +1326,7 @@ function animRig(P, tt, sw, dt, o) {
   o = o || {};
   const bc = o.bc || null, fly = !!o.fly, swim = !!o.swim, roar = !!o.roar;
   const bk = bc ? Math.max(bc.lunge, bc.open * 0.6) : 0, lunge = bc ? bc.lunge : 0, pull = bc ? bc.pull : 0, open = bc ? bc.open : 0, shake = bc ? bc.shake * Math.sin(tt * 40) : 0;
-  const butt = P.gait === 'quad' && P.kind !== 'croc';   // травоядные бодаются головой, а не кусают
+  const LEGSIGN = 1, butt = P.gait === 'quad' && P.kind !== 'croc';   // травоядные бодаются головой, а не кусают
   // фазы шага, хвоста и крыльев НАКАПЛИВАЮТСЯ (фаза += dt·частота), а не считаются как t·частота(скорость):
   // иначе при любом изменении скорости (разгон с места) фаза прыгает и ноги «быстро перебирают»
   const ddt = Math.min(Math.max(dt || 0, 0), 0.1);
@@ -1333,7 +1334,12 @@ function animRig(P, tt, sw, dt, o) {
   P.sws += (sw - P.sws) * Math.min(1, ddt * 7); sw = P.sws;
   P.runS += ((o.run || 0) - P.runS) * Math.min(1, ddt * 5); const run = swim || fly ? 0 : P.runS;
   P.run = run;
-  const legF = (P.gait === 'quad' ? 7 : 8.5) * Math.max(0.35, Math.min(1.3, sw)) * (1 + 0.28 * run);
+  // частота шага = скорость / длина шага: ноги не «скользят» и не «буксуют». Длина цикла ~ высота бедра × масштаб динозавра.
+  let legF = (P.gait === 'quad' ? 7 : 8.5) * Math.max(0.35, Math.min(1.3, sw)) * (1 + 0.28 * run);
+  if (o.sc > 0 && o.v !== undefined && P.legs.length && !swim && !fly) {
+    const hip = P.hipY || (P.hipY = Math.max(0.3, P.legs[0].g.position.y)), D = (P.gait === 'quad' ? 4.2 : 5.0) * hip * o.sc * (1 + 0.3 * run);
+    legF = Math.max(0.8, Math.min(15, 6.2832 * o.v / D));
+  }
   P.gph = (P.gph + ddt * legF) % 62.832;
   const sp = P.spine;
   if (sp) {
@@ -1350,15 +1356,15 @@ function animRig(P, tt, sw, dt, o) {
     for (let i = 0; i < nk.length; i++) {
       nk[i].rotation.y = Math.sin(tt * 0.45 + i) * 0.08 * (1 - sw * 0.5) + shake * 0.1;
       // на бегу шея вытягивается вперёд и опускается к линии спины, голова чуть кивает в такт шагам
-      nk[i].rotation.z = pull * (butt ? 0.18 : 0.3) - lunge * (butt ? 0.22 : 0.34) + (roar ? 0.18 : 0) + Math.sin(tt * 0.7) * 0.02 * (1 - run) - run * (butt ? 0.07 : 0.11) / nk.length * 2;
+      nk[i].rotation.z = pull * (butt ? 0.05 : 0.3) - lunge * (butt ? 0.1 : 0.34) + (roar ? 0.18 : 0) + Math.sin(tt * 0.7) * 0.02 * (1 - run) - run * (butt ? 0.07 : 0.11) / nk.length * 2;
     }
-    sp.head.rotation.z = pull * 0.16 - lunge * (butt ? 0.2 : 0.16) + (roar ? 0.25 : 0) + run * (0.12 + Math.cos(P.gph * 2) * 0.03);
+    sp.head.rotation.z = pull * (butt ? 0.04 : 0.16) - lunge * (butt ? 0.08 : 0.16) + (roar ? 0.25 : 0) + run * (0.12 + Math.cos(P.gph * 2) * 0.03);
     sp.head.rotation.y = (swim ? -Math.sin(tP + 1.2) * 0.06 : 0) + shake * 0.16;
     sp.head.rotation.x = shake * 0.12;
   }
   if (P.jaw) P.jaw.rotation.z = (P.jawBase || 0) - open * (butt ? 0.45 : P.aquatic ? 0.55 : P.kind === 'ptero' ? 0.5 : 0.95) - (roar ? 0.6 : 0);
   // всё тело подаётся вперёд в броске и чуть откидывается назад на замахе
-  if (P.frame) { P.frame.position.x = (lunge * (butt ? 0.12 : 0.3) - pull * 0.07) * (P.k ? Math.min(1.6, P.k / 0.42) : 1); P.frame.rotation.z = -lunge * (butt ? 0.2 : 0.07) + pull * 0.035; }
+  if (P.frame) { P.frame.position.x = (lunge * (butt ? 0.12 : 0.3) - pull * 0.07) * (P.k ? Math.min(1.6, P.k / 0.42) : 1); P.frame.rotation.z = butt ? pull * 0.3 - lunge * 0.1 : -lunge * 0.07 + pull * 0.035; }
   // походка: корпус пружинит вверх-вниз на каждом шаге и слегка раскачивается с боку на бок; в воде/полёте — плавное покачивание
   if (P.frame && !P.aquatic) {
     const ws = Math.min(1.2, sw) * (fly ? 0 : 1), bobK = (P.k ? Math.min(1.6, P.k / 0.42) : 1);
@@ -1380,8 +1386,8 @@ function animRig(P, tt, sw, dt, o) {
     b[1].rotation.z = -sw1 * ((gait === 'quad' ? 0.45 : 0.6) + run * (gait === 'quad' ? 0.15 : 0.6)) * w + push * run * 0.15;
     b[2].rotation.z = (sw1 * (0.4 + run * 0.35) - push * run * 0.2) * w;
     if (b[3]) b[3].rotation.z = (-Math.sin(p) * (0.2 + run * 0.15) + sw1 * (0.15 + run * 0.25)) * w;
-    // травоядные бьют передними лапами: привстают и опускают лапы вниз
-    if (butt && lg.front) { const st = lunge * 1.0 + open * 0.3; b[0].rotation.z += -st * 0.95; b[1].rotation.z += -st * 0.5; if (b[2]) b[2].rotation.z += st * 0.4; }
+    // травоядные бьют передними лапами: привстают (замах — лапы вверх-вперёд), затем обрушивают их вниз
+    if (butt && lg.front) { const wd = pull, ht = lunge; b[0].rotation.z += LEGSIGN * (wd * 1.15 - ht * 0.55); b[1].rotation.z += -(wd * 0.9) + ht * 0.7; if (b[2]) b[2].rotation.z += wd * 0.5 - ht * 0.5; }
   }
   for (const a of P.arms) {
     if (a.scorp) { a.g.rotation.y = Math.sin(tt * 1.4 + a.s) * 0.08 - bk * 0.5 * a.s; a.arm.rotation.z = bk * 0.4; continue; }
@@ -1404,10 +1410,18 @@ function animRig(P, tt, sw, dt, o) {
       wg.b0.scale.set(1, 1, 0.3); wg.b0.rotation.set(s * 0.55 + Math.sin(tt * 1.2) * 0.02, -s * 0.75, 0.15); wg.b1.rotation.set(s * 0.6, 0, 0);
     }
   }
-  for (const f of P.flippers) {
-    const ph = tt * (swim ? 5 : 2.5) + (f.front ? 0 : 1.4);
-    f.g.rotation.z = Math.sin(ph) * (swim ? 0.35 : 0.2) * (0.4 + sw);
-    f.g.rotation.x = -f.side * 0.25 + Math.cos(ph) * 0.15 * f.side;
+  // ласты: у плиозавра — «подводный полёт» (большие взмахи вверх-вниз, передняя и задняя пары в противофазе, лопасть поворачивается),
+  // у мозазавра и прочих — лёгкая греблей; частота растёт со скоростью
+  if (P.flippers.length) {
+    const amp = P.flipAmp || 0.3, fr = swim ? 1.5 + sw * 2.2 : 1.2 + sw * 1.4;
+    P.fph = ((P.fph || 0) + ddt * fr) % 62.832;
+    for (const f of P.flippers) {
+      const ph = P.fph * (f.front ? 1 : 1) + (f.front ? 0 : 1.9), k = swim ? (0.55 + Math.min(1, sw) * 0.45) : 0.35;
+      const flap = Math.sin(ph), dn = Math.cos(ph);
+      f.g.rotation.x = -f.side * (0.25 + flap * amp * 0.8 * k * (f.front ? 1 : 0.7));          // взмах вверх-вниз
+      f.g.rotation.z = (dn * amp * 0.5 - 0.1) * k * (f.front ? 1 : 0.8);                        // ход вперёд-назад
+      f.g.rotation.y = f.side * dn * amp * 0.45 * k;                                            // поворот лопасти по ходу взмаха
+    }
   }
   if (P.frogLegs) for (const l of P.frogLegs) { l.hind.rotation.z = -Math.max(0, Math.sin(tt * 6)) * 0.5 * sw; l.front.rotation.z = Math.sin(tt * 6) * 0.2 * sw; }
   if (P.scorpTail) { const T = P.scorpTail; for (let i = 1; i < T.length; i++) T[i].rotation.z = Math.sin(tt * 1.6 - i * 0.6) * 0.05 - bk * 0.12; T[0].rotation.y = Math.sin(tt * 0.8) * 0.1; }
@@ -1430,7 +1444,7 @@ function animateDino(dino, t, speed, dt, st) {
   // бег: явный флаг (свой динозавр — зажат «бег») или скорость заметно выше шага своего класса
   const base = ((CONFIG.CLASSES[cls] || {}).speed || 180) / 180;
   const run = st.run !== undefined ? (st.run ? 1 : 0) : sstep(1.18, 1.4, speed / base);
-  animRig(P, tt, sw, dt, { bc: biteCurve(bite), fly: st.fly, swim: st.swim && P.aquatic, run: st.guard || st.climb ? 0 : run });
+  animRig(P, tt, sw, dt, { bc: biteCurve(bite), fly: st.fly, swim: st.swim && P.aquatic, run: st.guard || st.climb ? 0 : run, sc: dino.scale.x, v: speed * 6 });
   if (P.aquatic) {
     // под водой нос смотрит туда, куда плывём: вверх при всплытии, вниз при погружении
     const pt = st.swim ? Math.max(-0.65, Math.min(0.65, -(st.vy || 0) * 0.09)) : 0;
@@ -1560,7 +1574,7 @@ function seaPlesio(o) {
   return marine(Object.assign({ kind: 'marine', ridge: 0, keys: plesioKeys(nk),
     bones: [-1.6, -0.8, 0.2, 1.3, N(1.9), N(2.5), N(3.0), hx], rootI: 2, headX: hx, eyeX: hx + 0.15, snoutX: hx + 0.55, hingeY: 1.38,
     jawKeys: SK([[hx - 0.05, 1.38, .04, .07, .12], [hx + 0.35, 1.36, .03, .04, .07], [hx + 0.57, 1.37, .005, .005, .005]]),
-    fluke: false, dorsal: false, frontX: 0.6, hindX: -0.9, flipK: 2.1 }, o));
+    fluke: false, dorsal: false, frontX: 0.6, hindX: -0.9, flipK: 2.1, flipAmp: 0.7 }, o));
 }
 // черепаха (архелон, генодус): плоское тело, панцирь с килями, клюв, огромные передние ласты
 function seaTurtle(o) {
@@ -1731,7 +1745,7 @@ function animateEnemy(g, t, speed, dt, atk, flying, base) {
   const sw = Math.min(speed, 1.4);
   if (P.isBug) { animRig(P, tt, sw, dt, {}); P.body.position.y = Math.sin(tt * 3) * 0.08; return; }
   const swim = P.aquatic;
-  animRig(P, tt, swim ? Math.max(0.6, sw) : sw, dt, { bc: biteCurve(bite), fly: flying && P.flies, swim, run });
+  animRig(P, tt, swim ? Math.max(0.6, sw) : sw, dt, { bc: biteCurve(bite), fly: flying && P.flies, swim, run, sc: g.scale.x, v: speed * 6 });
   if (P.gait === 'hop') { P.body.position.y = Math.max(0, Math.sin(P.gph * 0.7)) * 0.25 * sw; return; }
   P.body.position.y = bodyBob(P, sw, swim, flying && P.flies) * 0.9 + (flying ? Math.sin(tt * 2) * 0.1 : 0);
   P.body.rotation.x = (flying && P.flies ? 0.15 : 0) + (P.run || 0) * (P.gait === 'quad' ? 0.03 + Math.sin(P.gph) * 0.04 : 0.11);
@@ -1854,7 +1868,42 @@ function makeEggMesh(colorHex) {
   return grp;
 }
 
-return {"SCALE_BUMP":SCALE_BUMP,"palette":palette,"qMul":qMul,"buildDino":buildDino,"setCosmetic":setCosmetic,"setCrown":setCrown,"biteCurve":biteCurve,"animateDino":animateDino,"makeNameTag":makeNameTag,"makeHpBar":makeHpBar,"makeActor":makeActor,"buildEnemy":buildEnemy,"animateEnemy":animateEnemy,"buildBoss":buildBoss,"animateBoss":animateBoss,"makeEggMesh":makeEggMesh};
+// ---------- красный контур вокруг укушенного врага ----------
+// «обратный корпус»: копия каждой сетки (с тем же скелетом), вытолкнутая вдоль нормалей и видимая только изнутри, — получается тонкая обводка силуэта
+let _olMat = null;
+function outlineMat() {
+  if (_olMat) return _olMat;
+  _olMat = new THREE.MeshBasicMaterial({ color: 0xff2418, side: THREE.BackSide, fog: false, toneMapped: false, depthWrite: false });
+  _olMat.onBeforeCompile = (sh) => {
+    sh.uniforms.uOW = { value: 0.05 };
+    sh.vertexShader = 'uniform float uOW;\n' + sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\n transformed += normalize(normal) * uOW;');
+  };
+  return _olMat;
+}
+function setOutline(root, on, color) {
+  if (!root) return;
+  let ol = root.userData.ol;
+  if (!ol) {
+    if (!on) return;
+    ol = root.userData.ol = [];
+    const src = [];
+    root.traverse(o => { if (o.isMesh && !o.userData.isOutline && !o.isSprite && o.geometry && o.geometry.attributes && o.geometry.attributes.normal && !(o.material && o.material.transparent && o.material.opacity < 0.5)) src.push(o); });
+    const bb = new THREE.Box3().setFromObject(root), sz = bb.getSize(new THREE.Vector3()), w = Math.max(0.02, Math.max(sz.x, sz.y, sz.z) * 0.018 / Math.max(0.01, root.scale.x));
+    const mat = outlineMat().clone(); root.userData.olMat = mat; mat.onBeforeCompile = (sh) => { sh.uniforms.uOW = { value: w }; sh.vertexShader = 'uniform float uOW;\n' + sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\n transformed += normalize(normal) * uOW;'); };
+    mat.customProgramCacheKey = () => 'ol' + w.toFixed(3);
+    for (const o of src) {
+      const m = o.isSkinnedMesh ? new THREE.SkinnedMesh(o.geometry, mat) : new THREE.Mesh(o.geometry, mat);
+      if (o.isSkinnedMesh) m.bind(o.skeleton, o.bindMatrix);
+      m.userData.isOutline = true; m.frustumCulled = false; m.renderOrder = 3; m.castShadow = false; m.receiveShadow = false;
+      m.position.copy(o.position); m.quaternion.copy(o.quaternion); m.scale.copy(o.scale); m.visible = false;
+      o.parent.add(m); ol.push(m);
+    }
+  }
+  if (on && root.userData.olMat) root.userData.olMat.color.setHex(color || 0xff2418);
+  for (const m of ol) m.visible = !!on;
+}
+
+return {"SCALE_BUMP":SCALE_BUMP,"palette":palette,"qMul":qMul,"buildDino":buildDino,"setCosmetic":setCosmetic,"setCrown":setCrown,"biteCurve":biteCurve,"animateDino":animateDino,"makeNameTag":makeNameTag,"makeHpBar":makeHpBar,"makeActor":makeActor,"buildEnemy":buildEnemy,"animateEnemy":animateEnemy,"buildBoss":buildBoss,"animateBoss":animateBoss,"makeEggMesh":makeEggMesh,"setOutline":setOutline};
 })();
 __m["biomekit"]=(function(){
 var THREE=__m["three"];
@@ -4067,6 +4116,15 @@ function buildWorld(scene, biomeId, opts) {
   const mud = W.biome === 'swamp' ? col3(0x3d4a2a) : cMud;
   for (let i = 0; i < tp.count; i++) tp.setY(i, W.heightAt(tp.getX(i), tp.getZ(i)));
   tg.computeVertexNormals();
+  // высота именно нарисованной поверхности (треугольники сетки), а не гладкой формулы мира: объекты ставим по ней — на склонах и перегибах они не «висят» над землёй и не тонут
+  const MH = (x, z) => {
+    const st = SIZE / SEG, gx = (x + SIZE / 2) / st, gz = (z + SIZE / 2) / st;
+    if (gx < 0 || gz < 0 || gx >= SEG || gz >= SEG) return W.heightAt(x, z);
+    const ix = Math.floor(gx), iz = Math.floor(gz), u = gx - ix, v = gz - iz, X0 = ix * st - SIZE / 2, Z0 = iz * st - SIZE / 2;
+    const ha = W.heightAt(X0, Z0), hb = W.heightAt(X0, Z0 + st), hc = W.heightAt(X0 + st, Z0 + st), hd = W.heightAt(X0 + st, Z0);
+    return u + v <= 1 ? ha + (hd - ha) * u + (hb - ha) * v : hc + (hb - hc) * (1 - u) + (hd - hc) * (1 - v);
+  };
+  if (!isDuel) for (const list of [W.trees, W.rocks, W.stones]) for (const o of list || []) if (!o._mh) { o._mh = 1; if (o.y !== undefined) o.y += MH(o.x, o.z) - W.heightAt(o.x, o.z); }
   // окраска поверхности — палитры и узоры BiomeKit, высоты нашего мира приведены к его масштабу
   const kitB = KIT_BIOME[W.biome], kitCol = !isDuel && kitB !== 'volcano' ? BiomeKit.surfaceColor(kitB, cfg.seed & 0xffff) : null;
   const yK = { mountain: h => (h - 2) * 0.2, swamp: h => h - W.waterY };
@@ -4324,7 +4382,7 @@ function buildWorld(scene, biomeId, opts) {
     // трава и кусты: точки по суше
     const [gMax, gDens] = GRASS_FILTER[W.biome] || [14, 1], grng = Sim.mulberry32(W.biome.length * 977 + 4242), N = Math.round(30000 * gDens), items = [];
     for (let i = 0; i < N; i++) {
-      const x = (grng() * 2 - 1) * (HALF - 8), z = (grng() * 2 - 1) * (HALF - 8), h = W.heightAt(x, z);
+      const x = (grng() * 2 - 1) * (HALF - 8), z = (grng() * 2 - 1) * (HALF - 8), h = MH(x, z);
       if (h < W.waterY + 0.45 || h > gMax + 20 || Math.hypot(x, z) < ARENA - 1 || W.slopeAt(x, z) > 0.75 || Math.hypot(x - W.nest.x, z - W.nest.z) < 9) continue;
       const v = grng(); items.push({ x, y: h - 0.03, z, rot: grng() * 6.28, s: 0.75 + grng() * 0.5, ksi: pickW(kit.cover, v), kv: (grng() * 2) | 0 });
     }
@@ -4342,7 +4400,7 @@ function buildWorld(scene, biomeId, opts) {
       const ur = Sim.mulberry32(W.biome.length * 57 + 91), ul = [];
       const UMAX = W.ocean ? 12000 : (W.biome === 'swamp' ? 1400 : 300);
       for (let i = 0; i < (W.ocean ? 120000 : 20000) && ul.length < UMAX; i++) {
-        const x = (ur() * 2 - 1) * (HALF - 10), z = (ur() * 2 - 1) * (HALF - 10), h = W.heightAt(x, z), dep = W.waterY - h;
+        const x = (ur() * 2 - 1) * (HALF - 10), z = (ur() * 2 - 1) * (HALF - 10), h = MH(x, z), dep = W.waterY - h;
         if (dep <= 0.9) continue;
         if (W.ocean) {   // заросли пятнами: густо на грядах и у скал, пусто на песчаных полянах арены
           const dn = kfbm(x * 0.03, z * 0.03, 2, 61); if (ur() > Math.max(0.08, Math.min(1, (dn + 0.15) * 1.6))) continue;
@@ -4380,7 +4438,7 @@ function buildWorld(scene, biomeId, opts) {
     for (let k = 0; k < nb; k++) {
       const x = (ix + r()) * BC, z = (iz + r()) * BC, pv = r(), a1 = r(), a2 = r(), a3 = r(), s1 = r(), s2 = r(), cp = r(), cs = r();
       if (Math.abs(x) > HALF - 6 || Math.abs(z) > HALF - 6) continue;
-      const h = W.heightAt(x, z);
+      const h = MH(x, z);
       if (h < W.waterY + 0.3 || Math.hypot(x, z) < ARENA - 1 || Math.hypot(x - W.nest.x, z - W.nest.z) < 8.5 || W.slopeAt(x, z) > 0.8) continue;
       const patch = 0.55 + 0.45 * Tree.fbm2(x * 0.18 + 3, z * 0.18, 2, 11) * 1.6;
       if (pv > patch) continue;
@@ -4496,6 +4554,17 @@ function buildWorld(scene, biomeId, opts) {
       const sg = new THREE.BufferGeometry(); sg.setAttribute('position', new THREE.BufferAttribute(sp, 3));
       const smoke = new THREE.Points(sg, new THREE.PointsMaterial({ color: 0x3a3230, size: 2.2, transparent: true, opacity: 0.6, depthWrite: false, map: dotTex() })); smoke.frustumCulled = false; root.add(smoke);
       ventFx = { mouths, sp, sl, PN, sg };
+    }
+    if (F.caves && F.caves.length) {
+      // каменные своды сквозных пещер (стены — рельеф, свод — отдельная глыба над туннелем)
+      F.caves.forEach((c, i) => {
+        const th = c.H - c.rb, wd = (c.w + 4) * 2;
+        const roofG = mergeSmooth([{ g: new THREE.BoxGeometry(c.L + 6, th, wd, 16, 5, 8), m: trs(0, 0, 0), c: 0x4a4e56, c2: 0x6c7078, jit: 1.3, jf: 0.22 },
+          { g: new THREE.DodecahedronGeometry(c.w * 0.9, 1), m: trs(c.L / 2 + 1, -th * 0.15, 0, 1, 0.9, 1), c: 0x454950, c2: 0x666a72, jit: 1.3, jf: 0.22 },
+          { g: new THREE.DodecahedronGeometry(c.w * 0.9, 1), m: trs(-c.L / 2 - 1, -th * 0.15, 0, 1, 0.9, 1), c: 0x454950, c2: 0x666a72, jit: 1.3, jf: 0.22 }]);
+        const m = new THREE.Mesh(roofG, mkMat(null, detailTex('stone'), 1.6));
+        m.position.set(c.x, c.f + c.rb + th / 2, c.z); m.rotation.y = -c.a; m.castShadow = true; m.receiveShadow = true; root.add(m);
+      });
     }
     if (W.biome === 'arctic') {
       // льдины на поверхности (сверху — белые плиты, снизу — тёмные силуэты)
@@ -4669,7 +4738,15 @@ function buildWorld(scene, biomeId, opts) {
       const hm = u + v <= 1 ? ha + (hd - ha) * u + (hb - ha) * v : hc + (hb - hc) * (1 - u) + (hd - hc) * (1 - v);
       return hm - W.heightAt(x, z);
     },
+    meshH: MH,
     nestLift(x, z) { if (!nestKit) return 0; const dx = (x - W.nest.x) / NEST_S, dz = (z - W.nest.z) / NEST_S; if (dx * dx + dz * dz > 2.4 * 2.4) return 0; return Math.max(0, nestKit.heightAt(dx, dz) * NEST_S); },
+    // высота волны в точке (та же формула, что в шейдере воды): по ней динозавр качается на поверхности и не торчит над водой
+    waveAt(x, z) {
+      if (!waterU) return 0;
+      const t = waterU.uTime.value, A = waterU.uAmp.value, Dn = [[1, 0.3], [-0.6, 1], [0.9, -0.7], [-1, -0.2]], Am = [0.11, 0.075, 0.045, 0.028], Ln = [19, 11, 6.3, 3.4];
+      let h = 0; for (let i = 0; i < 4; i++) { const l = Math.hypot(Dn[i][0], Dn[i][1]), k = 6.2832 / Ln[i], w = Math.sqrt(9.8 * k); h += Am[i] * A * Math.sin((Dn[i][0] * x + Dn[i][1] * z) / l * k + t * w); }
+      return h;
+    },
     get underwater() { return underNow; },
     sim: W, root, nest: W.nest, nestInfo, sun, minimap, minimapSize: MM, mapSize: SIZE, applyQuality, update, dispose, setTramplers, barrier, portalIn, portalNext,
     setPortalNext(on) { if (portalNext) portalNext.group.visible = !!on; },
@@ -5166,7 +5243,7 @@ var Profile=__m["profile"];
 var Audio=__m["audio"];
 var buildWorld=__m["world"].buildWorld;
 var DinoNest=__m["dinonest"].DinoNest;
-var buildDino=__m["dinos"].buildDino,animateDino=__m["dinos"].animateDino,makeActor=__m["dinos"].makeActor,makeNameTag=__m["dinos"].makeNameTag,makeHpBar=__m["dinos"].makeHpBar,buildEnemy=__m["dinos"].buildEnemy,animateEnemy=__m["dinos"].animateEnemy,buildBoss=__m["dinos"].buildBoss,animateBoss=__m["dinos"].animateBoss,setCrown=__m["dinos"].setCrown,setCosmetic=__m["dinos"].setCosmetic,makeEggMesh=__m["dinos"].makeEggMesh;
+var buildDino=__m["dinos"].buildDino,animateDino=__m["dinos"].animateDino,makeActor=__m["dinos"].makeActor,makeNameTag=__m["dinos"].makeNameTag,makeHpBar=__m["dinos"].makeHpBar,buildEnemy=__m["dinos"].buildEnemy,setOutline=__m["dinos"].setOutline,animateEnemy=__m["dinos"].animateEnemy,buildBoss=__m["dinos"].buildBoss,animateBoss=__m["dinos"].animateBoss,setCrown=__m["dinos"].setCrown,setCosmetic=__m["dinos"].setCosmetic,makeEggMesh=__m["dinos"].makeEggMesh;
 var connectOnline=__m["net"].connectOnline,connectLocal=__m["net"].connectLocal;
 var UI=__m["ui"].UI;
 /* Dino Evolution — клиент: рендер, ввод, предсказание движения, снимки сервера, эффекты, HUD. */
@@ -5556,11 +5633,11 @@ function updateEnt(r, now) {
     const boss = typeof r[1] === 'string';
     let g, arch = null, def = null, bossId = null;
     if (boss) { bossId = r[1].slice(2); def = CONFIG.BOSSES[bossId]; g = buildBoss(bossId, def); }
-    else { arch = CONFIG.ENEMIES[ARCH_IDS[r[1]]]; g = buildEnemy(arch); g.scale.multiplyScalar(1 + Math.min(30, r[9]) * 0.012); }
+    else { arch = CONFIG.ENEMIES[ARCH_IDS[r[1]]]; g = buildEnemy(arch); g.scale.multiplyScalar((1 + Math.min(30, r[9]) * 0.012) * Sim.enemySizeMul(r[9])); }
     const group = new THREE.Group(); group.add(g);
     e = { id: r[0], boss, arch, def, bossId, group, model: g, buf: [], seen: now, lv: r[9], hp: r[6], mhp: r[7], flags: 0, tag: null, bar: null, tagKey: '', animT: Math.random() * 10, speed: 0, lastPos: null, shown: true };
     const h = boss ? def.size * 3.6 : arch.size * (arch.model === 'quad' ? 2.4 : arch.model === 'ptero' ? 1.9 : arch.model === 'bug' ? 1.0 : arch.model === 'fish' ? 0.9 : arch.model === 'croc' ? 1.3 : 2.0) + 0.5;
-    e.tagY = h;
+    e.tagY = h * (boss ? 1 : Sim.enemySizeMul(r[9]));
     e.bar = makeHpBar(boss ? 3 : 1.3); e.bar.position.y = h + 0.1; e.bar.visible = false; group.add(e.bar);
     scene.add(group); S.ents.set(r[0], e);
   }
@@ -5594,11 +5671,38 @@ function foodMesh(k) {
       for (let v = 0; v < pa.count; v++) { const y = pa.getY(v) + len / 2, t = y / len, w = Math.sin(Math.min(1, t) * 3.0 + 0.2) * 0.9 + 0.1; pa.setX(v, pa.getX(v) * Math.max(0.12, w) * (1 - 0.5 * t * t)); pa.setY(v, y); pa.setZ(v, t * t * 0.45 * len); }
       geo.computeVertexNormals(); const l = new THREE.Mesh(geo, gm[i % 3]); l.rotation.y = a; l.rotation.x = -0.35; l.position.set(Math.cos(a) * 0.05, 0.02, Math.sin(a) * 0.05); l.castShadow = false; g.add(l);
     }
+    // выделение: светящееся кольцо на земле, мягкое сияние и искры над кустом — еду видно издалека на фоне травы
+    const ringM = new THREE.MeshBasicMaterial({ color: 0xd8ff5a, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false });
+    const rg = new THREE.Mesh(new THREE.RingGeometry(0.62, 0.78, 40), ringM); rg.rotation.x = -Math.PI / 2; rg.position.y = 0.06; g.add(rg);
+    const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: softDot(), color: 0xc8ff4a, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
+    glow.position.y = 0.55; glow.scale.set(2.4, 2.4, 1); g.add(glow);
+    const spark = new THREE.Sprite(new THREE.SpriteMaterial({ map: softDot(), color: 0xffffff, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
+    spark.position.y = 1.5; spark.scale.set(0.45, 0.45, 1); g.add(spark);
+    g.scale.setScalar(1.35); g.userData.fx = { rg, glow, spark };
     return g;
   }
   else if (k === 'fish') { const b = new THREE.Mesh(new THREE.SphereGeometry(0.3, 16, 12), m); b.scale.set(0.5, 0.6, 1.2); b.position.y = 0.35; g.add(b); const t = new THREE.Mesh(new THREE.ConeGeometry(0.18, 0.3, 4), m); t.rotation.x = -Math.PI / 2; t.position.set(0, 0.35, -0.4); g.add(t); }
   else if (k === 'bug') { const b = new THREE.Mesh(new THREE.SphereGeometry(0.14, 12, 10), m); b.position.y = 0.5; g.add(b); }
-  else { const b = new THREE.Mesh(new THREE.SphereGeometry(0.3, 18, 14), m); b.scale.set(1, 0.8, 1.3); b.position.y = 0.3; g.add(b); const bone = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.5, 10), new THREE.MeshStandardMaterial({ color: 0xf4eed8, roughness: 0.5 })); bone.rotation.x = Math.PI / 2; bone.position.set(0, 0.32, -0.45); g.add(bone); }
+  else {
+    // мясо: жареная ножка — сочный бугристый «барабан», суживающийся к кости, на конце кости две шишечки; лежит на земле наискосок
+    const small = k === 'smeat', sc0 = small ? 0.85 : 1.35;
+    const prof = [[0.001, 0], [0.12, 0.015], [0.27, 0.1], [0.38, 0.28], [0.42, 0.5], [0.37, 0.72], [0.26, 0.92], [0.14, 1.07], [0.075, 1.18], [0.001, 1.22]].map(([r, y]) => new THREE.Vector2(r, y));
+    const mg = new THREE.LatheGeometry(prof, 28), pa = mg.attributes.position, cols = new Float32Array(pa.count * 3), tc = new THREE.Color(), cLo = new THREE.Color(small ? 0xd0743a : 0xb8531f), cHi = new THREE.Color(small ? 0xf0a060 : 0xe58a3e), cDk = new THREE.Color(0x6a2a10);
+    for (let v = 0; v < pa.count; v++) {
+      let x = pa.getX(v), y = pa.getY(v), z = pa.getZ(v); const n = Math.sin(x * 11 + y * 7) * Math.cos(z * 9 + y * 5) * 0.5 + Math.sin(y * 17 + z * 6) * 0.25, d = 1 + n * 0.09;
+      pa.setXYZ(v, x * d, y, z * d);
+      tc.copy(cLo).lerp(cHi, Math.max(0, Math.min(1, 0.5 + n * 1.2 + (z > 0 ? 0.25 : -0.1)))).lerp(cDk, Math.max(0, -n * 0.8));
+      cols[v * 3] = tc.r; cols[v * 3 + 1] = tc.g; cols[v * 3 + 2] = tc.b;
+    }
+    mg.setAttribute('color', new THREE.BufferAttribute(cols, 3)); mg.computeVertexNormals();
+    const meat = new THREE.Mesh(mg, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.42, emissive: 0x401400, emissiveIntensity: 0.35 }));
+    const boneM = new THREE.MeshStandardMaterial({ color: 0xf6f0dc, roughness: 0.5 });
+    const bone = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.075, 0.5, 10), boneM); bone.position.y = 1.4;
+    const kn1 = new THREE.Mesh(new THREE.SphereGeometry(0.115, 12, 10), boneM), kn2 = kn1.clone(); kn1.position.set(0.07, 1.68, 0); kn2.position.set(-0.07, 1.66, 0.03);
+    const leg = new THREE.Group(); leg.add(meat, bone, kn1, kn2); leg.rotation.z = -1.15; leg.rotation.y = 0.5; leg.position.set(0.42 * sc0, 0.3 * sc0, 0); leg.scale.setScalar(sc0 * 0.62); g.add(leg);
+    const gl = new THREE.Sprite(new THREE.SpriteMaterial({ map: softDot(), color: 0xff5a4a, transparent: true, opacity: 0.32, blending: THREE.AdditiveBlending, depthWrite: false, fog: false })); gl.position.y = 0.5; gl.scale.set(2.0, 2.0, 1); g.add(gl);
+    g.userData.fx = { glow: gl };
+  }
   return g;
 }
 function syncFood() {
@@ -5607,7 +5711,7 @@ function syncFood() {
   for (let i = 0; i < list.length; i++) {
     const d = list[i]; let f = S.foodMeshes[i];
     if (!f || f.userData.k !== d[3]) { if (f) f.parent.remove(f); f = foodMesh(d[3]); f.userData.k = d[3]; scene.add(f); S.foodMeshes[i] = f; }
-    f.position.set(d[0], d[1], d[2]);
+    f.position.set(d[0], d[1] > S.W.waterY - 0.6 && S.world && S.world.meshH ? Math.max(d[1], S.world.meshH(d[0], d[2]) + 0.03) : d[1], d[2]);
   }
 }
 
@@ -5706,12 +5810,13 @@ function onEvent(ev, now) {
   switch (k) {
     case 'h': {
       p = posOf(ev[1]); if (!p) break; const me = ev[1] === S.id;
-      if (ev[3] === 3) { floatText(p.x, p.y + 2.4, p.z, T('dodge'), '#9be37a', 1); break; }      // уворот
+      if (ev[3] === 3) { floatText(p.x, p.y + 2.4, p.z, T('dodge'), '#9be37a', 1); break; }
+      if (ev[3] === 4) { const te = S.ents.get(ev[1]); if (te && now - (te.tsAt || 0) > 1.2) { te.tsAt = now; floatText(p.x, p.y + 2.6, p.z, T('too_strong'), '#ffb43a', 1.1); Audio.sfx('hit'); } break; }   // слишком сильный враг      // уворот
       const col = me ? '#ff6a5a' : ev[3] === 1 ? '#ffb43a' : ev[3] === 2 ? '#7ad8ff' : '#ffffff';
       floatText(p.x, p.y + 2.2, p.z, (me ? '-' : '') + ev[2], col, ev[3] ? 1.3 : 1);
       burst(p.x, p.y + 1.1, p.z, me ? 0xff3a2a : 0xffe08a, me ? 8 : 6, 3.5); Audio.sfx(me ? 'hurt' : 'hit');
       if (me) S.camShake = Math.max(S.camShake, 0.25);
-      else { const te = S.ents.get(ev[1]), sz = te ? (te.boss ? (te.def.size || 3) * 1.4 : ((te.arch && te.arch.size) || 1) * 1.6) : 1.3; ring(p.x, p.y - 0.1, p.z, 0xff2a2a, Math.max(2.2, sz * 2 + 1.4), 0.55); }   // красный круг вокруг укушенного врага
+      else { const te = S.ents.get(ev[1]); if (te) { te.olUntil = now + 0.7; te.olOn = true; setOutline(te.model, true, 0xff2418); } }   // красный контур укушенного врага
       const pl = S.players.get(ev[1]); if (pl) pl.hurt = now;
       break;
     }
@@ -5727,7 +5832,7 @@ function onEvent(ev, now) {
     case 'roar': p = posOf(ev[1]); if (p) ring(p.x, p.y, p.z, 0xff7a4a, ev[2] || 14, 0.8); Audio.sfx('roar'); if (ev[1] !== S.id) S.camShake = Math.max(S.camShake, 0.1); break;
     case 'screech': p = posOf(ev[1]); if (p) ring(p.x, p.y, p.z, 0xffe14a, ev[2] || 10, 0.7); Audio.sfx('screech'); break;
     case 'herd': p = posOf(ev[1]); if (p) { ring(p.x, p.y, p.z, 0xc9a86a, ev[2] || 9, 0.6); burst(p.x, p.y + 0.3, p.z, 0xb59a6a, 26, 5); if (ev[1] === S.id) S.camShake = Math.max(S.camShake || 0, 0.35); } Audio.sfx('hit'); break;
-    case 'grd': p = posOf(ev[1]); if (p) ring(p.x, p.y, p.z, 0x6ac8ff, 2.5, 0.5); break;
+    case 'grd': p = posOf(ev[1]); if (p) burst(p.x, p.y + 1.0, p.z, 0x9ad8ff, 10, 2.5); break;   // щит: светящийся пузырь вокруг динозавра (без плоского «круга-таблички»)
     case 'fly': p = posOf(ev[1]); if (p) burst(p.x, p.y + 0.3, p.z, 0xdddddd, 12, 3); break;
     case 'arc': { const a = posOf(ev[1]), b = posOf(ev[2]); if (a && b) { for (let i = 0; i < 8; i++) { const t = i / 7; burst(a.x + (b.x - a.x) * t, a.y + 1 + (b.y - a.y) * t, a.z + (b.z - a.z) * t, 0x7ad8ff, 2, 1, 0); } Audio.sfx('shock'); } break; }
     case 'em': p = posOf(ev[1]); if (p) { floatText(p.x, p.y + 3.6, p.z, EMOJI[ev[2]] || '?', '#ffffff', 1.4); Audio.sfx('emote'); } break;
@@ -5924,7 +6029,7 @@ function placeCamera(dt, px, py, pz, now) {
   let x = tx + dx * camDist, y = ty + dy * camDist, z = tz + dz * camDist;
   const gy = S.W.heightAt(x, z) + 0.5; if (y < gy) y = gy;
   if (S.camShake > 0.01) { const s = S.camShake; x += (Math.random() - 0.5) * s; y += (Math.random() - 0.5) * s; z += (Math.random() - 0.5) * s; S.camShake *= Math.pow(0.02, dt); }
-  camera.position.set(x, y, z); camera.lookAt(tx, ty, tz);
+  camera.position.set(x, y, z); camera.lookAt(tx, ty + (CONFIG.isAqua(S.profile.cls) ? camDist * 0.2 : 0), tz);   // в воде динозавр чуть ниже по экрану — лучше видно, что происходит вокруг
   camera.fov += ((me.fly ? 70 : 62) - camera.fov) * Math.min(1, dt * 3); camera.updateProjectionMatrix();
 }
 
@@ -5952,6 +6057,12 @@ function surfFix(x, y, z) {
   const W = S.W; if (!S.world.groundFix || W.isWater(x, z)) return 0;
   const k = 1 - clamp((y - W.heightAt(x, z)) / 1.2, 0, 1); return k > 0 ? S.world.groundFix(x, z) * k : 0;
 }
+// на поверхности воды динозавр качается на волнах и никогда не торчит над водой
+function waveY(x, y, z, water, sc, aq) {
+  if (!water || !S.world.waveAt) return y;
+  const W = S.W, wv = S.world.waveAt(x, z), off = aq ? 1.15 * sc - 0.15 : 0.55 + 0.25 * sc, k = clamp(1 - (W.waterY - y - off) / 1.6, 0, 1);   // у поверхности — качается на волнах, глубже — волны затухают
+  return Math.min(y + wv * k, W.waterY + wv - off);
+}
 function updateActors(dt, t, now) {
   const me = S.me, W = S.W, a = S.actor;
   // свой динозавр: интерполяция между шагами предсказания + сглаживание коррекций
@@ -5961,11 +6072,11 @@ function updateActors(dt, t, now) {
   if (S.lastPos) { const v = Math.hypot(x - S.lastPos.x, z - S.lastPos.z) / Math.max(dt, 1e-3); S.speed += (clamp(v / 6, 0, 1.6) - S.speed) * Math.min(1, dt * 12); }
   S.lastPos = { x, z };
   const water = W.isWater(me.x, me.z) && me.y < W.waterY + 0.35 && !me.fly && !me.clm;
-  a.update(x, y, z, me.face, S.speed, t, dt, { fly: !!me.fly, swim: water, climb: !!me.clm, guard: !!me.grd, run: !!S.running && S.speed > 0.3, vy: me.vy });
+  a.update(x, waveY(x, y, z, water, Sim.scaleOf(S.profile.level), CONFIG.isAqua(S.profile.cls)), z, me.face, S.speed, t, dt, { fly: !!me.fly, swim: water, climb: !!me.clm, guard: !!me.grd, run: !!S.running && S.speed > 0.3, vy: me.vy });
   const dead = !S.alive; a.dino.rotation.z = dead ? 1.45 : 0; a.dino.position.y = (dead ? 0.35 : 0) + (S.world.nestLift ? S.world.nestLift(x, z) : 0) + surfFix(x, y, z);
   a.group.visible = true; a.dino.visible = true; a.tag.visible = true; { const k = clamp(camDist / 8, 0.5, 1.5); a.tag.scale.set(3.6 * k, 0.9 * k, 1); }
   if (S.hatch) hatchPose(a); else if (a.dino.userData.hatchFix) { a.dino.userData.hatchFix = false; }
-  shieldFx(a, S.mp && S.mp.sh > 0);
+  shieldFx(a, false); ownShieldRing(a, (S.mp && S.mp.sh > 0) || !!me.grd, t);   // свой щит — кольцо на земле: сфера вокруг камеры превращалась в «табличку»
   S.px = x; S.py = y; S.pz = z;
   trN = 0; trAdd(x, z, (S.me.fly || S.W.isWater(x, z) ? 0 : 0.8 + 1.5 * Sim.scaleOf(S.profile.level)), 1);
   // след за своим динозавром: трава поднимается не сразу, а за пару секунд
@@ -5980,16 +6091,30 @@ function updateActors(dt, t, now) {
     const hidden = (fl & F.HIDE) && dd > 7;
     p.actor.group.visible = !hidden;
     const water2 = !an.fly && W.isWater(_s.x, _s.z) && _s.y < W.waterY + 0.35;
-    p.actor.update(_s.x, _s.y, _s.z, _s.f, clamp(p.speed / 6, 0, 1.6), t, dt, { fly: an.fly, swim: an.swim || water2, climb: an.climb, guard: an.guard });
+    p.actor.update(_s.x, waveY(_s.x, _s.y, _s.z, an.swim || water2, Sim.scaleOf(p.actor.level), CONFIG.isAqua(p.actor.cls)), _s.z, _s.f, clamp(p.speed / 6, 0, 1.6), t, dt, { fly: an.fly, swim: an.swim || water2, climb: an.climb, guard: an.guard });
     if ((fl & F.ATK) && !(p.prevFlags & F.ATK)) p.actor.dino.userData.bite = 1;
     p.prevFlags = fl;
     const d = !!(fl & F.DEAD); p.actor.dino.rotation.z = d ? 1.45 : 0; p.actor.dino.position.y = (d ? 0.35 : 0) + (an.fly ? 0 : surfFix(_s.x, _s.y, _s.z));
-    shieldFx(p.actor, !!(fl & F.SHIELD));
+    shieldFx(p.actor, !!(fl & (F.SHIELD | F.GRD)));
     p.actor.tag.visible = dd < 60; { const k = clamp(Math.hypot(camera.position.x - _s.x, camera.position.z - _s.z) / 12, 0.45, 2.4); p.actor.tag.scale.set(3.6 * k, 0.9 * k, 1); }
   }
 }
+let _shMat = null;
+function shieldMat() {
+  // только светящийся край пузыря (без плоской заливки): нигде не превращается в «табличку», даже когда сфера уходит в землю
+  return _shMat || (_shMat = new THREE.ShaderMaterial({
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, uniforms: { uC: { value: new THREE.Color(0x6ad0ff) } },
+    vertexShader: 'varying vec3 vN; varying vec3 vV; void main(){ vec4 mv = modelViewMatrix * vec4(position,1.0); vN = normalize(normalMatrix * normal); vV = -mv.xyz; gl_Position = projectionMatrix * mv; }',
+    fragmentShader: 'uniform vec3 uC; varying vec3 vN; varying vec3 vV; void main(){ float f = 1.0 - abs(dot(normalize(vN), normalize(vV))); float a = pow(f, 3.0) * 0.55; gl_FragColor = vec4(uC * (0.6 + f), a); }'
+  }));
+}
+function ownShieldRing(actor, on, t) {
+  if (!actor.sring) { const m = new THREE.Mesh(new THREE.RingGeometry(0.9, 1.0, 48), new THREE.MeshBasicMaterial({ color: 0x6ad0ff, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false })); m.rotation.x = -Math.PI / 2; m.position.y = 0.08; m.renderOrder = 5; actor.group.add(m); actor.sring = m; }
+  actor.sring.visible = !!on;
+  if (on) { const s = Sim.scaleOf(actor.level) * 2.1 * (1 + 0.06 * Math.sin(t * 5)); actor.sring.scale.set(s, s, s); actor.sring.material.opacity = 0.55 + 0.25 * Math.sin(t * 5); }
+}
 function shieldFx(actor, on) {
-  if (!actor.shield) { actor.shield = new THREE.Mesh(new THREE.SphereGeometry(1, 14, 10), new THREE.MeshBasicMaterial({ color: 0x6ac8ff, transparent: true, opacity: 0.16, depthWrite: false, blending: THREE.AdditiveBlending })); actor.group.add(actor.shield); }
+  if (!actor.shield) { actor.shield = new THREE.Mesh(new THREE.SphereGeometry(1, 20, 14), shieldMat()); actor.shield.renderOrder = 5; actor.group.add(actor.shield); }
   actor.shield.visible = !!on;
   if (on) { const s = Sim.scaleOf(actor.level) * 1.9; actor.shield.scale.set(s, s, s); actor.shield.position.y = s * 0.55; }
 }
@@ -6006,6 +6131,9 @@ function flushTramplers() {
 }
 function updateEnts(dt, t, now) {
   const rt = now - 0.12, viewD = (CONFIG.QUALITY[qualityName].view || 200) + 30, cp = camera.position;
+  // ближайший враг (до ~11 м) подсвечивается жёлтым контуром — понятно, кого сейчас атакуешь
+  let nearE = null, nearD = (S.W.ocean ? 14 : 11);
+  for (const e of S.ents.values()) { if (e.boss || (e.flags & 16) || !e.group.visible) continue; const q = e.group.position, dq = Math.hypot(q.x - S.px, q.z - S.pz); if (dq < nearD && Math.abs(q.y - S.py) < 12) { nearD = dq; nearE = e; } }
   for (const e of S.ents.values()) {
     if (!sample(e.buf, rt, _s)) continue;
     const g = e.group; g.position.set(_s.x, _s.y + (e.arch && e.arch.fly ? 0 : surfFix(_s.x, _s.y, _s.z)), _s.z); e.model.rotation.y = _s.f;
@@ -6025,7 +6153,9 @@ function updateEnts(dt, t, now) {
       e.tag = makeNameTag(nm, { color: col, sub: e.boss ? '' : T('level_short') + e.lv }); e.tag.position.y = e.tagY + 0.5; g.add(e.tag); e.tagKey = key;
     }
     e.tag.visible = dd < (e.boss ? 90 : 38); { const k = clamp(Math.hypot(camera.position.x - _s.x, camera.position.z - _s.z) / 12, 0.45, e.boss ? 4 : 2.4); e.tag.scale.set(3.6 * k, 0.9 * k, 1); }
-    e.bar.visible = !e.boss && dd < (S.W.ocean ? 70 : 48) && (e.hp < e.mhp || aggro); if (e.bar.visible) { e.bar.setFill(e.hp / e.mhp); e.bar.quaternion.copy(camera.quaternion); const bk = clamp(dd / 14, 0.8, 2.6); e.bar.scale.set(bk, bk, 1); }
+    if (e.olOn && now > e.olUntil) { e.olOn = false; e.olY = false; setOutline(e.model, false); }
+    if (!e.olOn) { const yel = e === nearE; if (yel && !e.olY) { e.olY = true; setOutline(e.model, true, 0xffd23a); } else if (!yel && e.olY) { e.olY = false; setOutline(e.model, false); } }
+    e.bar.visible = !e.boss && dd < (S.W.ocean ? 70 : 48) && (e.hp < e.mhp || aggro); if (e.bar.visible) { e.bar.setFill(e.mhp > 0 ? e.hp / e.mhp : 1); e.bar.quaternion.copy(camera.quaternion); const bk = clamp(dd / 14, 0.8, 2.6); e.bar.scale.set(bk, bk, 1); }
     // чутьё: метки добычи и врагов сквозь рельеф
     if (S.sense && !e.boss && dd < S.sense && dd > 9) {
       if (!e.mark) { e.mark = new THREE.Sprite(new THREE.SpriteMaterial({ map: markTex, depthTest: false, transparent: true, opacity: 0.9 })); e.mark.scale.set(0.9, 0.9, 1); e.mark.renderOrder = 15; g.add(e.mark); }
@@ -6045,6 +6175,8 @@ function drawMinimap() {
   const W = S.W;
   if (!W.duel) {
     dot(W.nest.x, W.nest.z, '#ffd35a', 4); dot(W.portalIn.x, W.portalIn.z, '#e8573f', 5);
+    if (W.features && W.features.caves) for (const c of W.features.caves) { g.strokeStyle = '#e8f4ff'; g.lineWidth = 3; g.beginPath(); g.moveTo((c.x - Math.cos(c.a) * c.L / 2 - S.px) * k, (c.z - Math.sin(c.a) * c.L / 2 - S.pz) * k); g.lineTo((c.x + Math.cos(c.a) * c.L / 2 - S.px) * k, (c.z + Math.sin(c.a) * c.L / 2 - S.pz) * k); g.stroke(); }
+    if (S.profile.cls === 'herb' && S.drops) for (const d of S.drops) if (d[3] === 'plant') dot(d[0], d[2], '#c8ff4a', 3);   // еда травоядного — на мини-карте
     if (S.pt && S.pt.next) dot(W.portalNext.x, W.portalNext.z, '#9be37a', 5);
   }
   const sr = Math.max(34, S.sense || 0);
@@ -6086,6 +6218,7 @@ function drawBigMap() {
   if (!W.duel) {
     g.strokeStyle = 'rgba(232,87,63,.8)'; g.lineWidth = 3; g.beginPath(); g.arc(P(0), P(0), CONFIG.ARENA_R * k, 0, TWO_PI); g.stroke();
     icon(0, 0, '💀', 26); icon(W.nest.x, W.nest.z, '🥚', 24); icon(W.portalIn.x, W.portalIn.z, '🌀', 20);
+    if (W.features && W.features.caves) for (const c of W.features.caves) { g.strokeStyle = '#e8f4ff'; g.lineWidth = 5; g.lineCap = 'round'; g.beginPath(); g.moveTo(P(c.x - Math.cos(c.a) * c.L / 2), P(c.z - Math.sin(c.a) * c.L / 2)); g.lineTo(P(c.x + Math.cos(c.a) * c.L / 2), P(c.z + Math.sin(c.a) * c.L / 2)); g.stroke(); g.lineCap = 'butt'; icon(c.x, c.z - 14, '🕳', 16); }   // сквозные пещеры
     if (S.pt && S.pt.next) icon(W.portalNext.x, W.portalNext.z, '✨', 22);
   }
   const sr = Math.max(60, S.sense || 0);
@@ -6108,16 +6241,16 @@ function updateHud(now, dt) {
   setW('b-hp', mp.hp / mp.mh); setW('b-st', S.me.stam / CONFIG.STAM_MAX); setW('b-fd', mp.fd / CONFIG.FOOD_MAX);
   const need = pr.level >= CONFIG.MAX_LEVEL ? 1 : CONFIG.xpForLevel(pr.level); setW('b-xp', pr.level >= CONFIG.MAX_LEVEL ? 1 : mp.xp / need);
   const aq = CONFIG.isAqua(pr.cls); $('b-br').style.display = aq ? '' : 'none'; if (aq) { setW('b-br', mp.br / mp.bm); setT('b-br', `${T('breath')} ${Math.ceil(mp.br)}/${Math.round(mp.bm)}`); }
-  { const low = aq && mp.br / mp.bm <= 0.1; $('b-br').classList.toggle('low', !!low); if (low && S.alive && !(S.hz && now / 1000 - S.hz.t < 1.2)) { const hz = $('hz'); hz.style.display = 'block'; hz.textContent = '⚠ ' + T('breath_low'); S.lowBr = now; } }
-  setT('b-hp', `HP ${Math.ceil(mp.hp)}/${mp.mh}`);
+  { const low = aq && mp.br <= 5; $('b-br').classList.toggle('low', !!low); if (low && S.alive && !(S.hz && now / 1000 - S.hz.t < 1.2)) { const hz = $('hz'); hz.className = 'big'; hz.style.display = 'block'; hz.textContent = '⚠ ' + T('breath_low'); S.lowBr = now; } }
+  setT('b-hp', `HP ${Math.ceil(mp.hp)}/${mp.mh > 0 ? mp.mh : Math.ceil(mp.hp)}`);
   setT('b-st', `${T('stamina')} ${Math.round(S.me.stam)}/${CONFIG.STAM_MAX}`);
   setT('b-fd', `${T('hunger')} ${Math.round(mp.fd)}/${CONFIG.FOOD_MAX}`);
   setT('b-xp', pr.level >= CONFIG.MAX_LEVEL ? `${T('level_short')}${pr.level} MAX` : `XP ${Math.max(0, Math.floor(mp.xp))}/${need}`);
   const stage = CONFIG.STAGES[CONFIG.stageIndex(pr.level)].id;
   $('lvl-t').textContent = `${CLS_ICO[pr.cls]} ${pr.name} · ${T('level_short')}${pr.level} · ${T('stage_' + stage)}`; $('coins').textContent = '🪙 ' + pr.coins;
-  const deb = []; if (mp.dots) deb.push('☠'); if (mp.sh > 0) deb.push('🛡 ' + Math.ceil(mp.sh) + 'с'); if (mp.hid) deb.push('🌿'); if (S.me.stun > 0) deb.push('💫'); if (mp.rg >= 2) deb.push('🔥');
+  const deb = []; if (mp.dots) deb.push('☠'); if (mp.sh > 0) deb.push('🛡 ' + Math.ceil(mp.sh) + 'с'); if (mp.hid) deb.push('🌿'); if (S.me.stun > 0) deb.push('💫'); if (S.me.clm) deb.push('🌳'); if (mp.rg >= 2) deb.push('🔥');
   if (S.sense) deb.push('👁'); $('debuf').textContent = deb.join(' ');
-  const hz = $('hz'); if (S.hz && now / 1000 - S.hz.t < 1.2) { hz.style.display = 'block'; hz.textContent = '⚠ ' + T('hz_' + S.hz.k); } else if (S.lowBr !== now) hz.style.display = 'none';
+  const hz = $('hz'); if (S.hz && now / 1000 - S.hz.t < 1.2) { hz.className = ''; hz.style.display = 'block'; hz.textContent = '⚠ ' + T('hz_' + S.hz.k); } else if (S.lowBr !== now) hz.style.display = 'none';
   // ячейки способностей
   if (S.abBtns) for (const a of S.abBtns) {
     let frac = 0; if (a.slot === 'e') frac = mp.cd[1] / (a.cd || 1); else if (a.slot === 'q') frac = mp.cd[2] / (a.cd || 1); else if (a.slot === 'atk') frac = mp.cd[0] / (CONFIG.CLASSES[pr.cls].atkCd || 0.5);
@@ -6189,7 +6322,7 @@ function frame(nowMs) {
   }
   flushTramplers();
   S.world.update(camera.position, { x: S.px, y: S.py, z: S.pz }, clock, dt, S.tod, S.wx);
-  if (S.foodMeshes) for (const f of S.foodMeshes) f.rotation.y += dt * 1.2;
+  if (S.foodMeshes) for (const f of S.foodMeshes) { f.rotation.y += dt * 1.2; const fx = f.userData.fx; if (fx) { const q = Math.sin(clock * 3 + f.position.x), r = 1 + 0.18 * q; if (!fx.rg) { fx.glow.material.opacity = 0.3 + 0.15 * q; continue; } fx.rg.scale.set(r, r, 1); fx.glow.material.opacity = 0.45 + 0.2 * q; fx.spark.position.y = 1.5 + 0.2 * Math.sin(clock * 2.2 + f.position.z); fx.spark.material.opacity = 0.6 + 0.3 * q; } }
   if (now - lastHud > 0.1) { lastHud = now; updateHud(nowMs, dt); drawMinimap(); drawBigMap(); }
   renderer.render(scene, camera);
 }
@@ -6231,7 +6364,7 @@ $('menubtn').addEventListener('touchstart', e => { e.stopPropagation(); }, { pas
   $('loading').style.display = 'none';
   requestAnimationFrame(frame);
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => { /* офлайн-кэш необязателен */ });
-  window.__dino = { get S() { return S; }, get clock() { return clock; }, ctl, THREE, renderer, Profile, input, camera, menu3d, menuSetDino };      // для отладки и автотестов
+  window.__dino = { get S() { return S; }, get clock() { return clock; }, ctl, THREE, foodMesh, scene, renderer, Profile, input, camera, menu3d, menuSetDino };      // для отладки и автотестов
 })();
 
 return {};

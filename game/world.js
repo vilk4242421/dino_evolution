@@ -327,6 +327,15 @@ export function buildWorld(scene, biomeId, opts) {
   const mud = W.biome === 'swamp' ? col3(0x3d4a2a) : cMud;
   for (let i = 0; i < tp.count; i++) tp.setY(i, W.heightAt(tp.getX(i), tp.getZ(i)));
   tg.computeVertexNormals();
+  // высота именно нарисованной поверхности (треугольники сетки), а не гладкой формулы мира: объекты ставим по ней — на склонах и перегибах они не «висят» над землёй и не тонут
+  const MH = (x, z) => {
+    const st = SIZE / SEG, gx = (x + SIZE / 2) / st, gz = (z + SIZE / 2) / st;
+    if (gx < 0 || gz < 0 || gx >= SEG || gz >= SEG) return W.heightAt(x, z);
+    const ix = Math.floor(gx), iz = Math.floor(gz), u = gx - ix, v = gz - iz, X0 = ix * st - SIZE / 2, Z0 = iz * st - SIZE / 2;
+    const ha = W.heightAt(X0, Z0), hb = W.heightAt(X0, Z0 + st), hc = W.heightAt(X0 + st, Z0 + st), hd = W.heightAt(X0 + st, Z0);
+    return u + v <= 1 ? ha + (hd - ha) * u + (hb - ha) * v : hc + (hb - hc) * (1 - u) + (hd - hc) * (1 - v);
+  };
+  if (!isDuel) for (const list of [W.trees, W.rocks, W.stones]) for (const o of list || []) if (!o._mh) { o._mh = 1; if (o.y !== undefined) o.y += MH(o.x, o.z) - W.heightAt(o.x, o.z); }
   // окраска поверхности — палитры и узоры BiomeKit, высоты нашего мира приведены к его масштабу
   const kitB = KIT_BIOME[W.biome], kitCol = !isDuel && kitB !== 'volcano' ? BiomeKit.surfaceColor(kitB, cfg.seed & 0xffff) : null;
   const yK = { mountain: h => (h - 2) * 0.2, swamp: h => h - W.waterY };
@@ -584,7 +593,7 @@ export function buildWorld(scene, biomeId, opts) {
     // трава и кусты: точки по суше
     const [gMax, gDens] = GRASS_FILTER[W.biome] || [14, 1], grng = Sim.mulberry32(W.biome.length * 977 + 4242), N = Math.round(30000 * gDens), items = [];
     for (let i = 0; i < N; i++) {
-      const x = (grng() * 2 - 1) * (HALF - 8), z = (grng() * 2 - 1) * (HALF - 8), h = W.heightAt(x, z);
+      const x = (grng() * 2 - 1) * (HALF - 8), z = (grng() * 2 - 1) * (HALF - 8), h = MH(x, z);
       if (h < W.waterY + 0.45 || h > gMax + 20 || Math.hypot(x, z) < ARENA - 1 || W.slopeAt(x, z) > 0.75 || Math.hypot(x - W.nest.x, z - W.nest.z) < 9) continue;
       const v = grng(); items.push({ x, y: h - 0.03, z, rot: grng() * 6.28, s: 0.75 + grng() * 0.5, ksi: pickW(kit.cover, v), kv: (grng() * 2) | 0 });
     }
@@ -602,7 +611,7 @@ export function buildWorld(scene, biomeId, opts) {
       const ur = Sim.mulberry32(W.biome.length * 57 + 91), ul = [];
       const UMAX = W.ocean ? 12000 : (W.biome === 'swamp' ? 1400 : 300);
       for (let i = 0; i < (W.ocean ? 120000 : 20000) && ul.length < UMAX; i++) {
-        const x = (ur() * 2 - 1) * (HALF - 10), z = (ur() * 2 - 1) * (HALF - 10), h = W.heightAt(x, z), dep = W.waterY - h;
+        const x = (ur() * 2 - 1) * (HALF - 10), z = (ur() * 2 - 1) * (HALF - 10), h = MH(x, z), dep = W.waterY - h;
         if (dep <= 0.9) continue;
         if (W.ocean) {   // заросли пятнами: густо на грядах и у скал, пусто на песчаных полянах арены
           const dn = kfbm(x * 0.03, z * 0.03, 2, 61); if (ur() > Math.max(0.08, Math.min(1, (dn + 0.15) * 1.6))) continue;
@@ -640,7 +649,7 @@ export function buildWorld(scene, biomeId, opts) {
     for (let k = 0; k < nb; k++) {
       const x = (ix + r()) * BC, z = (iz + r()) * BC, pv = r(), a1 = r(), a2 = r(), a3 = r(), s1 = r(), s2 = r(), cp = r(), cs = r();
       if (Math.abs(x) > HALF - 6 || Math.abs(z) > HALF - 6) continue;
-      const h = W.heightAt(x, z);
+      const h = MH(x, z);
       if (h < W.waterY + 0.3 || Math.hypot(x, z) < ARENA - 1 || Math.hypot(x - W.nest.x, z - W.nest.z) < 8.5 || W.slopeAt(x, z) > 0.8) continue;
       const patch = 0.55 + 0.45 * Tree.fbm2(x * 0.18 + 3, z * 0.18, 2, 11) * 1.6;
       if (pv > patch) continue;
@@ -756,6 +765,17 @@ export function buildWorld(scene, biomeId, opts) {
       const sg = new THREE.BufferGeometry(); sg.setAttribute('position', new THREE.BufferAttribute(sp, 3));
       const smoke = new THREE.Points(sg, new THREE.PointsMaterial({ color: 0x3a3230, size: 2.2, transparent: true, opacity: 0.6, depthWrite: false, map: dotTex() })); smoke.frustumCulled = false; root.add(smoke);
       ventFx = { mouths, sp, sl, PN, sg };
+    }
+    if (F.caves && F.caves.length) {
+      // каменные своды сквозных пещер (стены — рельеф, свод — отдельная глыба над туннелем)
+      F.caves.forEach((c, i) => {
+        const th = c.H - c.rb, wd = (c.w + 4) * 2;
+        const roofG = mergeSmooth([{ g: new THREE.BoxGeometry(c.L + 6, th, wd, 16, 5, 8), m: trs(0, 0, 0), c: 0x4a4e56, c2: 0x6c7078, jit: 1.3, jf: 0.22 },
+          { g: new THREE.DodecahedronGeometry(c.w * 0.9, 1), m: trs(c.L / 2 + 1, -th * 0.15, 0, 1, 0.9, 1), c: 0x454950, c2: 0x666a72, jit: 1.3, jf: 0.22 },
+          { g: new THREE.DodecahedronGeometry(c.w * 0.9, 1), m: trs(-c.L / 2 - 1, -th * 0.15, 0, 1, 0.9, 1), c: 0x454950, c2: 0x666a72, jit: 1.3, jf: 0.22 }]);
+        const m = new THREE.Mesh(roofG, mkMat(null, detailTex('stone'), 1.6));
+        m.position.set(c.x, c.f + c.rb + th / 2, c.z); m.rotation.y = -c.a; m.castShadow = true; m.receiveShadow = true; root.add(m);
+      });
     }
     if (W.biome === 'arctic') {
       // льдины на поверхности (сверху — белые плиты, снизу — тёмные силуэты)
@@ -929,7 +949,15 @@ export function buildWorld(scene, biomeId, opts) {
       const hm = u + v <= 1 ? ha + (hd - ha) * u + (hb - ha) * v : hc + (hb - hc) * (1 - u) + (hd - hc) * (1 - v);
       return hm - W.heightAt(x, z);
     },
+    meshH: MH,
     nestLift(x, z) { if (!nestKit) return 0; const dx = (x - W.nest.x) / NEST_S, dz = (z - W.nest.z) / NEST_S; if (dx * dx + dz * dz > 2.4 * 2.4) return 0; return Math.max(0, nestKit.heightAt(dx, dz) * NEST_S); },
+    // высота волны в точке (та же формула, что в шейдере воды): по ней динозавр качается на поверхности и не торчит над водой
+    waveAt(x, z) {
+      if (!waterU) return 0;
+      const t = waterU.uTime.value, A = waterU.uAmp.value, Dn = [[1, 0.3], [-0.6, 1], [0.9, -0.7], [-1, -0.2]], Am = [0.11, 0.075, 0.045, 0.028], Ln = [19, 11, 6.3, 3.4];
+      let h = 0; for (let i = 0; i < 4; i++) { const l = Math.hypot(Dn[i][0], Dn[i][1]), k = 6.2832 / Ln[i], w = Math.sqrt(9.8 * k); h += Am[i] * A * Math.sin((Dn[i][0] * x + Dn[i][1] * z) / l * k + t * w); }
+      return h;
+    },
     get underwater() { return underNow; },
     sim: W, root, nest: W.nest, nestInfo, sun, minimap, minimapSize: MM, mapSize: SIZE, applyQuality, update, dispose, setTramplers, barrier, portalIn, portalNext,
     setPortalNext(on) { if (portalNext) portalNext.group.visible = !!on; },

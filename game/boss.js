@@ -292,6 +292,7 @@
     return k;
   };
   RP.envDamage = function (p, dps, label) {
+    if (p.st && p.st.clm) return;                                                    // на дереве — неуязвим и для холода, жара, лавы
     p.hp -= dps * DT; p.lastHurt = this.t; p.hz = label; p.hzT = this.t;
     if (p.hp <= 0) { p.hp = 0; p.deadBy = label; this.playerDied(p, { name: label }); }
   };

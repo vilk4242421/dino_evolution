@@ -50,17 +50,17 @@
     swamp:    { waterY: 0.0,  arenaY: 2.2, nest: [-170, -180] },
     volcano:  { waterY: -1.5, arenaY: 3.5, nest: [180, 170] },
     // океан: уровень воды 0, арена босса — подводное плато на глубине 4.5 м, гнездо — на песчаном островке
-    reef:     { waterY: 0, arenaY: -13, nest: [-185, -160], ocean: true },
-    kelp:     { waterY: 0, arenaY: -16, nest: [175, -170], ocean: true },
-    arctic:   { waterY: 0, arenaY: -16, nest: [-175, 175], ocean: true },
-    vents:    { waterY: 0, arenaY: -18, nest: [185, 170], ocean: true },
-    abyss:    { waterY: 0, arenaY: -24, nest: [-180, -175], ocean: true }
+    reef:     { waterY: 0, arenaY: -20, nest: [-185, -160], ocean: true },
+    kelp:     { waterY: 0, arenaY: -24, nest: [175, -170], ocean: true },
+    arctic:   { waterY: 0, arenaY: -24, nest: [-175, 175], ocean: true },
+    vents:    { waterY: 0, arenaY: -27, nest: [185, 170], ocean: true },
+    abyss:    { waterY: 0, arenaY: -36, nest: [-180, -175], ocean: true }
   };
 
   // ---------- рельеф морского дна ----------
   // острова, айсберги, курильщики — списком (их же рисует клиент)
   function oceanFeatures(id, seed) {
-    var r = mulberry32(seed + 313), F = { islands: [], bergs: [], vents: [], spires: [] }, i, a, d;
+    var r = mulberry32(seed + 313), F = { islands: [], bergs: [], vents: [], spires: [], caves: [], peaks: [] }, i, a, d;
     var put = function (list, n, rmin, rmax, minD) {
       for (var k = 0; k < n * 20 && list.length < n; k++) {
         a = r() * 6.283; d = 70 + r() * (HALF - 110);
@@ -73,6 +73,15 @@
     if (id === 'arctic') put(F.bergs, 22, 7, 18, 10);
     if (id === 'vents') put(F.vents, 26, 3.5, 5.5, 14);
     if (id === 'abyss' || id === 'kelp') put(F.spires, id === 'abyss' ? 30 : 18, 3, 7, 10);
+    put(F.peaks, 16, 14, 34, 20);                                                    // подводные горы разной высоты: от холмов до вершин почти у поверхности
+    // сквозные пещеры: подводный скальный массив с туннелем по оси (две стены + каменный свод, рисует клиент)
+    var CAVE_F = { reef: -26, kelp: -42, arctic: -46, vents: -58, abyss: -92 }, nc = { reef: 10, kelp: 12, arctic: 12, vents: 12, abyss: 14 }[id] || 10, ndef = DEF[id];
+    for (var kc = 0; kc < 4000 && F.caves.length < nc; kc++) {
+      a = r() * 6.283; d = 90 + r() * (HALF - 190);
+      var cx = Math.cos(a) * d, cz = Math.sin(a) * d, L = 34 + r() * 14, ok2 = Math.hypot(cx - ndef.nest[0], cz - ndef.nest[1]) > 120;
+      for (var jc = 0; ok2 && jc < F.caves.length; jc++) if (Math.hypot(F.caves[jc].x - cx, F.caves[jc].z - cz) < 52) ok2 = false;
+      if (ok2) F.caves.push({ x: cx, z: cz, a: r() * 3.1416, L: L, w: 7 + r() * 3.5, f: CAVE_F[id], H: Math.min(22 + r() * 26, -5 - CAVE_F[id]), rb: 10 + r() * 3 });
+    }
     return F;
   }
   function oceanBase(id, F, seed, x, z, def) {
@@ -96,8 +105,19 @@
       h = -24 + (fbm(x / 120, z / 120, seed, 4) - 0.5) * 8;
       var ca = Math.abs(vnoise(x / 110 + 4.1, z / 110 + 1.3, seed + 5) - 0.5); h -= (1 - smooth(0, 0.1, ca)) * 14;   // жёлоб
     }
-    if (h < 0) h *= ({ reef: 2.6, kelp: 2.7, arctic: 3.1, vents: 3.0, abyss: 3.2 }[id] || 2.6);       // глубина океана: до ~40–100 м
-    for (i = 0; i < F.spires.length; i++) { o = F.spires[i]; d = Math.hypot(x - o.x, z - o.z); if (d < o.r * 1.6) h += (1 - smooth(o.r * 0.4, o.r * 1.6, d)) * (id === 'abyss' ? 12 : 6) * (0.6 + o.v * 0.6); }
+    if (h < 0) h *= ({ reef: 3.9, kelp: 4.05, arctic: 4.65, vents: 4.5, abyss: 4.8 }[id] || 2.6);       // глубина океана: до ~40–100 м
+    for (i = 0; i < F.spires.length; i++) { o = F.spires[i]; d = Math.hypot(x - o.x, z - o.z); if (d < o.r * 1.6) h += (1 - smooth(o.r * 0.4, o.r * 1.6, d)) * (id === 'abyss' ? 24 : 12) * (0.4 + o.v * 1.4); }
+    for (i = 0; F.peaks && i < F.peaks.length; i++) { o = F.peaks[i]; d = Math.hypot(x - o.x, z - o.z); if (d < o.r * 2.2) { var pk = (1 - smooth(o.r * 0.25, o.r * 2.2, d)) * (0.65 + 0.35 * fbm(x / 12, z / 12, seed + 90 + i, 2)); h = Math.max(h, Math.min(h + pk * (8 + o.v * o.v * 70), -3.5 - (1 - o.v) * (1 - o.v) * 34)); } }
+    for (i = 0; F.caves && i < F.caves.length; i++) {
+      o = F.caves[i]; var cdx = x - o.x, cdz = z - o.z; if (cdx * cdx + cdz * cdz > 70 * 70) continue;
+      var cu = Math.abs(cdx * Math.cos(o.a) + cdz * Math.sin(o.a)), cv = Math.abs(-cdx * Math.sin(o.a) + cdz * Math.cos(o.a));
+      var cenv = 1 - smooth(o.L / 2 - 2, o.L / 2 + 16, cu);
+      var cwall = smooth(o.w, o.w + 5, cv) * (1 - smooth(o.w + 12, o.w + 30, cv));
+      var ctop = o.f + o.H * (0.85 + 0.3 * vnoise(x / 9, z / 9, seed + 400 + i));
+      if (cenv > 0 && cwall > 0) h = Math.max(h, lerp(h, ctop, cenv * cwall));
+      var cfl = (1 - smooth(o.w + 1, o.w + 6, cv)) * (1 - smooth(o.L / 2 + 6, o.L / 2 + 18, cu));      // ровное дно туннеля
+      if (cfl > 0) h = lerp(h, o.f, cfl);
+    }
     // островок с гнездом
     var di = Math.hypot(x - def.nest[0], z - def.nest[1]);
     if (di < 62) { var ih = 2.4 + (fbm(x / 8, z / 8, seed + 77, 2) - 0.5) * 0.6; h = Math.max(h, lerp(h, ih, 1 - smooth(10, 62, di))); }
@@ -196,6 +216,14 @@
     };
     W.slopeAt = function (x, z) {
       return (Math.abs(heightAt(x + 1, z) - heightAt(x - 1, z)) + Math.abs(heightAt(x, z + 1) - heightAt(x, z - 1))) / 2;
+    };
+    W.caveAt = function (x, z) {
+      var C = W.features && W.features.caves; if (!C) return null;
+      for (var i = 0; i < C.length; i++) {
+        var o = C[i], dx = x - o.x, dz = z - o.z; if (dx * dx + dz * dz > o.L * o.L) continue;
+        if (Math.abs(dx * Math.cos(o.a) + dz * Math.sin(o.a)) < o.L / 2 && Math.abs(-dx * Math.sin(o.a) + dz * Math.cos(o.a)) < o.w + 3.5) return o;
+      }
+      return null;
     };
     W.isWater = function (x, z) { return !lava && heightAt(x, z) < W.waterY; };
     W.isDeep = function (x, z) { return !lava && heightAt(x, z) < W.waterY - 0.9; };
@@ -429,7 +457,7 @@
     if (st.noSprint) sprint = false;                                    // летающий не бегает вообще
     if (aqua && !inWater) sprint = false;                               // на суше водный только ползёт: без рывка
 
-    if (p.clm) { p.vy = 0; p.onGround = false; return p; }           // на дереве: стоим (позицию задаёт сервер)
+    if (p.clm) { p.vy = 0; p.onGround = false; p.stam = Math.min(CF.STAM_MAX, p.stam + CF.STAM_REGEN * (st.stamRegen || 1) * 1.6 * dt); return p; }   // на дереве отдыхаем: выносливость быстро восстанавливается           // на дереве: стоим (позицию задаёт сервер)
     if (p.grd) { moving = false; }                                    // защитная стойка: не двигаемся
 
     var speed, swimMode = false, flying = !!p.fly;
@@ -504,12 +532,17 @@
       else if (moving && f > 0.05) { var tilt = clamp((pitch - 0.3) * 2.0, -1, 1); if (Math.abs(tilt) > 0.12) tvs = -tilt * speed * 0.8 * f; }
       p.vy += (tvs - p.vy) * Math.min(1, (tvs === 0 ? 10 : 5) * dt);      // отпустил — быстро останавливается на своей глубине
       p.y += p.vy * dt;
-      var top = W.waterY - 0.1, bot = ground + 0.5;
+      var top = W.waterY + 0.15 - 1.15 * (st.scale || 1), bot = ground + 0.5;   // спина у поверхности, а не весь динозавр над водой
       if (p.y > top) { p.y = top; p.vy = 0; }
       if (p.y < bot) { p.y = bot; p.vy = 0; }
+      var cvr = W.caveAt && W.caveAt(p.x, p.z);                         // каменный свод пещеры: нельзя нырнуть сквозь него сверху и всплыть снизу
+      if (cvr) {
+        var rb = cvr.f + cvr.rb, rt = cvr.f + cvr.H;
+        if (p.y > (rb + rt) / 2) { if (p.y < rt) { p.y = rt; if (p.vy < 0) p.vy = 0; } } else if (p.y > rb - 0.4) { p.y = rb - 0.4; if (p.vy > 0) p.vy = 0; }
+      }
       p.onGround = false;
     } else if (deep) {                                                  // не морской: плывёт по поверхности
-      var target = W.waterY - 0.55;
+      var target = W.waterY - 0.55 - 0.25 * st.scale;
       p.y += (target - p.y) * Math.min(1, 6 * dt);
       p.vy = 0; p.onGround = false;
     } else {
@@ -582,6 +615,8 @@
   function homeBiome(p, cls) { return CF.isAqua(cls || (p && p.cls)) ? CF.OCEANS[0] : CF.BIOMES[0]; }
 
   // ======================================================================== ВРАГИ (общие формулы)
+  // враги 1–3 уровней были слишком мелкими: крупнее, чтобы их было видно и удобно бить
+  function enemySizeMul(lv) { return lv <= 1 ? 2.0 : lv === 2 ? 1.8 : lv === 3 ? 1.58 : lv === 4 ? 1.35 : lv === 5 ? 1.18 : lv === 6 ? 1.08 : 1; }
   function enemyScale(lv) { return { hp: 1 + 0.12 * (lv - 1), dmg: 1 + 0.08 * (lv - 1) }; }   // 1.5: враги заметно крепче с уровнем
   // награда опыта за победу над врагом уровня lv игроком уровня plv
   function xpReward(arch, lv, plv) {
@@ -597,6 +632,6 @@
     step: step, newPlayer: newPlayer, exportState: exportState, importState: importState, applyLock: applyLock, resolve: resolve,
     cleanInput: cleanInput, statsFor: statsFor, scaleOf: scaleOf,
     defaultProfile: defaultProfile, fixProfile: fixProfile, unlockedBiomes: unlockedBiomes, canEnterBiome: canEnterBiome, typeFits: typeFits, switchType: switchType, typeLevel: typeLevel, isLord: isLord, homeBiome: homeBiome,
-    enemyScale: enemyScale, xpReward: xpReward, TREE_H: TREE_H
+    enemyScale: enemyScale, enemySizeMul: enemySizeMul, xpReward: xpReward, TREE_H: TREE_H
   };
 });

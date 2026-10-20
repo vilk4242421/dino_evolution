@@ -241,7 +241,7 @@
     return !!(e.arch && e.arch.fly && !e.arch.tiny) || (e.kind === 'b' && e.flyer);
   };
   RP.canReach = function (att, dst) {      // «в воздухе бьют только летающие и дальнобойные»
-    if (dst.clm && !this.isAir(att)) return false;
+    if (dst.kind === 'p' ? dst.st.clm : dst.clm) return false;                       // на дереве не бьют никого: ни наземные, ни летающие, ни дальнобойные
     if (this.isAir(dst) && !this.isAir(att) && !(att.arch && att.arch.ranged) && !(att.kind === 'b')) return false;
     return true;
   };
@@ -249,11 +249,13 @@
     o = o || {};
     if (!dst || !(dst.hp > 0) || dst.inv) return 0;
     if (dst.kind === 'p' && dst.shield > this.t) return 0;
+    if (dst.kind === 'p' && dst.st && dst.st.clm) return 0;                         // на дереве — неуязвим для всего (включая зоны боссов)
     if (dst.kind === 'p' && dst.gone) return 0;
     if (!o.force && !this.hostile(src, dst)) return 0;
     var amount = raw;
     // баланс по уровням: боец выше уровнем бьёт заметно сильнее, ниже — намного слабее (1 ур. против 4 ур. = ×0.36 урона)
     var sl = this.lvOf(src), dl = this.lvOf(dst);
+    if (!o.force && src.kind === 'p' && dst.kind === 'e' && sl && dl && dl - sl >= 2) { this.events.push(['h', dst.id, 0, 4]); return 0; }   // враг на 2+ уровня выше — не победить
     if (sl && dl && !o.force) amount *= CF.lvFactor(sl, dl);
     if (dst.kind === 'p' && dst.stats.fx.dodge && !o.force && this.rng() * 100 < dst.stats.fx.dodge) { this.events.push(['h', dst.id, 0, 3]); return 0; }   // увернулся
     if (dst.kind === 'p') {
@@ -297,7 +299,8 @@
       var d = e.dots[i];
       d.t -= DT;
       if (e.kind === 'p' && e.stats) { var rs = d.k === 'poison' || d.k === 'burn' ? e.stats.resist * 0.6 : 0; d.cur = d.dps * (1 - rs); } else d.cur = d.dps;
-      var sl = d.src ? this.lvOf(d.src) : 0, dl = this.lvOf(e); if (sl && dl) d.cur *= CF.lvFactor(sl, dl);   // яд и кровотечение тоже зависят от разницы уровней
+      var sl = d.src ? this.lvOf(d.src) : 0, dl = this.lvOf(e); if (sl && dl) d.cur *= (d.src && d.src.kind === 'p' && e.kind === 'e' && dl - sl >= 2) ? 0 : CF.lvFactor(sl, dl);   // яд и кровотечение тоже зависят от разницы уровней
+      if (e.kind === 'p' && e.st && e.st.clm) { e.dots.length = 0; return; }       // на дереве яд, огонь и кровотечение не действуют
       e.hp -= d.cur * DT; e.lastHurt = this.t;
       if (d.src && d.src.kind === 'p' && e.hitBy !== undefined) { if (!e.hitBy) e.hitBy = {}; e.hitBy[d.src.id] = this.t; }
       if (e.hp <= 0) { e.hp = 0; this.kill(d.src && d.src.hp > 0 ? d.src : null, e); return; }
@@ -344,11 +347,11 @@
     this.drops.push({ k: kind, x: r1(x), y: r1(yy), z: r1(z), exp: this.t + 90 });
   };
   RP.eatNear = function (p) {
-    var s = p.st, reach = p.stats.radius + 1.7, diet = CF.CLASSES[p.cls].diet, i, f;
+    var s = p.st, reach = p.stats.radius + 3.4 + 1.0 * (p.stats.scale || 1), diet = CF.CLASSES[p.cls].diet, i, f;
     for (i = this.drops.length - 1; i >= 0; i--) {
       f = this.drops[i];
       if (diet.indexOf(f.k) < 0) continue;
-      if (Math.abs(f.x - s.x) > reach || Math.abs(f.z - s.z) > reach || Math.abs(f.y - s.y) > reach + 1.5) continue;
+      if (Math.abs(f.x - s.x) > reach || Math.abs(f.z - s.z) > reach || Math.abs(f.y - s.y) > reach + 6) continue;
       this.drops.splice(i, 1); this.consume(p, f.k);
     }
     if (diet.indexOf('plant') >= 0) {
@@ -363,7 +366,7 @@
   RP.consume = function (p, kind) {
     var v = FOOD_VAL[kind] || FOOD_VAL.plant;
     p.food = Math.min(CF.FOOD_MAX, p.food + v[0]); p.hp = Math.min(p.stats.hp, p.hp + v[2] * (1 + p.profile.level * 0.15));
-    if (!p.bot) { p.profile.stats.eaten = (p.profile.stats.eaten | 0) + 1; this.gainXp(p, v[1] + Math.floor(p.profile.level * 0.3)); }
+    if (!p.bot) { p.profile.stats.eaten = (p.profile.stats.eaten | 0) + 1; this.gainXp(p, kind === 'plant' ? Math.round(5 + p.profile.level * 1.2 + CF.xpForLevel(p.profile.level) * 0.09) : v[1] + Math.floor(p.profile.level * 0.3)); }   // растения: опыт растёт с уровнем (~30 кустов на уровень)
     this.events.push(['eat', p.id, kind]);
   };
   RP.initPlants = function () {
@@ -448,7 +451,7 @@
     if (fx.stunHit && e.kind === 'e' && !e.big && this.rng() * 100 < fx.stunHit) { e.stunT = this.t + 0.8; this.events.push(['stun', e.id]); }
     if (p.stats.aqua && r.shock) {
       var bonus = r.shock * 3 * (1 + p.profile.level * 0.05);
-      var pl0 = this.lvOf(p), el0 = this.lvOf(e); if (pl0 && el0) bonus *= CF.lvFactor(pl0, el0);
+      var pl0 = this.lvOf(p), el0 = this.lvOf(e); if (pl0 && el0) bonus *= el0 - pl0 >= 2 ? 0 : CF.lvFactor(pl0, el0);
       e.hp -= bonus; this.events.push(['h', e.id, Math.round(bonus), 2]); e.hitBy = e.hitBy || {}; e.hitBy[p.id] = this.t;
       if (e.hp <= 0) { e.hp = 0; this.kill(p, e); return; }
       if (r.shock >= 3) {                                                     // цепной разряд
@@ -607,11 +610,11 @@
     // сытость, регенерация
     var duel = this.mode === 'duel', hungerMult = p.cls === 'carn' ? 1.4 : 1;
     if (!duel) p.food = Math.max(0, p.food - CF.FOOD_DRAIN * hungerMult * (st.foodMult || 1) * DT);
-    if (p.food <= 0 && !duel) { p.hp -= CF.STARVE_DPS * DT; p.lastHurt = t; if (p.hp <= 0) { p.hp = 0; this.playerDied(p, null); return; } }
+    if (p.food <= 0 && !duel && !s.clm) { p.hp -= CF.STARVE_DPS * DT; p.lastHurt = t; if (p.hp <= 0) { p.hp = 0; this.playerDied(p, null); return; } }
     else if (!duel && t - p.lastHurt > CF.COMBAT_REGEN_DELAY && p.hp < st.hp) p.hp = Math.min(st.hp, p.hp + st.regen * DT);
-    if (s.clm) p.hp = Math.min(st.hp, p.hp + (4 * (st.ranks.climb | 0)) * DT);
+    if (s.clm) { p.hp = Math.min(st.hp, p.hp + (4 * (st.ranks.climb | 0)) * DT); s.stam = Math.min(CF.STAM_MAX, s.stam + CF.STAM_REGEN * 1.6 * DT); }   // на дереве отдыхаем: выносливость восстанавливается всегда
     // дыхание морского под водой
-    var sub = p.stats.aqua && !s.fly && s.y < W.waterY - 1.0 && W.isWater(s.x, s.z);
+    var sub = p.stats.aqua && !s.fly && s.y < W.waterY - 0.3 - 1.15 * p.stats.scale && W.isWater(s.x, s.z);
     if (sub) { p.breath -= DT * (W.ocean ? 0.35 : 1); if (p.breath <= 0) { p.breath = 0; p.hp -= 6 * DT; p.lastHurt = t; if (p.hp <= 0) { p.hp = 0; this.playerDied(p, null); return; } } }
     else p.breath = Math.min(st.breathMax, p.breath + 8 * DT);
     p.sub = sub;
@@ -656,8 +659,9 @@
     var msg = { t: 's', n: this.tick, a: p.ack, m: me, mp: mp, p: others, e: es, tod: r3(this.tod), wx: r2(this.wx) };
     if (this.tick % 5 === p.id % 5) {
       var fs = [];
-      for (i = 0; i < this.drops.length; i++) { var d = this.drops[i]; if (Math.abs(d.x - ax) < 70 && Math.abs(d.z - az) < 70) fs.push([d.x, d.y, d.z, d.k]); }
-      for (i = 0; i < this.plants.length; i++) { var pl = this.plants[i]; if (pl.ready <= t && Math.abs(pl.x - ax) < 70 && Math.abs(pl.z - az) < 70) fs.push([pl.x, pl.y, pl.z, 'plant']); }
+      var diet = CF.CLASSES[p.cls].diet;                                       // показываем только ту еду, которую этот динозавр может съесть
+      for (i = 0; i < this.drops.length; i++) { var d = this.drops[i]; if (diet.indexOf(d.k) >= 0 && Math.abs(d.x - ax) < 70 && Math.abs(d.z - az) < 70) fs.push([d.x, d.y, d.z, d.k]); }
+      if (diet.indexOf('plant') >= 0) for (i = 0; i < this.plants.length; i++) { var pl = this.plants[i]; if (pl.ready <= t && Math.abs(pl.x - ax) < 70 && Math.abs(pl.z - az) < 70) fs.push([pl.x, pl.y, pl.z, 'plant']); }
       msg.f = fs;
     }
     if (this.events.length) msg.ev = this.events;
