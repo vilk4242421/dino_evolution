@@ -4,6 +4,7 @@ const CONFIG = window.CONFIG, Sim = window.Sim, T = window.T, TN = window.TN;
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 let ctl = null, openName = null, openRender = null, toastT = 0, bannerT = 0;
+{ const vl = document.getElementById('verlbl'); if (vl) vl.textContent = 'v' + CONFIG.VERSION; }
 const CLS_ICO = Object.fromEntries(Object.keys(CONFIG.CLS_INFO).map(k => [k, CONFIG.CLS_INFO[k].ico]));
 const BIOME_ICO = { forest: '🌲', snow: '❄️', mountain: '⛰️', desert: '🏜️', swamp: '🐊', volcano: '🌋', reef: '🐠', kelp: '🌿', arctic: '🧊', vents: '♨️', abyss: '🦑' };
 const AUTH_ERR = {

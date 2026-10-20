@@ -251,7 +251,7 @@ console.log('11. Глубина по желанию игрока, баланс �
   ok(h3 >= h1 + 2, 'раптор 3 ур. против игрока 1 ур.: ударов нужно больше (' + h1 + ' → ' + h3 + ')');
   pl.shield = 0; pl.hp = pl.stats.hp; const a1 = room.damage(mk(1), pl, CF.ENEMIES.raptor.dmg * Sim.enemyScale(1).dmg); pl.hp = pl.stats.hp; const a3 = room.damage(mk(3), pl, CF.ENEMIES.raptor.dmg * Sim.enemyScale(3).dmg);
   ok(a3 > a1 * 1.35, 'и бьёт заметно сильнее (' + a1.toFixed(1) + ' → ' + a3.toFixed(1) + ')');
-  let host = 0; room.ents.forEach(e => { if (e.role === 'hostile') host++; }); ok(host >= Math.round(CF.BIOME.forest.spawn.raptor * 2.4), 'хищников больше (' + host + ' рапторов в лесу)');
+  let host = 0; room.ents.forEach(e => { if (e.role === 'hostile') host++; }); ok(host >= Math.round(CF.BIOME.forest.spawn.raptor * (CF.HOSTILE_MULT - 0.1)), 'хищников больше (' + host + ' рапторов в лесу)');
   hub.leave(pl);
 }
 

@@ -410,36 +410,45 @@
     if (!ids.length) return;
     var fills = [];
     this.ents.forEach(function (e) { if (e.fill && !e.dead) fills.push(e); });
+    var near = function (e, p, R) { return Math.abs(e.st.x - p.st.x) < R && Math.abs(e.st.z - p.st.z) < R; };
     for (var h = 0; h < humans.length; h++) {
       var p = humans[h]; if (!p.alive || p.gone) continue;
-      var L = p.profile.level, hostile = { '-1': 0, '0': 0, '1': 0 }, others = 0, R = 90;
+      var L = p.profile.level, hostN = 0, othN = 0, xH = 0, xO = 0;
       this.ents.forEach(function (e) {
         if (e.dead || e.kind !== 'e' || e.owner || e.boss || e.arch.role === 'bug' || e.fromBoss) return;
-        var dl = e.lv - L; if (dl < -1 || dl > 1) return;
-        if (Math.abs(e.st.x - p.st.x) < R && Math.abs(e.st.z - p.st.z) < R) { if (e.arch.role === 'hostile') hostile[dl]++; else others++; }
+        var isH = e.arch.role === 'hostile';
+        if (e.lv >= L - 1 && e.lv <= L + 1 && near(e, p, 130)) { if (isH) hostN++; else othN++; }
+        if (e.xtra && near(e, p, 170)) { if (isH) xH++; else xO++; }
       });
-      // нужно: нападающих врагов вашего уровня ≥5, на уровень выше ≥4, на уровень ниже ≥3; добычи и стада (L−1…L+1) ≥8
-      var QH = { '0': CF.FILL_HOST0 || 5, '1': CF.FILL_HOST1 || 4, '-1': CF.FILL_HOST2 || 3 }, QO = CF.FILL_OTHER || 8, plan = [];
-      for (var dk = -1; dk <= 1; dk++) for (var q = hostile[dk]; q < QH[dk]; q++) plan.push({ lv: Math.max(1, L + dk), host: true });
-      for (var q2 = others; q2 < QO; q2++) plan.push({ lv: Math.max(1, L + [-1, 0, 0, 0, 1][(this.rng() * 5) | 0]), host: false });
-      for (var n = 0; n < Math.min(5, plan.length); n++) {
-        var tl = plan[n].lv, host = plan[n].host, cands = [];
+      // «ядро»: вокруг игрока на разных расстояниях и в разных местах — до 4 нападающих и 5 обычных врагов его уровня (L−1…L+1)
+      // чем выше уровень, тем больше врагов: на 1–3 уровне поменьше нападающих (спокойный старт), к 7+ — полный набор
+      var KS = L <= 3 ? 0 : L <= 6 ? 1 : 2, fH = [3, 5, CF.FILL_HOST || 7][KS], fO = [6, 8, CF.FILL_OTHER || 9][KS],
+          fXH = [2, 3, CF.FILL_XHOST || 4][KS], fXO = [4, 5, CF.FILL_XOTHER || 6][KS];
+      var plan = [], q;
+      for (q = hostN; q < fH; q++) plan.push({ lv: Math.max(1, L + [-1, 0, 0, 1][(this.rng() * 4) | 0]), host: true, xtra: false });
+      for (q = othN; q < fO; q++) plan.push({ lv: Math.max(1, L + [-1, 0, 0, 1][(this.rng() * 4) | 0]), host: false, xtra: false });
+      // «случайные»: ещё до 4 нападающих и 6 обычных любого уровня, раскиданных по карте шире
+      for (q = xH; q < fXH; q++) plan.push({ lv: Math.max(1, L - 3 + ((this.rng() * 5) | 0)), host: true, xtra: true });
+      for (q = xO; q < fXO; q++) plan.push({ lv: Math.max(1, L - 3 + ((this.rng() * 8) | 0)), host: false, xtra: true });
+      for (var n = 0; n < Math.min(4, plan.length); n++) {
+        var pl = plan[n], tl = pl.lv, host = pl.host, cands = [];
         for (var i = 0; i < ids.length; i++) { var a = ARCH[ids[i]]; if (!!a.water !== !!W.ocean) continue; if ((a.role === 'hostile') !== host) continue; if (tl >= a.lv[0] - 2) cands.push(a); }
         if (!cands.length) continue;
         var arch = cands[(this.rng() * cands.length) | 0], pos = null;
-        for (var k = 0; k < 14 && !pos; k++) {
-          var ang = this.rng() * 6.283, dd = host ? 40 + this.rng() * 35 : 35 + this.rng() * 40, x = p.st.x + Math.cos(ang) * dd, z = p.st.z + Math.sin(ang) * dd;
+        for (var k = 0; k < 18 && !pos; k++) {
+          var ang = this.rng() * 6.283, dd = pl.xtra ? 55 + this.rng() * 90 : 45 + this.rng() * 65, x = p.st.x + Math.cos(ang) * dd, z = p.st.z + Math.sin(ang) * dd;
           if (Math.abs(x) > W.half - 30 || Math.abs(z) > W.half - 30 || Math.hypot(x, z) < CF.ARENA_R + 8) continue;
           var gh = W.heightAt(x, z);
           if (arch.water ? !W.isDeep(x, z) : (gh < W.waterY + 0.8 || W.isLava(x, z) || W.slopeAt(x, z) > 0.7)) continue;
+          if (host) { var crowd = false; for (var f2 = 0; f2 < fills.length; f2++) if (!fills[f2].dead && fills[f2].arch.role === 'hostile' && Math.hypot(fills[f2].st.x - x, fills[f2].st.z - z) < 34) { crowd = true; break; } if (crowd) continue; }   // нападающие — не кучей, а в разных местах
           pos = { x: x, z: z };
         }
         if (!pos) continue;
-        var e = this.makeEnt(arch, pos.x, pos.z, tl); e.fill = true; fills.push(e);
+        var e = this.makeEnt(arch, pos.x, pos.z, tl); e.fill = true; e.xtra = pl.xtra; fills.push(e);
       }
     }
     // лимит и уборка: самых далёких от игроков «подпитывающих» убираем
-    var cap = 110 * Math.max(1, humans.length);
+    var cap = 60 * Math.max(1, humans.length);
     if (fills.length > cap) {
       fills.sort(function (a, b) { var da = 1e9, db = 1e9; for (var i = 0; i < humans.length; i++) { da = Math.min(da, Math.hypot(a.st.x - humans[i].st.x, a.st.z - humans[i].st.z)); db = Math.min(db, Math.hypot(b.st.x - humans[i].st.x, b.st.z - humans[i].st.z)); } return db - da; });
       for (var j = 0; j < fills.length - cap; j++) { fills[j].dead = true; this.ents.delete(fills[j].id); }
