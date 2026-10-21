@@ -9,8 +9,8 @@
     // Адрес сервера. Пусто = тот же адрес, с которого открыта страница.
     // Для APK / открытия как файл укажите, например: 'https://dino-evolution.onrender.com'
     SERVER_URL: '',
-    VERSION: '1.7.11',
-    PROTO: 6,                 // увеличивайте при несовместимых изменениях сети
+    VERSION: '1.7.20',
+    PROTO: 7,                 // увеличивайте при несовместимых изменениях сети
 
     // --- сеть ---
     TICK_RATE: 25,            // тиков в секунду (сервер и фиксированный шаг клиента)
@@ -112,9 +112,9 @@
 
     // --- графика ---
     QUALITY: {
-      high: { view: 300, near: 120, grass: 80, shadow: 2048, pr: 2,   particles: 220 },
-      med:  { view: 230, near: 95,  grass: 55, shadow: 1024, pr: 1.5, particles: 110 },
-      low:  { view: 160, near: 65,  grass: 35, shadow: 0,    pr: 1,   particles: 50 }
+      high: { view: 300, near: 120, grass: 80, shadow: 2048, pr: 2,   prT: 1.25, particles: 220 },
+      med:  { view: 230, near: 95,  grass: 55, shadow: 1024, pr: 1.5, prT: 1,    particles: 110 },
+      low:  { view: 160, near: 65,  grass: 35, shadow: 0,    pr: 1,   prT: 0.8,  particles: 50 }
     },
     TARGET_FPS_DESKTOP: 60, TARGET_FPS_MOBILE: 30
   };
@@ -123,6 +123,8 @@
   // role: prey (убегает), herd (нейтральное стадо, огрызается), hostile (нападает), bug/fish — еда
   // lv: [мин, макс] базовый уровень (растёт к центру карты); xp: множитель награды
   function E(id, ru, en, o) { o.id = id; o.n = { ru: ru, en: en }; return o; }
+  // насколько уровней выше игрока можно победить врага: на +2 (урон 0 при разнице ≥ 3), для всех одинаково
+  C.maxLvUp = function () { return 3; };
   C.ENEMIES = {
     compy:  E('compy', 'Компсогнат', 'Compy', { model: 'critter', color: 0x9bb36a, size: 0.55, hp: 12, dmg: 0, speed: 150, role: 'prey', drop: 'smeat', lv: [1, 6], xp: 0.45, tiny: true }),
     bug:    E('bug', 'Стрекозы', 'Dragonflies', { model: 'bug', color: 0xbfe8ff, size: 0.35, hp: 3, dmg: 0, speed: 90, role: 'bug', drop: 'bug', lv: [1, 1], xp: 0.15, fly: true, tiny: true }),
@@ -181,7 +183,31 @@
     lanternfish: E('lanternfish', 'Светящийся анчоус', 'Lanternfish', { model: 'fish', color: 0x2a3a5a, size: 0.5, hp: 12, dmg: 0, speed: 145, role: 'fish', drop: 'fish', lv: [1, 1], xp: 0.2, water: true, tiny: true, glow: 0x7af0ff }),
     abyssammon: E('abyssammon', 'Глубинный аммонит', 'Abyssal ammonite', { model: 'ammonite', color: 0x4a3a7a, size: 0.85, hp: 30, dmg: 0, speed: 130, role: 'prey', drop: 'fish', lv: [24, 29], xp: 0.45, water: true, tiny: true, glow: 0xb07aff }),
     angler:    E('angler', 'Удильщик', 'Anglerfish', { model: 'angler', color: 0x2e2e3e, size: 1.1, hp: 280, dmg: 30, speed: 160, role: 'hostile', aggro: 16, drop: 'fish', lv: [24, 30], xp: 1.1, water: true, poison: 3 }),
-    abyssmosa: E('abyssmosa', 'Мозазавр бездны', 'Abyssal mosasaur', { model: 'abyssmosa', color: 0x1e2a3a, size: 1.5, hp: 480, dmg: 32, speed: 210, role: 'hostile', aggro: 30, drop: 'fish', lv: [26, 30], xp: 1.2, water: true })
+    abyssmosa: E('abyssmosa', 'Мозазавр бездны', 'Abyssal mosasaur', { model: 'abyssmosa', color: 0x1e2a3a, size: 1.5, hp: 480, dmg: 32, speed: 210, role: 'hostile', aggro: 30, drop: 'fish', lv: [26, 30], xp: 1.2, water: true }),
+    // ---------- 1.7.17: больше нейтральных (добыча и стадо) в каждом биоме — на любом уровне есть из кого выбрать ----------
+    dryo:      E('dryo', 'Дриозавр', 'Dryosaur', { model: 'critter', color: 0x8fae5a, size: 0.7, hp: 20, dmg: 0, speed: 170, role: 'prey', drop: 'smeat', lv: [5, 11], xp: 0.45, tiny: true }),
+    trike:     E('trike', 'Трицератопс', 'Triceratops', { model: 'quad', color: 0x8a8a5a, size: 1.4, hp: 230, dmg: 11, speed: 105, role: 'herd', drop: 'meat', lv: [7, 14], xp: 1.1, horns: true }),
+    arcfox:    E('arcfox', 'Песец', 'Arctic fox', { model: 'critter', color: 0xf3f6f9, size: 0.6, hp: 16, dmg: 0, speed: 175, role: 'prey', drop: 'smeat', lv: [12, 18], xp: 0.45, tiny: true }),
+    woolrhino: E('woolrhino', 'Шерстистый носорог', 'Woolly rhino', { model: 'quad', color: 0x7a6650, size: 1.5, hp: 330, dmg: 17, speed: 100, role: 'herd', drop: 'meat', lv: [14, 20], xp: 1.2, fur: true, horns: true }),
+    marmot:    E('marmot', 'Сурок', 'Marmot', { model: 'critter', color: 0xa08868, size: 0.6, hp: 20, dmg: 0, speed: 160, role: 'prey', drop: 'smeat', lv: [16, 22], xp: 0.45, tiny: true }),
+    yak:       E('yak', 'Горный як', 'Mountain yak', { model: 'quad', color: 0x4a3a30, size: 1.6, hp: 420, dmg: 22, speed: 100, role: 'herd', drop: 'meat', lv: [19, 25], xp: 1.2, fur: true, horns: true }),
+    jerboa:    E('jerboa', 'Тушканчик', 'Jerboa', { model: 'critter', color: 0xd8b88a, size: 0.55, hp: 20, dmg: 0, speed: 180, role: 'prey', drop: 'smeat', lv: [21, 26], xp: 0.45, tiny: true }),
+    ankylo:    E('ankylo', 'Анкилозавр', 'Ankylosaur', { model: 'quad', color: 0x9a7a52, size: 1.5, hp: 450, dmg: 26, speed: 95, role: 'herd', drop: 'meat', lv: [23, 28], xp: 1.2, plates: true }),
+    hippo:     E('hippo', 'Болотный бегемот', 'Marsh hippo', { model: 'quad', color: 0x6a6a7a, size: 1.5, hp: 420, dmg: 24, speed: 95, role: 'herd', drop: 'meat', lv: [22, 28], xp: 1.2 }),
+    newt:      E('newt', 'Болотный тритон', 'Marsh newt', { model: 'critter', color: 0x6a9a5a, size: 0.6, hp: 24, dmg: 0, speed: 150, role: 'prey', drop: 'smeat', lv: [25, 30], xp: 0.45, tiny: true }),
+    cinder:    E('cinder', 'Угольная ящерка', 'Cinder lizard', { model: 'critter', color: 0x7a4a3a, size: 0.6, hp: 28, dmg: 0, speed: 170, role: 'prey', drop: 'smeat', lv: [27, 30], xp: 0.45, tiny: true }),
+    lavashell: E('lavashell', 'Лавовый панцирник', 'Lava shellback', { model: 'quad', color: 0x4a3a3a, size: 1.6, hp: 560, dmg: 33, speed: 95, role: 'herd', drop: 'meat', lv: [26, 30], xp: 1.2, plates: true }),
+    // океан
+    puffer:    E('puffer', 'Рыба-шар', 'Pufferfish', { model: 'fish', color: 0xe8d070, size: 0.55, hp: 16, dmg: 0, speed: 125, role: 'prey', drop: 'fish', lv: [3, 10], xp: 0.45, water: true, tiny: true }),
+    notosaur:  E('notosaur', 'Нотозавр', 'Nothosaur', { model: 'plesio', color: 0x7a9a8a, size: 1.0, hp: 200, dmg: 9, speed: 110, role: 'herd', drop: 'fish', lv: [6, 13], xp: 1.1, water: true }),
+    cuttle:    E('cuttle', 'Каракатица', 'Cuttlefish', { model: 'ammonite', color: 0xb89a7a, size: 0.8, hp: 22, dmg: 0, speed: 125, role: 'prey', drop: 'fish', lv: [11, 17], xp: 0.45, water: true, tiny: true, stripes: true }),
+    seaturtle: E('seaturtle', 'Морская черепаха', 'Sea turtle', { model: 'turtle', color: 0x5a8a5a, size: 1.3, hp: 280, dmg: 12, speed: 100, role: 'herd', drop: 'fish', lv: [12, 18], xp: 1.2, water: true }),
+    iceturtle: E('iceturtle', 'Ледяная черепаха', 'Ice turtle', { model: 'turtle', color: 0xa8c4d4, size: 1.4, hp: 330, dmg: 18, speed: 98, role: 'herd', drop: 'fish', lv: [14, 21], xp: 1.2, water: true }),
+    icesquid:  E('icesquid', 'Ледяной кальмар', 'Ice squid', { model: 'ammonite', color: 0xcfe0ee, size: 0.85, hp: 24, dmg: 0, speed: 130, role: 'prey', drop: 'fish', lv: [17, 23], xp: 0.45, water: true, tiny: true }),
+    ventnotho: E('ventnotho', 'Жаровой нотозавр', 'Vent nothosaur', { model: 'plesio', color: 0x8a4a3a, size: 1.3, hp: 390, dmg: 24, speed: 105, role: 'herd', drop: 'fish', lv: [18, 25], xp: 1.2, water: true }),
+    ventsquid: E('ventsquid', 'Жаровой кальмар', 'Vent squid', { model: 'ammonite', color: 0xa84a2a, size: 0.9, hp: 28, dmg: 0, speed: 130, role: 'prey', drop: 'fish', lv: [22, 27], xp: 0.45, water: true, tiny: true, glow: 0xff7a2a }),
+    deepplesio: E('deepplesio', 'Глубинный плезиозавр', 'Deep plesiosaur', { model: 'plesio', color: 0x3a4a6a, size: 1.5, hp: 520, dmg: 29, speed: 105, role: 'herd', drop: 'fish', lv: [24, 30], xp: 1.2, water: true }),
+    glowsquid: E('glowsquid', 'Светящийся кальмар', 'Glow squid', { model: 'ammonite', color: 0x5a4a9a, size: 0.9, hp: 32, dmg: 0, speed: 135, role: 'prey', drop: 'fish', lv: [27, 30], xp: 0.45, water: true, tiny: true, glow: 0x7af0ff })
   };
   // союзники и стадо
   C.ALLY = { herb: 'stego', king: { forest: 'raptor', snow: 'frostwolf', mountain: 'cragwolf', desert: 'scorp', swamp: 'croc', volcano: 'magmaraptor', reef: 'hybodus', kelp: 'ichthyo', arctic: 'frostshark', vents: 'dunkle', abyss: 'angler' } };
@@ -194,42 +220,42 @@
       water: 0x3f94c4, seed: 1337, ground: [0x5fa04a, 0x4b8c3d, 0x3b7433], edge: 0xd5c488, rock: 0x8a8b86, hill: 0x6f7f5a,
       sky: [0x5ea3d9, 0xcfe6d0], sun: 0xfff1d6, hemi: [0xdff0ff, 0x4a6b3a], fog: 1.0, liquid: 'water', weather: 'leaves',
       trees: 1800, rocks: 260, treeStyle: 'broad', music: 'forest',
-      spawn: { compy: 34, bug: 24, fish: 16, raptor: 16, stego: 10 }, hazard: null,
+      spawn: { compy: 34, bug: 24, fish: 16, raptor: 16, stego: 10, dryo: 10, trike: 5 }, hazard: null,
       n: { ru: 'Лес', en: 'Forest' }, boss: 'tyrant'
     },
     snow: {
       water: 0x8fc4e0, seed: 2711, ground: [0xe8f0f5, 0xd5e4ee, 0xbdd3e2], edge: 0xcfe4f0, rock: 0x7d8a99, hill: 0xf4f9fc,
       sky: [0x8fb3d4, 0xe3eef6], sun: 0xf0f6ff, hemi: [0xe8f4ff, 0x8ea8bd], fog: 0.8, liquid: 'water', weather: 'snow',
       trees: 1100, rocks: 300, treeStyle: 'pine', music: 'snow',
-      spawn: { hare: 30, bug: 14, fish: 12, frostwolf: 18, mammoth: 10 }, hazard: 'cold',
+      spawn: { hare: 30, bug: 14, fish: 12, frostwolf: 18, mammoth: 10, arcfox: 10, woolrhino: 5 }, hazard: 'cold',
       n: { ru: 'Снежные равнины', en: 'Snow Plains' }, boss: 'frost'
     },
     mountain: {
       water: 0x4a88b0, seed: 4099, ground: [0x8c8a80, 0x77756c, 0x5f5e58], edge: 0xa8a294, rock: 0x6c6c72, hill: 0x9a9a9e,
       sky: [0x6e86a8, 0xd2d9e0], sun: 0xfff4e0, hemi: [0xdfe8f5, 0x6a6a6a], fog: 0.9, liquid: 'water', weather: 'wind',
       trees: 700, rocks: 900, treeStyle: 'pine', music: 'mountain',
-      spawn: { goat: 30, bug: 12, fish: 10, cragwolf: 16, ptero: 10, ram: 8 }, hazard: 'rockfall',
+      spawn: { goat: 30, bug: 12, fish: 10, cragwolf: 16, ptero: 10, ram: 8, marmot: 10, yak: 5 }, hazard: 'rockfall',
       n: { ru: 'Горы', en: 'Mountains' }, boss: 'rogach'
     },
     desert: {
       water: 0x3fb0b8, seed: 5231, ground: [0xe3c488, 0xd8b576, 0xc79f5f], edge: 0xf0d9a0, rock: 0xb08a5a, hill: 0xe8cf94,
       sky: [0x7fb8e8, 0xf4e1b8], sun: 0xfff0c8, hemi: [0xfff4dc, 0xb08a4a], fog: 0.9, liquid: 'water', weather: 'dust',
       trees: 260, rocks: 320, treeStyle: 'cactus', music: 'desert',
-      spawn: { gecko: 28, bug: 14, fish: 8, vulture: 12, scorp: 16, dune: 8 }, hazard: 'heat',
+      spawn: { gecko: 28, bug: 14, fish: 8, vulture: 12, scorp: 16, dune: 8, jerboa: 10, ankylo: 5 }, hazard: 'heat',
       n: { ru: 'Пустыня', en: 'Desert' }, boss: 'sandlord'
     },
     swamp: {
       water: 0x4a6b3a, seed: 6173, ground: [0x4f6b3a, 0x435c33, 0x384b2b], edge: 0x6b6b3a, rock: 0x5b6a5a, hill: 0x55704a,
       sky: [0x6f8f7a, 0xb9c9a8], sun: 0xe8f0c0, hemi: [0xcfe0c0, 0x2f4a2a], fog: 0.55, liquid: 'swamp', weather: 'spores',
       trees: 1300, rocks: 150, treeStyle: 'mangrove', music: 'swamp',
-      spawn: { frog: 32, bug: 26, fish: 30, croc: 14, toxfrog: 12, eel: 10 }, hazard: 'poison',
+      spawn: { frog: 32, bug: 26, fish: 30, croc: 14, toxfrog: 12, eel: 10, hippo: 7, newt: 10 }, hazard: 'poison',
       n: { ru: 'Болото и побережье', en: 'Swamp & Coast' }, boss: 'leviathan'
     },
     volcano: {
       water: 0xff5a1a, seed: 7919, ground: [0x4a4240, 0x3b3534, 0x2c2827], edge: 0x6a4a3a, rock: 0x2f2b2b, hill: 0x5a4a48,
       sky: [0x5a1c14, 0xd9632a], sun: 0xffb070, hemi: [0xffa070, 0x3a1a14], fog: 0.65, liquid: 'lava', weather: 'ash',
       trees: 260, rocks: 700, treeStyle: 'burnt', music: 'volcano',
-      spawn: { ashling: 28, ember: 22, magmaraptor: 16, ashtrike: 8, fireptero: 10 }, hazard: 'lava',
+      spawn: { ashling: 28, ember: 22, magmaraptor: 16, ashtrike: 8, fireptero: 10, cinder: 10, lavashell: 5 }, hazard: 'lava',
       n: { ru: 'Вулкан', en: 'Volcano' }, boss: 'dragon'
     },
 
@@ -239,35 +265,35 @@
       ocean: true, water: 0x2aa6c4, deep: 0x1f8aa6, vis: 95, seed: 8111, ground: [0xe8d6a4, 0xd8c08a, 0xc8ac78], edge: 0xf0e2b8, rock: 0xc8a888, hill: 0xe8d6a4,
       sky: [0x4aa8e8, 0xcdeaf4], sun: 0xfff6dc, hemi: [0xe8f8ff, 0x6a9aa8], fog: 1.0, liquid: 'water', weather: 'marine',
       trees: 0, rocks: 160, treeStyle: 'none', music: 'reef',
-      spawn: { reeffish: 95, barracuda: 24, ammonite: 30, hybodus: 16, archelon: 10 }, hazard: null,
+      spawn: { reeffish: 95, barracuda: 24, ammonite: 30, hybodus: 16, archelon: 10, puffer: 10, notosaur: 5 }, hazard: null,
       n: { ru: 'Коралловый риф', en: 'Coral Reef' }, boss: 'megalodon'
     },
     kelp: {
       ocean: true, water: 0x2a8a8a, deep: 0x1d6a6a, vis: 70, seed: 8233, ground: [0x8a8a5a, 0x6f7a4a, 0x5a663e], edge: 0xc8c090, rock: 0x6a7068, hill: 0x8a8a5a,
       sky: [0x5a96c8, 0xc8dce0], sun: 0xf6f2dc, hemi: [0xd8f0e8, 0x3a5a4a], fog: 0.85, liquid: 'water', weather: 'marine',
       trees: 0, rocks: 320, treeStyle: 'none', music: 'kelp',
-      spawn: { kelpfish: 85, pikefish: 22, nautilus: 26, ichthyo: 16, plesio: 10 }, hazard: null,
+      spawn: { kelpfish: 85, pikefish: 22, nautilus: 26, ichthyo: 16, plesio: 10, cuttle: 10, seaturtle: 5 }, hazard: null,
       n: { ru: 'Ламинариевый лес', en: 'Kelp Forest' }, boss: 'plesioqueen'
     },
     arctic: {
       ocean: true, water: 0x5a9ab8, deep: 0x3a6f8a, vis: 75, seed: 8377, ground: [0x9aa8b4, 0x86929c, 0x707c86], edge: 0xe8f2f8, rock: 0x8a98a8, hill: 0xf4f9fc,
       sky: [0x8fb3d4, 0xe3eef6], sun: 0xf0f6ff, hemi: [0xe8f4ff, 0x6a8aa0], fog: 0.85, liquid: 'water', weather: 'marine',
       trees: 0, rocks: 260, treeStyle: 'none', music: 'arctic',
-      spawn: { icefish: 80, icebiter: 20, iceammon: 26, frostshark: 18, elasmo: 10 }, hazard: 'cold',
+      spawn: { icefish: 80, icebiter: 20, iceammon: 26, frostshark: 18, elasmo: 10, icesquid: 10, iceturtle: 5 }, hazard: 'cold',
       n: { ru: 'Ледяной океан', en: 'Frozen Sea' }, boss: 'kronos'
     },
     vents: {
       ocean: true, water: 0x2a5a6a, deep: 0x16323c, vis: 55, seed: 8521, ground: [0x3a3634, 0x2e2a29, 0x24201f], edge: 0x6a5a4a, rock: 0x2a2626, hill: 0x4a4240,
       sky: [0x4a7090, 0xb8c8d0], sun: 0xffe8d0, hemi: [0xd0e0e8, 0x3a2a24], fog: 0.7, liquid: 'water', weather: 'vent',
       trees: 0, rocks: 520, treeStyle: 'none', music: 'vents',
-      spawn: { ventfish: 70, ventbiter: 18, ventammon: 24, dunkle: 16, magmaeel: 10, henodus: 8 }, hazard: 'vent',
+      spawn: { ventfish: 70, ventbiter: 18, ventammon: 24, dunkle: 16, magmaeel: 10, henodus: 8, ventsquid: 10, ventnotho: 5 }, hazard: 'vent',
       n: { ru: 'Чёрные курильщики', en: 'Hydrothermal Vents' }, boss: 'dunkleo'
     },
     abyss: {
       ocean: true, water: 0x1a3a5a, deep: 0x0c1c34, vis: 50, seed: 8663, ground: [0x2a2e3a, 0x22252f, 0x1a1c24], edge: 0x5a5a6a, rock: 0x22242c, hill: 0x2a2e3a,
       sky: [0x2a4a6a, 0x8aa0b8], sun: 0xc8d8f0, hemi: [0xa0b8d8, 0x101420], fog: 0.6, liquid: 'water', weather: 'glow',
       trees: 0, rocks: 300, treeStyle: 'none', music: 'abyss',
-      spawn: { lanternfish: 70, gulper: 18, abyssammon: 24, angler: 16, abyssmosa: 10 }, hazard: null,
+      spawn: { lanternfish: 70, gulper: 18, abyssammon: 24, angler: 16, abyssmosa: 10, glowsquid: 10, deepplesio: 6 }, hazard: null,
       n: { ru: 'Бездна', en: 'The Abyss' }, boss: 'tylo'
     }
   };

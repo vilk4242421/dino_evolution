@@ -255,7 +255,7 @@
     var amount = raw;
     // баланс по уровням: боец выше уровнем бьёт заметно сильнее, ниже — намного слабее (1 ур. против 4 ур. = ×0.36 урона)
     var sl = this.lvOf(src), dl = this.lvOf(dst);
-    if (!o.force && src.kind === 'p' && dst.kind === 'e' && sl && dl && dl - sl >= 2) { this.events.push(['h', dst.id, 0, 4]); return 0; }   // враг на 2+ уровня выше — не победить
+    if (!o.force && src.kind === 'p' && dst.kind === 'e' && sl && dl && dl - sl >= CF.maxLvUp(dst)) { this.events.push(['h', dst.id, 0, 4]); return 0; }   // враг на 2+ уровня выше — не победить
     if (sl && dl && !o.force) amount *= CF.lvFactor(sl, dl);
     if (dst.kind === 'p' && dst.stats.fx.dodge && !o.force && this.rng() * 100 < dst.stats.fx.dodge) { this.events.push(['h', dst.id, 0, 3]); return 0; }   // увернулся
     if (dst.kind === 'p') {
@@ -299,7 +299,7 @@
       var d = e.dots[i];
       d.t -= DT;
       if (e.kind === 'p' && e.stats) { var rs = d.k === 'poison' || d.k === 'burn' ? e.stats.resist * 0.6 : 0; d.cur = d.dps * (1 - rs); } else d.cur = d.dps;
-      var sl = d.src ? this.lvOf(d.src) : 0, dl = this.lvOf(e); if (sl && dl) d.cur *= (d.src && d.src.kind === 'p' && e.kind === 'e' && dl - sl >= 2) ? 0 : CF.lvFactor(sl, dl);   // яд и кровотечение тоже зависят от разницы уровней
+      var sl = d.src ? this.lvOf(d.src) : 0, dl = this.lvOf(e); if (sl && dl) d.cur *= (d.src && d.src.kind === 'p' && e.kind === 'e' && dl - sl >= CF.maxLvUp(e)) ? 0 : CF.lvFactor(sl, dl);   // яд и кровотечение тоже зависят от разницы уровней
       if (e.kind === 'p' && e.st && e.st.clm) { e.dots.length = 0; return; }       // на дереве яд, огонь и кровотечение не действуют
       e.hp -= d.cur * DT; e.lastHurt = this.t;
       if (d.src && d.src.kind === 'p' && e.hitBy !== undefined) { if (!e.hitBy) e.hitBy = {}; e.hitBy[d.src.id] = this.t; }
@@ -451,7 +451,7 @@
     if (fx.stunHit && e.kind === 'e' && !e.big && this.rng() * 100 < fx.stunHit) { e.stunT = this.t + 0.8; this.events.push(['stun', e.id]); }
     if (p.stats.aqua && r.shock) {
       var bonus = r.shock * 3 * (1 + p.profile.level * 0.05);
-      var pl0 = this.lvOf(p), el0 = this.lvOf(e); if (pl0 && el0) bonus *= el0 - pl0 >= 2 ? 0 : CF.lvFactor(pl0, el0);
+      var pl0 = this.lvOf(p), el0 = this.lvOf(e); if (pl0 && el0) bonus *= el0 - pl0 >= CF.maxLvUp(e) ? 0 : CF.lvFactor(pl0, el0);
       e.hp -= bonus; this.events.push(['h', e.id, Math.round(bonus), 2]); e.hitBy = e.hitBy || {}; e.hitBy[p.id] = this.t;
       if (e.hp <= 0) { e.hp = 0; this.kill(p, e); return; }
       if (r.shock >= 3) {                                                     // цепной разряд
@@ -736,7 +736,7 @@
     if (mode === 'rush' && CF.isAqua(pr.cls)) return { error: 'bad_type' };
     if (mode === 'rush' && !Sim.isLord(pr)) return { error: 'locked' };
     if (mode !== 'rush' && !Sim.canEnterBiome(pr, biome)) return { error: 'locked' };
-    var code = typeof o.code === 'string' && /^\d{4}$/.test(o.code) ? o.code : null;
+    var code = typeof o.code === 'string' && /^[A-Za-z]{5,8}$/.test(o.code) ? o.code.toUpperCase() : null;
     if (mode === 'code' || (mode === 'rush' && code)) {
       if (!code) return { error: 'bad_code' };
       room = this.findCode(code);

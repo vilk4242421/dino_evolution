@@ -35,9 +35,13 @@ for (const cls of ['carn', 'herb', 'fly', 'mosa']) {
   tick(hub, 30);
   const w = conn.last('welcome'); ok(w && w.room.biome === bio && w.prof.cls === cls, cls + ': welcome с профилем');
   const p = r.player, room = r.room;
-  const prey = nearestEnt(room, p, e => e.arch && e.lv <= 2 && (e.role === 'prey' || e.role === 'herd' || e.role === 'hostile'));
-  put(room, p, prey.st.x - 3, prey.st.z);
-  const xp0 = p.profile.totalXp; attackLoop(hub, p, prey, 600);
+  let prey, xp0 = p.profile.totalXp;
+  for (let tryN = 0; tryN < 4; tryN++) {   // враг мог уплыть/убежать — берём следующего ближайшего
+    prey = nearestEnt(room, p, e => e.arch && !e.dead && e.lv <= 2 && (e.role === 'prey' || e.role === 'herd' || e.role === 'hostile'));
+    put(room, p, prey.st.x - 3, prey.st.z);
+    p.hp = p.maxHp; attackLoop(hub, p, prey, 600);
+    if (prey.dead || prey.hp <= 0) break;
+  }
   ok(prey.dead || prey.hp <= 0, cls + ': враг побеждён (' + prey.arch.id + ')');
   tick(hub, 5);
   ok(p.profile.totalXp > xp0, cls + ': опыт начислен (+' + (p.profile.totalXp - xp0) + ')');
@@ -270,6 +274,17 @@ console.log('12. Летающий, водные типы, размер');
   const land = Sim.statsFor('carn', 10, {});
   ok(sp.every(x => x.speed < land.speed * 0.45), 'на суше водные в разы медленнее наземных (' + sp.map(x => Math.round(x.speed)).join('/') + ' против ' + Math.round(land.speed) + ')');
   ok(Sim.scaleOf(10) > Sim.scaleOf(9) * 1.25 && Sim.scaleOf(20) > Sim.scaleOf(19) * 1.15, 'на 10 и 20 уровне динозавр заметно вырастает');
+}
+
+console.log('13. Коды комнат (английские буквы, от 5)');
+{
+  const hub = new Core.Hub({ onSave() { } }), c1 = mkConn(), c2 = mkConn(), c3 = mkConn(), c4 = mkConn();
+  const a = hub.join({ profile: profile('carn', 1), conn: c1, userId: 1, biome: 'forest', mode: 'code', code: 'ABCDEF' });
+  ok(!a.error && a.room.code === 'ABCDEF', 'код из 6 букв создаёт комнату');
+  const b = hub.join({ profile: profile('carn', 1), conn: c2, userId: 2, biome: 'forest', mode: 'code', code: 'abcdef' });
+  ok(!b.error && b.room === a.room, 'код без учёта регистра: вход в ту же комнату');
+  ok(hub.join({ profile: profile('carn', 1), conn: c3, userId: 3, biome: 'forest', mode: 'code', code: 'ABCD' }).error === 'bad_code', '4 буквы — отказ');
+  ok(hub.join({ profile: profile('carn', 1), conn: c4, userId: 4, biome: 'forest', mode: 'code', code: '1234' }).error === 'bad_code', 'цифры — отказ');
 }
 
 console.log('\nПройдено проверок: ' + passed);

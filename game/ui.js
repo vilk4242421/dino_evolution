@@ -110,6 +110,7 @@ function openPlayPanel(online, codeFocus) {
   const bestType = w => { let b = null, bl = 0; for (const t of CONFIG.TYPES[w]) { const l = Sim.typeLevel(prof, t); if (l > bl) { bl = l; b = t; } } return b || CONFIG.TYPES[w][0]; };
   if (CONFIG.clsWorld(cls) !== world) cls = bestType(world);
   const firstOpen = (w) => { const l = CONFIG.worldList(w); let b = l[0]; for (const x of l) if (Sim.canEnterBiome(prof, x)) b = x; return b; };
+  let roomCode = randCode();   // при открытии меню в поле сразу подставлен случайный код новой комнаты
   let sel = CONFIG.worldList(world).indexOf(prof.biome) >= 0 && Sim.canEnterBiome(prof, prof.biome) ? prof.biome : firstOpen(world);
   const worldBtn = (w) => {
     const pct = CONFIG.worldProgress(prof, w), n = CONFIG.worldKings(prof, w), all = CONFIG.worldList(w).length, sp = CONFIG.worldSpecies(w).length, seen = CONFIG.worldSeen(prof, w);
@@ -132,7 +133,7 @@ function openPlayPanel(online, codeFocus) {
       <div class="tdesc"><p>${esc(TN(I.d))}</p>${statsGrid(cls, Math.max(1, lv))}${world === 'sea' ? `<p class="sub">${T('sea_land_note')}</p>` : ''}${abilList(cls)}${lv ? '' : `<p class="sub">${T('type_new_d')}</p>`}</div>
       <h3>${T('tab_biomes')}</h3><p class="sub">${T('unlock_next')}</p><div class="biomes">${grid}</div>
       ${online ? `<button class="pri" id="pp-pub">${T('public_room')}</button>
-      <label>${T('code_room')}</label><div class="row"><input id="pp-code" inputmode="numeric" maxlength="4" placeholder="${T('code_ph')}" style="margin:0"><button id="pp-join">${T('join_code')}</button></div>`
+      <label>${T('code_room')}</label><div class="row"><input id="pp-code" inputmode="text" maxlength="8" autocapitalize="characters" autocomplete="off" spellcheck="false" value="${roomCode}" placeholder="${T('code_ph')}" style="margin:0;text-transform:uppercase;letter-spacing:3px;font-weight:800"><button id="pp-dice" title="${T('new_room')}">🎲</button><button id="pp-join">${T('join_code')}</button></div>`
       : `<button class="pri" id="pp-solo">${T('single')}</button>`}
       ${Sim.isLord(prof) && !CONFIG.isAqua(cls) ? `<button id="pp-rush">🔥 ${T('boss_rush')}</button>` : ''}
       <div class="err" id="pp-err"></div><button id="pp-back">${T('back')}</button>`;
@@ -144,8 +145,10 @@ function openPlayPanel(online, codeFocus) {
     const go = (mode, code) => { closeAll(); ctl.start({ online, biome: sel, cls, mode, code }); };
     $('pp-back') && ($('pp-back').onclick = () => showMenu());
     $('pp-pub') && ($('pp-pub').onclick = () => go('public')); $('pp-solo') && ($('pp-solo').onclick = () => go('solo'));
-    $('pp-rush') && ($('pp-rush').onclick = () => { const code = online && $('pp-code') && /^\d{4}$/.test($('pp-code').value) ? $('pp-code').value : undefined; go('rush', code); });
-    $('pp-join') && ($('pp-join').onclick = () => { const c = $('pp-code').value.trim(); if (!/^\d{4}$/.test(c)) { $('pp-err').textContent = T('bad_code'); return; } go('code', c); });
+    $('pp-rush') && ($('pp-rush').onclick = () => { const code = online && $('pp-code') && /^[A-Za-z]{5,8}$/.test($('pp-code').value) ? $('pp-code').value.toUpperCase() : undefined; go('rush', code); });
+    $('pp-join') && ($('pp-join').onclick = () => { const c = $('pp-code').value.trim().toUpperCase(); if (!/^[A-Z]{5,8}$/.test(c)) { $('pp-err').textContent = T('bad_code'); return; } go('code', c); });
+    $('pp-dice') && ($('pp-dice').onclick = () => { roomCode = randCode(); $('pp-code').value = roomCode; });
+    $('pp-code') && ($('pp-code').oninput = e => { e.target.value = e.target.value.replace(/[^A-Za-z]/g, '').toUpperCase(); roomCode = e.target.value; });
     if (codeFocus && $('pp-code')) $('pp-code').focus();
   };
   const draw = () => { openPanel('play', render(), bind); openRender = null; };
@@ -331,6 +334,7 @@ function openSettings() {
 }
 
 // ---------------------------------------------------------------- пауза, игроки, дуэли, турнир
+function randCode() { const a = new Uint32Array(6); (window.crypto || window.msCrypto).getRandomValues(a); return Array.from(a, v => String.fromCharCode(65 + v % 26)).join(''); }
 function openPause() {
   if (!inGame()) return;
   const S = ctl.session, code = S.room.code;

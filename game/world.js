@@ -6,6 +6,7 @@ import { DinoNest } from './dinonest.js';
 import { Tree } from './treekit.js';
 BiomeKit.setLite(true);   // в игре без микродеталей (иголки 2 мм не видны), меньше полигонов
 const CONFIG = window.CONFIG, Sim = window.Sim;
+const TOUCH_DEV = matchMedia('(pointer:coarse)').matches || 'ontouchstart' in window;   // телефон/планшет: облегчённая сцена
 
 const UP = new THREE.Vector3(0, 1, 0);
 const _q = new THREE.Quaternion(), _p = new THREE.Vector3(), _s = new THREE.Vector3(), _m = new THREE.Matrix4();
@@ -502,7 +503,7 @@ export function buildWorld(scene, biomeId, opts) {
     });
   }
   if (!isDuel) {
-    const isLava = W.liquid === 'lava', WS = isLava ? 72 : 200; wg = new THREE.PlaneGeometry(MAP, MAP, WS, WS); wg.rotateX(-Math.PI / 2);
+    const isLava = W.liquid === 'lava', WS = isLava ? 72 : (TOUCH_DEV ? 120 : 200); /* на телефоне сетка воды реже */ wg = new THREE.PlaneGeometry(MAP, MAP, WS, WS); wg.rotateX(-Math.PI / 2);
     wbase = Float32Array.from(wg.attributes.position.array);
     const wt = detailTex(isLava ? 'ash' : 'water').clone(); wt.needsUpdate = true; wt.repeat.set(MAP / 18, MAP / 18);
     lavaMat = isLava ? new THREE.MeshStandardMaterial({ color: 0xff5a1a, emissive: 0xff3a00, emissiveIntensity: 1.2, roughness: 0.55, map: wt, emissiveMap: wt })
@@ -720,7 +721,7 @@ export function buildWorld(scene, biomeId, opts) {
     const mat = new THREE.MeshBasicMaterial({ color: colorHex, transparent: true, opacity: 0.55, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending });
     const film = new THREE.Mesh(new THREE.CircleGeometry(3.3, 28), mat); film.position.y = 3.4; film.scale.set(1, 1.0, 1); g.add(film);
     const ring = new THREE.Mesh(new THREE.TorusGeometry(3.3, 0.14, 10, 48), new THREE.MeshBasicMaterial({ color: colorHex })); ring.position.y = 3.4; g.add(ring);
-    const light = new THREE.PointLight(colorHex, 1.2, 22); light.position.y = 3.4; g.add(light);
+    if (!TOUCH_DEV) { const light = new THREE.PointLight(colorHex, 1.2, 22); light.position.y = 3.4; g.add(light); }   // точечный свет дорог для телефона
     root.add(g);
     return { group: g, film, ring, mat };
   }

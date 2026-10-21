@@ -413,26 +413,35 @@
     var near = function (e, p, R) { return Math.abs(e.st.x - p.st.x) < R && Math.abs(e.st.z - p.st.z) < R; };
     for (var h = 0; h < humans.length; h++) {
       var p = humans[h]; if (!p.alive || p.gone) continue;
-      var L = p.profile.level, hostN = 0, othN = 0, xH = 0, xO = 0;
+      var L = p.profile.level, hostN = 0, othN = 0, xH = 0, xO = 0, herdN = 0, hostList = [];
       this.ents.forEach(function (e) {
         if (e.dead || e.kind !== 'e' || e.owner || e.boss || e.arch.role === 'bug' || e.fromBoss) return;
         var isH = e.arch.role === 'hostile';
-        if (e.lv >= L - 1 && e.lv <= L + 1 && near(e, p, 130)) { if (isH) hostN++; else othN++; }
+        if (e.lv >= L - 1 && e.lv <= L + 1 && near(e, p, 130)) { if (isH) { hostN++; hostList.push(e); } else othN++; }
         if (e.xtra && near(e, p, 170)) { if (isH) xH++; else xO++; }
+        if (e.arch.role === 'herd' && e.lv >= L - 2 && e.lv <= L + 2 && near(e, p, 150)) herdN++;
       });
       // «ядро»: вокруг игрока на разных расстояниях и в разных местах — до 4 нападающих и 5 обычных врагов его уровня (L−1…L+1)
       // чем выше уровень, тем больше врагов: на 1–3 уровне поменьше нападающих (спокойный старт), к 7+ — полный набор
       var KS = L <= 3 ? 0 : L <= 6 ? 1 : 2, fH = [3, 5, CF.FILL_HOST || 7][KS], fO = [6, 8, CF.FILL_OTHER || 9][KS],
           fXH = [2, 3, CF.FILL_XHOST || 4][KS], fXO = [4, 5, CF.FILL_XOTHER || 6][KS];
+      // слишком много нападающих вашего уровня (природные + подпитка): лишних, что далеко и не гонятся, тихо убираем — баланс по таблице
+      if (hostN > fH + 1) {
+        hostList = hostList.filter(function (e) { return !e.target && Math.hypot(e.st.x - p.st.x, e.st.z - p.st.z) > 45; })
+          .sort(function (a, b) { return Math.hypot(b.st.x - p.st.x, b.st.z - p.st.z) - Math.hypot(a.st.x - p.st.x, a.st.z - p.st.z); });
+        for (var rm = 0; rm < Math.min(2, hostN - fH - 1, hostList.length); rm++) { hostList[rm].dead = true; this.ents.delete(hostList[rm].id); hostN--; }
+      }
       var plan = [], q;
       for (q = hostN; q < fH; q++) plan.push({ lv: Math.max(1, L + [-1, 0, 0, 1][(this.rng() * 4) | 0]), host: true, xtra: false });
       for (q = othN; q < fO; q++) plan.push({ lv: Math.max(1, L + [-1, 0, 0, 1][(this.rng() * 4) | 0]), host: false, xtra: false });
       // «случайные»: ещё до 4 нападающих и 6 обычных любого уровня, раскиданных по карте шире
       for (q = xH; q < fXH; q++) plan.push({ lv: Math.max(1, L - 3 + ((this.rng() * 5) | 0)), host: true, xtra: true });
       for (q = xO; q < fXO; q++) plan.push({ lv: Math.max(1, L - 3 + ((this.rng() * 8) | 0)), host: false, xtra: true });
+      // всегда рядом есть 4 нейтральных динозавра (стадо) уровней L−2…L+2: их не бывает меньше, на любом уровне игрока
+      for (q = herdN; q < (CF.FILL_NEUTRAL || 4); q++) plan.unshift({ lv: Math.max(1, L - 2 + ((this.rng() * 5) | 0)), host: false, xtra: false, herdOnly: true });
       for (var n = 0; n < Math.min(4, plan.length); n++) {
         var pl = plan[n], tl = pl.lv, host = pl.host, cands = [];
-        for (var i = 0; i < ids.length; i++) { var a = ARCH[ids[i]]; if (!!a.water !== !!W.ocean) continue; if ((a.role === 'hostile') !== host) continue; if (tl >= a.lv[0] - 2) cands.push(a); }
+        for (var i = 0; i < ids.length; i++) { var a = ARCH[ids[i]]; if (!!a.water !== !!W.ocean) continue; if ((a.role === 'hostile') !== host) continue; if (pl.herdOnly && a.role !== 'herd') continue; if (tl >= a.lv[0] - 2) cands.push(a); }
         if (!cands.length) continue;
         var arch = cands[(this.rng() * cands.length) | 0], pos = null;
         for (var k = 0; k < 18 && !pos; k++) {

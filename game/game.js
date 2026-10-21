@@ -21,7 +21,7 @@ const F = Core.F, ARCH_IDS = Core.ARCH_IDS;
 // ---------------------------------------------------------------- рендерер
 const canvas = $('c');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: !IS_TOUCH, powerPreference: 'high-performance' });
-renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.enabled = true; renderer.shadowMap.type = IS_TOUCH ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;   // на телефоне тени проще и дешевле
 const camera = new THREE.PerspectiveCamera(62, 1, 0.1, 900);
 let scene = new THREE.Scene();
 let qualityPref = 'auto', qualityName = IS_TOUCH ? 'med' : 'high';
@@ -29,10 +29,11 @@ try { qualityPref = localStorage.getItem('dino_q') || 'auto'; } catch (e) { /* i
 if (qualityPref !== 'auto') qualityName = qualityPref;
 let sens = 1; try { sens = parseFloat(localStorage.getItem('dino_sens') || '1') || 1; } catch (e) { /* ignore */ }
 
+let resScale = 1;   // адаптивное разрешение: 0.55…1 от базового (понижается само, если FPS низкий)
 function applyRenderQuality() {
   const Q = CONFIG.QUALITY[qualityName];
-  window.__dinoQ = { low: 0.6, med: 0.8, high: 1 }[qualityName] || 1;
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, Q.pr));
+  window.__dinoRes = resScale; window.__dinoQ = { low: 0.6, med: 0.8, high: 1 }[qualityName] || 1;
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, IS_TOUCH ? Q.prT : Q.pr) * resScale);
   renderer.setSize(window.innerWidth, window.innerHeight, false);
   camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix();
   if (S && S.world) S.world.applyQuality(qualityName);
@@ -177,7 +178,7 @@ document.addEventListener('pointerlockchange', () => {
 (function touchInit() {
   const joy = $('joy'), knob = joy.querySelector('i'); let jid = null, cid = null, cx = 0, cy = 0;
   joy.addEventListener('touchstart', e => { const t = e.changedTouches[0]; jid = t.identifier; const r = joy.getBoundingClientRect(); cx = r.left + r.width / 2; cy = r.top + r.height / 2; mv(t); e.preventDefault(); Audio.init(); }, { passive: false });
-  function mv(t) { let dx = (t.clientX - cx) / 55, dy = (t.clientY - cy) / 55; const l = Math.hypot(dx, dy); if (l > 1) { dx /= l; dy /= l; } input.joyX = dx; input.joyY = dy; knob.style.transform = `translate(${dx * 38}px,${dy * 38}px)`; }
+  function mv(t) { let dx = (t.clientX - cx) / 44, dy = (t.clientY - cy) / 44; const l = Math.hypot(dx, dy); if (l > 1) { dx /= l; dy /= l; } input.joyX = dx; input.joyY = dy; knob.style.transform = `translate(${dx * 30}px,${dy * 30}px)`; }
   window.addEventListener('touchmove', e => { for (const t of e.changedTouches) { if (t.identifier === jid) mv(t); else if (t.identifier === cid && S && !panelOpen) { input.yaw -= (t.clientX - cx2) * 0.0058 * sens; input.pitch = clamp(input.pitch + (t.clientY - cy2) * 0.0046 * sens, -0.5, 1.25); cx2 = t.clientX; cy2 = t.clientY; } } }, { passive: true });
   let cx2 = 0, cy2 = 0;
   const end = e => { for (const t of e.changedTouches) { if (t.identifier === jid) { jid = null; input.joyX = input.joyY = 0; knob.style.transform = ''; } if (t.identifier === cid) cid = null; } };
@@ -917,6 +918,15 @@ function updateEnts(dt, t, now) {
 }
 
 // ---------------------------------------------------------------- HUD
+// значок игрока-друга на картах: яркий ромб с белой обводкой и первой буквой ника (боты — серые), чтобы не путать с точками зверей
+function friendMark(g, x, y, r, info, bot, rot) {
+  g.save(); g.translate(x, y); g.rotate(rot || 0);
+  g.beginPath(); g.moveTo(0, -r * 1.35); g.lineTo(r, 0); g.lineTo(0, r * 1.35); g.lineTo(-r, 0); g.closePath();
+  g.fillStyle = bot ? '#b8b8b8' : '#ff4fd8'; g.fill(); g.lineWidth = Math.max(1.6, r * 0.28); g.strokeStyle = '#fff'; g.stroke();
+  const ch = String((info && info.nick) || '?').trim().charAt(0).toUpperCase();
+  if (ch && !bot) { g.fillStyle = '#fff'; g.font = 'bold ' + Math.round(r * 1.25) + 'px system-ui'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.lineWidth = 2; g.strokeStyle = 'rgba(80,0,70,.9)'; g.strokeText(ch, 0, r * 0.08); g.fillText(ch, 0, r * 0.08); }
+  g.restore();
+}
 const miniCv = $('mini-cv'), miniCtx = miniCv.getContext('2d');
 function drawMinimap() {
   const g = miniCtx, N = miniCv.width, c = N / 2, R = 130, k = c / R, w = S.world, me = S.me;
@@ -938,7 +948,7 @@ function drawMinimap() {
     const hostile = e.arch.role === 'hostile', col = (e.flags & 16) ? '#9be37a' : hostile ? '#ff5a4a' : e.arch.role === 'herd' ? '#ffd35a' : e.arch.role === 'fish' || e.arch.role === 'bug' ? '#6ad8ff' : '#8cff7a';
     dot(p.x, p.z, '#000', (hostile ? 4.2 : 3.2)); dot(p.x, p.z, col, hostile ? 3.1 : 2.2);
   }
-  for (const p of S.players.values()) { const q = p.actor.group.position; dot(q.x, q.z, p.info.bot ? '#cfcfcf' : '#6ac8ff', 3.6); }
+  for (const p of S.players.values()) { const q = p.actor.group.position; friendMark(g, (q.x - S.px) * k, (q.z - S.pz) * k, 7.5, p.info, p.info.bot, -input.yaw); }
   g.restore();
   // игрок — стрелка по центру, компас по ободу
   g.save(); g.translate(c, c); g.rotate(Math.PI - S.me.face + input.yaw); g.fillStyle = '#fff'; g.strokeStyle = '#000'; g.lineWidth = 2;
@@ -959,6 +969,14 @@ $('mini').addEventListener('touchend', e => { e.preventDefault(); if (S && S.wel
 $('mini').addEventListener('click', () => { if (S && S.welcomed) toggleMap(true); });
 $('bigmap').addEventListener('touchend', e => { e.preventDefault(); toggleMap(false); }, { passive: false });
 $('bigmap').addEventListener('click', () => toggleMap(false));
+// крестик и кнопка «Закрыть»: закрывают карту сразу при касании (touchstart/pointerdown), не полагаясь на всплытие до фона
+['bigmap-x', 'bigmap-close'].forEach(id => {
+  const b = $(id); if (!b) return;
+  const close = e => { e.preventDefault(); e.stopPropagation(); toggleMap(false); };
+  b.addEventListener('touchstart', close, { passive: false });
+  b.addEventListener('pointerdown', close);
+  b.addEventListener('click', close);
+});
 function drawBigMap() {
   if (!mapOpen || !S || !S.world) return;
   const g = bigCtx, N = bigCv.width, w = S.world, W = S.W, size = w.mapSize, k = N / size, P = (x) => (x + size / 2) * k;
@@ -978,7 +996,7 @@ function drawBigMap() {
     if (e.boss) continue; const p = e.group.position, d = Math.hypot(p.x - S.px, p.z - S.pz); if (d > sr || !e.arch) continue;
     dot(p.x, p.z, (e.flags & 16) ? '#9be37a' : e.arch.role === 'hostile' ? '#ff5a4a' : e.arch.role === 'herd' ? '#ffd35a' : '#8cff7a', 3.2);
   }
-  for (const p of S.players.values()) { const q = p.actor.group.position; dot(q.x, q.z, '#6ac8ff', 5); }
+  for (const p of S.players.values()) { const q = p.actor.group.position; friendMark(g, P(q.x), P(q.z), 11, p.info, p.info.bot, 0); }
   // игрок
   g.save(); g.translate(P(S.px), P(S.pz)); g.rotate(Math.PI - S.me.face); g.fillStyle = '#fff'; g.strokeStyle = '#000'; g.lineWidth = 3;
   g.beginPath(); g.moveTo(0, -14); g.lineTo(9, 10); g.lineTo(0, 5); g.lineTo(-9, 10); g.closePath(); g.stroke(); g.fill(); g.restore();
@@ -1039,15 +1057,26 @@ function updateHud(now, dt) {
 
 // ---------------------------------------------------------------- автокачество
 let aqT = 0, aqN = 0, aqLow = 0, aqHigh = 0, aqDowngraded = false;
+const RES_MIN = 0.55;
 function autoQuality(dt) {
   aqT += dt; aqN++;
-  if (aqT < 3) return;
+  if (aqT < 1.5) return;
   const fps = aqN / aqT; aqT = 0; aqN = 0; fpsShow = Math.round(fps);
   if (qualityPref !== 'auto') return;
   const target = IS_TOUCH ? CONFIG.TARGET_FPS_MOBILE : CONFIG.TARGET_FPS_DESKTOP, order = ['low', 'med', 'high'], i = order.indexOf(qualityName);
-  if (fps < target * 0.8) { aqLow++; aqHigh = 0; if (aqLow >= 2 && i > 0) { qualityName = order[i - 1]; aqLow = 0; aqDowngraded = true; applyRenderQuality(); } }
-  else if (fps > target * 0.97 && !aqDowngraded) { aqHigh++; aqLow = 0; if (aqHigh >= 3 && i < 2) { qualityName = order[i + 1]; aqHigh = 0; applyRenderQuality(); } }
-  else { aqLow = 0; aqHigh = 0; }
+  if (fps < target * 0.85) {
+    aqLow++; aqHigh = 0;
+    if (aqLow >= 2) {
+      aqLow = 0;
+      // сначала плавно снижаем разрешение картинки, и только когда оно уже минимальное — переходим на более низкое качество
+      if (resScale > RES_MIN + 0.01) { resScale = Math.max(RES_MIN, resScale - (fps < target * 0.6 ? 0.2 : 0.1)); applyRenderQuality(); }
+      else if (i > 0) { qualityName = order[i - 1]; resScale = 0.8; aqDowngraded = true; applyRenderQuality(); }
+    }
+  } else if (fps > target * 0.97) {
+    aqHigh++; aqLow = 0;
+    if (aqHigh >= 4 && resScale < 1) { resScale = Math.min(1, resScale + 0.05); aqHigh = 0; applyRenderQuality(); }   // запас по FPS — возвращаем резкость
+    else if (aqHigh >= 6 && resScale >= 1 && !aqDowngraded && i < 2) { qualityName = order[i + 1]; aqHigh = 0; applyRenderQuality(); }
+  } else { aqLow = 0; aqHigh = 0; }
 }
 
 // ---------------------------------------------------------------- главный цикл
@@ -1056,8 +1085,8 @@ const _errSeen = new Set();
 function safe(fn, a, b, c) { try { fn(a, b, c); } catch (e) { const k = fn.name + ':' + e.message; if (!_errSeen.has(k)) { _errSeen.add(k); console.error(k, e); } } }
 function frame(nowMs) {
   requestAnimationFrame(frame);
-  const dt = Math.min(0.05, (nowMs - last) / 1000); last = nowMs; clock += dt;
-  autoQuality(dt);
+  const rawDt = (nowMs - last) / 1000, dt = Math.min(0.05, rawDt); last = nowMs; clock += dt;
+  autoQuality(Math.min(1, rawDt));   // реальное время кадра (не обрезанное), чтобы FPS считался честно
   if (!S || !S.welcomed) { updateMenu3d(dt); renderer.render(menu3d.scene, camera); return; }
   const now = nowMs / 1000;
   S.acc = (S.acc || 0) + dt;
@@ -1116,5 +1145,5 @@ $('menubtn').addEventListener('touchstart', e => { e.stopPropagation(); }, { pas
   $('loading').style.display = 'none';
   requestAnimationFrame(frame);
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => { /* офлайн-кэш необязателен */ });
-  window.__dino = { get S() { return S; }, get clock() { return clock; }, ctl, THREE, foodMesh, scene, renderer, Profile, input, camera, menu3d, menuSetDino };      // для отладки и автотестов
+  window.__dino = { buildEnemy, animateEnemy, get S() { return S; }, get clock() { return clock; }, ctl, THREE, foodMesh, scene, renderer, Profile, input, camera, menu3d, menuSetDino };      // для отладки и автотестов
 })();
