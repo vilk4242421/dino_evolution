@@ -46,10 +46,11 @@ function applyCreate(old, inc, newRun) {
   const cls = inc.cls === null ? null : (typeof inc.cls === 'string' && C.CLASSES[inc.cls] ? inc.cls : undefined);
   if (cls === undefined) return { error: 'invalid_profile' };
   if (inc.hatched && (!cls || !name)) return { error: 'invalid_profile' };
+  if (cls && C.TYPE_MIN_LV && C.TYPE_MIN_LV[cls] && (newRun || !old || !old.hatched)) return { error: 'type_locked' };
   let p = Sim.fixProfile(JSON.parse(JSON.stringify(old || Sim.defaultProfile(''))));
   if (newRun) {
     const d = Sim.defaultProfile(name);
-    Object.assign(d, { wins: p.wins, kings: p.kings, kingAt: p.kingAt, cosmetics: p.cosmetics, cosmetic: p.cosmetic, coins: p.coins, stats: p.stats, playTime: p.playTime });
+    ['wins', 'kings', 'kingAt', 'cosmetics', 'cosmetic', 'pets', 'pet', 'claimed', 'codes', 'titles', 'title', 'patc', 'rfx', 'morph', 'eggskin', 'color', 'mats', 'trophies', 'elo', 'dw', 'dl', 'season', 'coins', 'stats', 'playTime', 'daily', 'tut', 'nest'].forEach(k => { if (p[k] !== undefined) d[k] = p[k]; });
     p = d;
   } else if (p.hatched && p.cls && cls !== p.cls) return { error: 'class_locked' };
   p.name = name; p.color = inc.color;
@@ -100,8 +101,8 @@ function liveProfile(user) { const p = online.get(user.id); return p && p.profil
 let lbCache = { at: 0, data: null };
 async function leaderboard() {
   if (lbCache.data && Date.now() - lbCache.at < 8000) return lbCache.data;
-  const [wins, kings] = await Promise.all([store.topWins(50), store.topKings(50)]);
-  lbCache = { at: Date.now(), data: { wins, kings } };
+  const [wins, kings, elo, coins] = await Promise.all([store.topWins(50), store.topKings(50), store.topElo(50), store.topCoins(50)]);
+  lbCache = { at: Date.now(), data: { wins, kings, elo, coins } };
   return lbCache.data;
 }
 
@@ -153,6 +154,20 @@ async function handleApi(req, res, pathname) {
     auth.user.profile = result.profile;
     await store.saveProfile(auth.user.id, result.profile);
     return json(res, 200, { profile: result.profile });
+  }
+  if (req.method === 'POST' && pathname === '/api/shop') {
+    if (rateLimited('s' + auth.user.id, 60, 60000)) return json(res, 429, { error: 'rate_limited' });
+    if (online.has(auth.user.id)) return json(res, 409, { error: 'in_game', profile: liveProfile(auth.user) });
+    const b = await readBody(req);
+    const OPS = ['redeem', 'buy', 'craft', 'equip', 'buypet', 'setpet', 'setcolor', 'nestbuy', 'nestput'];
+    if (!OPS.includes(b.op)) return json(res, 400, { error: 'bad_op' });
+    const pr = Sim.fixProfile(JSON.parse(JSON.stringify(auth.user.profile)));
+    if (b.op === 'redeem' && rateLimited('c' + auth.user.id, 8, 60000)) return json(res, 429, { error: 'rate_limited' });
+    const r = Sim.shopOp(pr, b.op, { id: b.id, slot: b.slot, i: b.i, put: b.put, code: b.code });
+    if (!r.ok) return json(res, 400, { error: r.err, profile: auth.user.profile });
+    pr.savedAt = Date.now(); auth.user.profile = pr;
+    await store.saveProfile(auth.user.id, pr);
+    return json(res, 200, { profile: pr, coins: r.coins | 0 });
   }
   return json(res, 404, { error: 'not_found' });
 }

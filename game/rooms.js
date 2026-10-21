@@ -52,7 +52,7 @@
 
   RP.pubInfo = function (p) {
     return {
-      id: p.id, nick: p.name, color: p.color, cls: p.cls, level: p.profile.level, evo: p.profile.evo, cosmetic: p.profile.cosmetic || '',
+      id: p.id, nick: p.name, color: p.color, cls: p.cls, level: p.profile.level, evo: p.profile.evo, cosmetic: p.profile.cosmetic || '', pet: p.profile.pet || '', title: p.profile.title || '', nest: p.profile.nest ? p.profile.nest.put : [], patc: p.profile.patc || '', rfx: p.profile.rfx || '', morph: p.profile.morph || '',
       admin: !!p.admin, king: (p.profile.kings || []).indexOf(this.biome) >= 0, lord: Sim.isLord(p.profile), bot: !!p.bot, team: p.team
     };
   };
@@ -71,7 +71,7 @@
       st: Sim.newPlayer(this.W, pos.x, pos.z), stats: null, hp: 1, food: CF.FOOD_MAX, breath: CF.BREATH_MAX,
       q: [], ack: 0, lastQ: 0, rs: 0, respawnAt: 0, shield: 0, cd: { atk: 0, e: 0, q: 0, f: 0 }, combo: 0, comboT: 0, rage: 0,
       lastHurt: -99, lastAtk: -99, dots: [], buffs: {}, hitBy: null, emoteT: -9, atkAnim: 0, spr: false, still: 0, hidden: false,
-      pounce: null, diveT: 0, diveAlt: 0, allies: [], dirty: false, dirtyT: 0, deadBy: '', lastProf: 0, killT: 0, input: { f: 0, s: 0 }, dmgDone: 0
+      pounce: null, ult: 0, ultT: 0, ultMul: 1, ultSpd: 1, diveT: 0, diveAlt: 0, allies: [], dirty: false, dirtyT: 0, deadBy: '', lastProf: 0, killT: 0, input: { f: 0, s: 0 }, dmgDone: 0
     };
     p.st.face = opts.face !== undefined ? opts.face : 0;
     this.refreshStats(p); p.hp = p.stats.hp;
@@ -89,6 +89,8 @@
     p.room = this;
     var self = this;
     this.players.set(p.id, p);
+    if (!p.bot && !this.hostId) this.hostId = p.id;
+    if (!p.bot && p.profile.hatched) { var lr = Sim.dailyRoll(p.profile, Date.now()); if (lr) { p.loginInfo = lr; p.dirty = true; } var se = Sim.seasonRoll(p.profile, Date.now()); if (se) { p.seasonInfo = se; p.dirty = true; } }   // новый день: задания и награда за вход
     if (p.conn) this.sendTo(p, this.welcomeMsg(p));
     this.broadcast({ t: 'join', p: this.pubInfo(p) }, p.id);
     if (!p.bot) { this.onHumanJoin(p); }
@@ -118,6 +120,21 @@
     this.sendTo(p, { t: 'prof', p: pr });
     if (this.hub.onSave) this.hub.onSave(p);
   };
+  // прогресс ежедневных заданий (type: kill | killh | eat | play | boss)
+  RP.questProgress = function (p, type, n) {
+    if (p.bot || !p.profile || !p.profile.hatched) return;
+    var pr = p.profile, rl = Sim.dailyRoll(pr, Date.now());
+    if (rl) { p.loginInfo = rl; this.sendTo(p, { t: 'login', l: rl }); this.markDirty(p); }
+    var done = Sim.questAdd(pr, type, n || 1);
+    if (!done.length) return;
+    for (var i = 0; i < done.length; i++) {
+      pr.stats.quests = (pr.stats.quests | 0) + 1;
+      var c = done[i].coins + (done[i].all ? CF.QUEST_BONUS : 0);
+      this.gainCoins(p, c);
+      this.events.push(['quest', p.id, done[i].i, c, done[i].all ? 1 : 0]);
+    }
+    this.markDirty(p);
+  };
   RP.onHumanJoin = function () { };
   RP.onHumanLeave = function () { };
 
@@ -127,6 +144,7 @@
     var maxT = CF.cumXp(CF.MAX_LEVEL);
     var before = pr.level;
     if (p.stats && p.stats.fx.xp) amount *= 1 + p.stats.fx.xp / 100;
+    if (pr.pet === 'firefly') amount *= 1.1;
     pr.totalXp = Math.min(maxT, pr.totalXp + Math.round(amount));
     var lv = CF.levelFromTotal(pr.totalXp);
     if (lv > pr.level) {
@@ -157,8 +175,19 @@
       case 'evo': this.buyEvo(p, m.id); break;
       case 'evoreset': this.resetEvo(p); break;
       case 'evosw': this.switchEvo(p, m.id); break;
+      case 'revive': this.revivePlayer(p, m.id); break;
+      case 'tut': if (!p.profile.tut && p.profile.hatched) { p.profile.tut = 1; this.gainCoins(p, 50); this.markDirty(p); this.flushProfile(p, true); } break;      // обучение пройдено: +50 монет один раз
       case 'buy': this.buyCosmetic(p, m.id); break;
-      case 'equip': this.equipCosmetic(p, m.id); break;
+      case 'claim': this.claimAch(p, m.id); break;
+      case 'settitle': this.setTitle(p, m.id); break;
+      case 'buypet': this.buyPet(p, m.id); break;
+      case 'setpet': this.setPet(p, m.id); break;
+      case 'equip': this.equipCosmetic(p, m.id, m.slot); break;
+      case 'nestbuy': this.nestBuy(p, m.id); break;
+      case 'nestput': this.nestPut(p, m.put); break;
+      case 'setcolor': this.setColor(p, m.i | 0); break;
+      case 'redeem': this.redeemCode(p, m.code); break;
+      case 'craft': this.craftCosmetic(p, m.id); break;
       case 'ping': this.sendTo(p, { t: 'pong', n: +m.n || 0 }); break;
       default: this.handleExtra(p, m);
     }
@@ -170,6 +199,7 @@
     var a = m.a;
     if (a === 'atk') p.wantAtk = true;
     else if (a === 'e' || a === 'q') this.ability(p, a);
+    else if (a === 'x') this.ultimate(p);
     else if (a === 'f') this.actF(p);
     else if (a === 'em') {
       var i = m.i | 0;
@@ -212,21 +242,55 @@
     this.broadcast({ t: 'upd', p: { id: p.id, evo: pr.evo, level: pr.level } }, p.id);
     this.markDirty(p); this.flushProfile(p, true);
   };
-  RP.buyCosmetic = function (p, id) {
-    var pr = p.profile, c = CF.COSMETICS[id];
-    if (!c || pr.cosmetics.indexOf(id) >= 0) return;
-    if (pr.coins < c.price) { this.sendTo(p, { t: 'err', m: 'coins' }); return; }
-    pr.coins -= c.price; pr.cosmetics.push(id); pr.cosmetic = id;
-    this.broadcast({ t: 'upd', p: { id: p.id, cosmetic: id } }, p.id);
+  // общий путь: операция магазина над профилем игрока + рассылка внешнего вида
+  RP.shop = function (p, op, a) {
+    var r = Sim.shopOp(p.profile, op, a);
+    if (!r.ok) { if (r.err === 'coins' || r.err === 'mats') this.sendTo(p, { t: 'err', m: r.err }); return r; }
+    var f = r.field, pr = p.profile;
+    if (f === 'color') p.color = pr.color;
+    var u = { id: p.id }; u[f] = f === 'nest' ? pr.nest.put : pr[f];
+    if (f !== 'coins') this.broadcast({ t: 'upd', p: u }, p.id);          // монеты чужим не рассылаем
+    this.markDirty(p); this.flushProfile(p, true);
+    return r;
+  };
+  RP.buyCosmetic = function (p, id) { this.shop(p, 'buy', { id: id }); };
+  // крафт из костей и шкур боссов
+  RP.craftCosmetic = function (p, id) { var r = this.shop(p, 'craft', { id: id }); if (r.ok) this.sendTo(p, { t: 'crafted', id: id }); };
+  // добыча с босса: кости и шкуры (+ трофей биома для гнезда)
+  RP.dropLoot = function (p, first) {
+    var pr = p.profile, bone = 2 + ((this.rng() * 2) | 0) + (first ? 2 : 0), hide = 1 + ((this.rng() * 2) | 0) + (first ? 1 : 0);
+    pr.mats.bone += bone; pr.mats.hide += hide; pr.trophies[this.biome] = (pr.trophies[this.biome] | 0) + 1;
+    this.sendTo(p, { t: 'loot', bone: bone, hide: hide });
+  };
+  RP.setColor = function (p, i) { this.shop(p, 'setcolor', { i: i }); };
+  RP.redeemCode = function (p, code) {
+    p.redeemTries = (p.redeemTries | 0) + 1;
+    if (p.redeemTries > 10) { this.sendTo(p, { t: 'err', m: 'bad_code' }); return; }
+    var r = this.shop(p, 'redeem', { code: code });
+    this.sendTo(p, { t: 'redeemed', ok: r.ok ? 1 : 0, err: r.err || '', coins: r.coins | 0 });
+  };
+  RP.nestBuy = function (p, id) { this.shop(p, 'nestbuy', { id: id }); };
+  RP.nestPut = function (p, list) { this.shop(p, 'nestput', { put: list }); };
+  RP.claimAch = function (p, id) {
+    var pr = p.profile, a = CF.achById(id), r = CF.ACH_REWARD[id];
+    if (!a || !r || pr.claimed.indexOf(id) >= 0 || !pr.hatched || !a.t(pr)) return;
+    pr.claimed.push(id);
+    if (r.c) this.gainCoins(p, r.c);
+    if (r.cos && CF.COSMETICS[r.cos] && pr.cosmetics.indexOf(r.cos) < 0) pr.cosmetics.push(r.cos);
+    if (r.title && pr.titles.indexOf(r.title) < 0) { pr.titles.push(r.title); if (!pr.title) this.setTitle(p, r.title, true); }
+    this.sendTo(p, { t: 'achok', id: id });
     this.markDirty(p); this.flushProfile(p, true);
   };
-  RP.equipCosmetic = function (p, id) {
+  RP.setTitle = function (p, id, quiet) {
     var pr = p.profile;
-    if (id !== '' && pr.cosmetics.indexOf(id) < 0) return;
-    pr.cosmetic = id;
-    this.broadcast({ t: 'upd', p: { id: p.id, cosmetic: id } }, p.id);
-    this.markDirty(p); this.flushProfile(p, true);
+    if (id !== '' && pr.titles.indexOf(id) < 0) return;
+    pr.title = id;
+    this.broadcast({ t: 'upd', p: { id: p.id, title: id } }, p.id);
+    if (!quiet) { this.markDirty(p); this.flushProfile(p, true); }
   };
+  RP.buyPet = function (p, id) { this.shop(p, 'buypet', { id: id }); };
+  RP.setPet = function (p, id) { this.shop(p, 'setpet', { id: id }); };
+  RP.equipCosmetic = function (p, id, slot) { this.shop(p, 'equip', { id: id, slot: slot }); };
 
   // ---------------------------------------------------------------- урон, смерть
   // можно ли src бить dst (нет дружественного огня; в дуэли — разные команды)
@@ -253,6 +317,8 @@
     if (dst.kind === 'p' && dst.gone) return 0;
     if (!o.force && !this.hostile(src, dst)) return 0;
     var amount = raw;
+    if (src.kind === 'p' && src.buffK === 'dmg' && src.buffT > this.t) amount *= 1.25;
+    if (src.kind === 'p' && src.ultT > this.t) amount *= src.ultMul;     // золотой плод: +25% урона
     // баланс по уровням: боец выше уровнем бьёт заметно сильнее, ниже — намного слабее (1 ур. против 4 ур. = ×0.36 урона)
     var sl = this.lvOf(src), dl = this.lvOf(dst);
     if (!o.force && src.kind === 'p' && dst.kind === 'e' && sl && dl && dl - sl >= CF.maxLvUp(dst)) { this.events.push(['h', dst.id, 0, 4]); return 0; }   // враг на 2+ уровня выше — не победить
@@ -267,7 +333,8 @@
     dst.hp -= amount; dst.lastHurt = this.t;
     if (src) {
       var owner = src.owner || src;
-      if (owner.kind === 'p') { if (!dst.hitBy) dst.hitBy = {}; dst.hitBy[owner.id] = this.t; owner.lastAtk = this.t; owner.dmgDone += amount; }
+      if (owner.kind === 'p') { if (!dst.hitBy) dst.hitBy = {}; dst.hitBy[owner.id] = this.t; owner.lastAtk = this.t; owner.dmgDone += amount; if (!o.noUlt) owner.ult = Math.min(CF.ULT_MAX, (owner.ult || 0) + CF.ULT_HIT); }
+      if (dst.kind === 'p' && !o.force) dst.ult = Math.min(CF.ULT_MAX, (dst.ult || 0) + CF.ULT_HURT);
       if (dst.kind === 'e' && dst.role === 'herd') { dst.aggroT = this.t + 8; dst.target = owner; }
       if (dst.kind === 'e' && dst.role === 'prey') { dst.fleeT = this.t + 4; dst.fleeFrom = owner; }
     }
@@ -317,16 +384,37 @@
   RP.onEntityKilled = function () { };
   RP.playerDied = function (p, src) {
     if (!p.alive) return;
-    p.alive = false; p.hp = 0; p.respawnAt = this.t + 4.5; p.q.length = 0; p.dots = []; p.st.clm = 0; p.st.fly = 0; p.st.grd = 0; p.st.dsh = 0; p.wantAtk = false;
+    var lostNow = 0;
+    p.ult = 0; p.ultT = 0; p.alive = false; p.hp = 0; p.respawnAt = this.t + 4.5; p.q.length = 0; p.dots = []; p.st.clm = 0; p.st.fly = 0; p.st.grd = 0; p.st.dsh = 0; p.wantAtk = false;
     p.deadBy = src ? (src.name || (src.arch && src.arch.n) || (src.owner && src.owner.name) || '') : '';
     p.deadByRaw = src ? (src.arch ? { id: src.arch.id } : src.bossId ? { boss: src.bossId } : { name: src.name || '' }) : null;
     this.events.push(['d', p.id]);
     this.onPlayerDeath(p, src);
     if (!p.bot && !this.W.duel) {
       var pr = p.profile, into = pr.totalXp - CF.cumXp(pr.level), lose = Math.floor(into * CF.DEATH_XP_LOSS);
-      pr.totalXp -= lose; pr.stats.deaths = (pr.stats.deaths | 0) + 1; this.markDirty(p);
+      pr.totalXp -= lose; pr.stats.deaths = (pr.stats.deaths | 0) + 1; this.markDirty(p); lostNow = lose;
     }
-    this.sendTo(p, { t: 'dead', by: p.deadByRaw, in: 4.5 });
+    // в комнате с живым другом есть время, чтобы он поднял: респаун позже, потерянный опыт вернётся при спасении
+    p.lostXp = 0; p.reviveable = false;
+    if (!p.bot && !this.W.duel && this.mode !== 'rush' && this.anyAliveHuman(p)) { p.reviveable = true; p.respawnAt = this.t + CF.REVIVE_SEC; p.lostXp = lostNow || 0; }
+    this.sendTo(p, { t: 'dead', by: p.deadByRaw, in: p.reviveable ? CF.REVIVE_SEC : 4.5, rv: p.reviveable ? 1 : 0 });
+  };
+  RP.anyAliveHuman = function (except) {
+    var found = false;
+    this.players.forEach(function (o) { if (o !== except && !o.bot && !o.gone && o.alive) found = true; });
+    return found;
+  };
+  // друг поднимает упавшего: тот встаёт на месте с половиной здоровья, потерянный опыт возвращается
+  RP.revivePlayer = function (p, id) {
+    var q = this.players.get(+id);
+    if (!q || q === p || q.alive || !q.reviveable || p.bot || !p.alive || p.gone) return;
+    if (Math.hypot(p.st.x - q.st.x, p.st.z - q.st.z) > 9) return;
+    q.alive = true; q.reviveable = false; q.hp = Math.max(1, q.stats.hp * 0.5); q.shield = this.t + 3; q.rs++; q.dots = []; q.food = Math.max(q.food, 40);
+    q.st.stun = 0; q.st.vy = 0; q.st.lock = 0; q.deadBy = '';
+    if (q.lostXp) { q.profile.totalXp += q.lostXp; q.profile.stats.deaths = Math.max(0, (q.profile.stats.deaths | 0) - 1); q.lostXp = 0; }
+    this.events.push(['rev', q.id, p.id]);
+    this.gainXp(p, 20 + p.profile.level * 3); this.gainCoins(p, 15);
+    this.flushProfile(q, true); this.markDirty(p);
   };
   RP.onPlayerDeath = function () { };
   RP.respawnPlayer = function (p) {
@@ -366,7 +454,7 @@
   RP.consume = function (p, kind) {
     var v = FOOD_VAL[kind] || FOOD_VAL.plant;
     p.food = Math.min(CF.FOOD_MAX, p.food + v[0]); p.hp = Math.min(p.stats.hp, p.hp + v[2] * (1 + p.profile.level * 0.15));
-    if (!p.bot) { p.profile.stats.eaten = (p.profile.stats.eaten | 0) + 1; this.gainXp(p, kind === 'plant' ? Math.round(5 + p.profile.level * 1.2 + CF.xpForLevel(p.profile.level) * 0.09) : v[1] + Math.floor(p.profile.level * 0.3)); }   // растения: опыт растёт с уровнем (~30 кустов на уровень)
+    if (!p.bot) { p.profile.stats.eaten = (p.profile.stats.eaten | 0) + 1; this.questProgress(p, 'eat', 1); this.rareFind(p); this.gainXp(p, kind === 'plant' ? Math.round(5 + p.profile.level * 1.2 + CF.xpForLevel(p.profile.level) * 0.09) : v[1] + Math.floor(p.profile.level * 0.3)); }   // растения: опыт растёт с уровнем (~30 кустов на уровень)
     this.events.push(['eat', p.id, kind]);
   };
   RP.initPlants = function () {
@@ -473,6 +561,30 @@
   };
 
   // ---------------------------------------------------------------- способности
+
+  // ---------- ульта ----------
+  RP.ultimate = function (p) {
+    var u = CF.ULTS[p.cls], st = p.stats, s = p.st, self = this, t = this.t;
+    if (!u || (p.ult || 0) < CF.ULT_MAX - 0.01 || p.st.clm || this.duelFrozen(p)) return;
+    p.ult = 0; this.events.push(['ult', p.id, u.id, u.r || 0]); if (!p.bot) p.profile.stats.ults = (p.profile.stats.ults | 0) + 1;
+    if (u.sec) { p.ultT = t + u.sec; p.ultMul = u.dmg || 1; p.ultSpd = u.spd || 1; }
+    if (u.heal) p.hp = Math.min(st.hp, p.hp + st.hp * u.heal);
+    if (u.shield) p.shield = Math.max(p.shield || 0, t + u.shield);
+    if (u.r && u.dmg) {
+      this.ents.forEach(function (e) {
+        if (!(e.hp > 0) || e.dead || e.team === p.team || e.kind === 'b' || e.role === 'bug') return;
+        var d0 = dist(e.st, s); if (d0 >= u.r) return;
+        e.stunT = t + u.stun; self.damage(p, e, st.dmg * u.dmg * (1 - 0.35 * d0 / u.r), { noThorns: true, noUlt: true });
+        if (d0 > 0.1 && u.id === 'quake') { e.st.x += (e.st.x - s.x) / d0 * 3; e.st.z += (e.st.z - s.z) / d0 * 3; }
+      });
+      if (this.W.duel || this.mode === 'duel') this.players.forEach(function (o) {
+        if (o !== p && o.alive && o.team !== p.team && dist(o.st, s) < u.r) { o.st.stun = Math.max(o.st.stun, u.stun * 0.6); self.damage(p, o, st.dmg * u.dmg * 0.5, { noThorns: true, noUlt: true }); }
+      });
+    }
+    if (u.allyHeal) this.players.forEach(function (o) {
+      if (o !== p && o.alive && o.team === p.team && dist(o.st, s) < u.r) { o.hp = Math.min(o.stats.hp, o.hp + o.stats.hp * u.allyHeal); self.events.push(['heal', o.id]); }
+    });
+  };
   RP.ability = function (p, key) {
     var def = CF.ABILITIES[p.cls][key], st = p.stats, s = p.st, r = st.ranks, id = def.id, self = this;
     var cdv = p.cd[key];
@@ -581,7 +693,8 @@
     var s = p.st, st = p.stats, t = this.t, W = this.W;
     if (!p.alive) {
       while (p.q.length) p.ack = p.q.shift().q;
-      if (t >= p.respawnAt && !this.noRespawn(p)) this.respawnPlayer(p);
+      if (p.reviveable && !this.anyAliveHuman(p)) { p.reviveable = false; p.respawnAt = Math.min(p.respawnAt, t + 2); }
+      if (t >= p.respawnAt && !this.noRespawn(p)) { p.reviveable = false; this.respawnPlayer(p); }
       return;
     }
     if (p.gone) { p.q.length = 0; return; }
@@ -643,8 +756,9 @@
     var mp = {
       hp: r1(p.hp), mh: st.hp, fd: r1(p.food), br: r1(p.breath), bm: r1(st.breathMax), alive: p.alive ? 1 : 0, rs: p.rs,
       rt: p.alive ? 0 : r1(Math.max(0, p.respawnAt - t)), sh: p.shield > t ? r1(p.shield - t) : 0,
-      cd: [r1(Math.max(0, p.cd.atk)), r1(Math.max(0, p.cd.e)), r1(Math.max(0, p.cd.q))], rg: p.combo | 0,
-      lv: p.profile.level, xp: p.profile.totalXp - CF.cumXp(p.profile.level), hid: p.hidden ? 1 : 0, dots: p.dots.length
+      cd: [r1(Math.max(0, p.cd.atk)), r1(Math.max(0, p.cd.e)), r1(Math.max(0, p.cd.q))], rg: p.combo | 0, ul: Math.round(p.ult || 0), ut: p.ultT > t ? Math.round(p.ultT - t) : 0,
+      lv: p.profile.level, xp: p.profile.totalXp - CF.cumXp(p.profile.level), hid: p.hidden ? 1 : 0, dots: p.dots.length,
+      bf: p.buffK && p.buffT > t ? p.buffK : '', bt: p.buffK && p.buffT > t ? Math.round(p.buffT - t) : 0
     };
     var others = [];
     this.players.forEach(function (o) {
@@ -663,6 +777,7 @@
       for (i = 0; i < this.drops.length; i++) { var d = this.drops[i]; if (diet.indexOf(d.k) >= 0 && Math.abs(d.x - ax) < 70 && Math.abs(d.z - az) < 70) fs.push([d.x, d.y, d.z, d.k]); }
       if (diet.indexOf('plant') >= 0) for (i = 0; i < this.plants.length; i++) { var pl = this.plants[i]; if (pl.ready <= t && Math.abs(pl.x - ax) < 70 && Math.abs(pl.z - az) < 70) fs.push([pl.x, pl.y, pl.z, 'plant']); }
       msg.f = fs;
+      if (this.secrets) { var sc = []; for (i = 0; i < this.secrets.length; i++) { var q2 = this.secrets[i]; if (q2.ready <= t && Math.abs(q2.x - ax) < 70 && Math.abs(q2.z - az) < 70) sc.push([q2.id, q2.k === 'chest' ? 0 : q2.k === 'pearl' ? 2 : 1, q2.x, q2.y, q2.z]); } msg.sc = sc; }
     }
     if (this.events.length) msg.ev = this.events;
     this.extraSnapshot(p, msg);
@@ -729,6 +844,7 @@
     // игрок сам выбирает мир и тип: при входе активный тип профиля меняется (у каждого типа свой прогресс)
     if (typeof o.cls === 'string' && o.cls !== pr.cls) {
       if (!CF.CLASSES[o.cls]) return { error: 'bad_type' };
+      if (!Sim.typeUnlocked(pr, o.cls)) return { error: 'type_locked' };
       Sim.switchType(pr, o.cls);
     }
     var biome = CF.ALL_BIOMES.indexOf(o.biome) >= 0 ? o.biome : (CF.ALL_BIOMES.indexOf(pr.biome) >= 0 && Sim.typeFits(pr.cls, pr.biome) ? pr.biome : Sim.homeBiome(pr)), mode = o.mode || 'public', room = null;

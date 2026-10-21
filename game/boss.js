@@ -223,7 +223,8 @@
       var xp = Math.round(CF.xpForLevel(req) * 1.5 * b.def.xp * (first ? 1 : 0.2)), coins = first ? 150 + idx * 80 : 40;
       if (first) { pr.kings.push(self.biome); pr.kingAt[self.biome] = Date.now(); pr.stats.bosses = (pr.stats.bosses | 0) + 1; }
       else pr.stats.bosses = (pr.stats.bosses | 0) + 1;
-      self.gainXp(p, xp); self.gainCoins(p, coins);
+      self.gainXp(p, xp); self.gainCoins(p, coins); self.questProgress(p, 'boss', 1); self.dropLoot(p, first);
+      if (first || Sim.isLord(pr)) p.shield = Math.max(p.shield || 0, self.t + 9);   // на время ролика коронации игрока не трогают
       var lord = Sim.isLord(pr);
       self.events.push(['king', p.id, self.biome, first ? 1 : 0, lord ? 1 : 0, xp, coins]);
       self.broadcast({ t: 'upd', p: { id: p.id, king: true, lord: lord } });
@@ -286,7 +287,8 @@
     }
   };
   RP.slowFor = function (p) {
-    var k = p.slowT > this.t ? 0.65 : 1, hz = this.W.cfg.hazard;
+    var k = (p.slowT > this.t ? 0.65 : 1) * (p.ultT > this.t ? p.ultSpd : 1), hz = this.W.cfg.hazard;
+    if (p.buffK === 'speed' && p.buffT > this.t) k *= 1.2;
     if (this.mode === 'duel') return k;
     if ((hz === 'cold' || hz === 'heat') && this.wx > 0.5) k *= 1 - 0.18 * this.wx * (1 - p.stats.resist * 0.5);
     return k;

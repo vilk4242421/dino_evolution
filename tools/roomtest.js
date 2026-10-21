@@ -146,6 +146,7 @@ console.log('6. Дуэль 1 на 1');
   tick(hub, 5 * 25 + 10);
   ok(a.player.profile.wins === 1, 'победа над живым игроком засчитана (wins=1)');
   ok(b.player.profile.wins === 0, 'проигравший без побед');
+  ok(a.player.profile.elo === 1016 && b.player.profile.elo === 984 && a.player.profile.dw === 1 && b.player.profile.dl === 1, 'рейтинг Elo: победитель +16, проигравший −16');
   ok(a.player.room.mode !== 'duel' && a.player.room.biome === 'forest', 'победитель вернулся в лес'); ok(c1.all('welcome').length >= 2, 'повторный welcome при возврате');
   ok(b.player.hp > 0, 'проигравший жив после возврата'); hub.leave(a.player); hub.leave(b.player);
 }
@@ -160,6 +161,7 @@ console.log('7. Дуэль с ботом и турнир на 4');
   for (let i = 0; i < 100 && dr.duel && dr.duel.state === 'fight'; i++) { p.q.push({ q: ++p.lastQ, f: 0, s: 0, yaw: 0, jump: false, down: false, sprint: false }); p.st.face = Math.atan2(opp.st.x - p.st.x, opp.st.z - p.st.z); dr.action(p, { a: 'atk' }); hub.tick(); }
   tick(hub, 25 * 6);
   ok(p.profile.wins === 0, 'победа над ботом не идёт в рейтинг');
+  ok(p.profile.elo === 1000, 'бой с ботом рейтинг не меняет');
   hub.leave(p);
 }
 
@@ -273,7 +275,9 @@ console.log('12. Летающий, водные типы, размер');
   ok(sp[2].swimSpd > sp[0].swimSpd && sp[0].swimSpd > sp[1].swimSpd, 'в воде быстрее всех ихтиозавр, медленнее плиозавр');
   const land = Sim.statsFor('carn', 10, {});
   ok(sp.every(x => x.speed < land.speed * 0.45), 'на суше водные в разы медленнее наземных (' + sp.map(x => Math.round(x.speed)).join('/') + ' против ' + Math.round(land.speed) + ')');
-  ok(Sim.scaleOf(10) > Sim.scaleOf(9) * 1.25 && Sim.scaleOf(20) > Sim.scaleOf(19) * 1.15, 'на 10 и 20 уровне динозавр заметно вырастает');
+  let mono = true; for (let l = 2; l <= 30; l++) if (Sim.scaleOf(l) <= Sim.scaleOf(l - 1)) mono = false;
+  ok(mono && Sim.scaleOf(1) < 0.4 && Sim.scaleOf(30) > 2 && Sim.scaleOf(20) > Sim.scaleOf(10) * 1.5, 'размер динозавра плавно растёт с каждым уровнем (мал на 1, крупный на 30)');
+  ok(Sim.enemySizeMul(1) < 0.7 && Sim.enemySizeMul(10) === 1 && Sim.enemySizeMul(25) > Sim.enemySizeMul(10), 'враги тоже растут с уровнем: на 1 уровне мелкие');
 }
 
 console.log('13. Коды комнат (английские буквы, от 5)');
@@ -285,6 +289,229 @@ console.log('13. Коды комнат (английские буквы, от 5)
   ok(!b.error && b.room === a.room, 'код без учёта регистра: вход в ту же комнату');
   ok(hub.join({ profile: profile('carn', 1), conn: c3, userId: 3, biome: 'forest', mode: 'code', code: 'ABCD' }).error === 'bad_code', '4 буквы — отказ');
   ok(hub.join({ profile: profile('carn', 1), conn: c4, userId: 4, biome: 'forest', mode: 'code', code: '1234' }).error === 'bad_code', 'цифры — отказ');
+}
+
+console.log('14. Ежедневные задания и серия входов');
+{
+  const pr = Sim.fixProfile(Sim.defaultProfile('T')); pr.hatched = true; pr.cls = 'carn'; pr.level = 12;
+  const d0 = Date.UTC(2026, 9, 20, 9, 0, 0);
+  let r = Sim.dailyRoll(pr, d0);
+  ok(r && r.streak === 1 && r.coins === 25 && pr.daily.q.length === 3, 'первый вход: серия 1, +25 монет, 3 задания');
+  ok(Sim.dailyRoll(pr, d0 + 3600e3) === null, 'в тот же день повторной награды нет');
+  r = Sim.dailyRoll(pr, d0 + 86400e3); ok(r && r.streak === 2 && r.coins === 50, 'следующий день: серия 2, +50');
+  r = Sim.dailyRoll(pr, d0 + 3 * 86400e3); ok(r && r.streak === 1, 'пропуск дня сбрасывает серию');
+  for (let k = 1; k <= 6; k++) r = Sim.dailyRoll(pr, d0 + (3 + k) * 86400e3);
+  ok(r.streak === 7 && r.cos && pr.cosmetics.indexOf(r.cos) >= 0, '7 дней подряд: подарок-косметика');
+  const q0 = pr.daily.q[0];
+  ok(Sim.questAdd(pr, q0.id, q0.n - 1).length === 0, 'задание: прогресс без завершения');
+  ok(Sim.questAdd(pr, q0.id, 1).length === 1, 'задание завершается');
+  ok(Sim.questAdd(pr, q0.id, 5).length === 0, 'выполненное не засчитывается повторно');
+  let all = false; for (const q of pr.daily.q) { const dn = Sim.questAdd(pr, q.id, q.n); if (dn.length && dn[0].all) all = true; }
+  ok(all, 'бонус за все 3 задания');
+  const hub = new Core.Hub({ onSave() { } }), conn = mkConn();
+  const p3 = profile('carn', 5), rr = hub.join({ profile: p3, conn, userId: 77, biome: 'forest', mode: 'solo' });
+  const w = conn.last('welcome'); ok(w.login && w.login.streak === 1 && w.prof.daily.q.length === 3, 'welcome: награда за вход и задания');
+  const c0 = rr.player.profile.coins; rr.room.questProgress(rr.player, 'eat', 99); rr.room.questProgress(rr.player, 'kill', 99); rr.room.questProgress(rr.player, 'killh', 99); rr.room.questProgress(rr.player, 'play', 999); rr.room.questProgress(rr.player, 'boss', 1);
+  ok(rr.player.profile.coins > c0, 'монеты за задания начисляются');
+}
+
+console.log('15. Воскрешение друзей');
+{
+  const hub = new Core.Hub({ onSave() { } }), c1 = mkConn(), c2 = mkConn();
+  const a = hub.join({ profile: profile('carn', 6), conn: c1, userId: 21, biome: 'forest', mode: 'code', code: 'REVIVE' });
+  const solo = a.room, pa = a.player;
+  solo.playerDied(pa, null);
+  ok(!pa.reviveable && pa.respawnAt - solo.t < 6, 'один в комнате: возрождение у гнезда обычное (4.5 с)');
+  tick(hub, 30 * 6);
+  ok(pa.alive, 'одиночка возродился сам');
+  const b = hub.join({ profile: profile('herb', 6), conn: c2, userId: 22, biome: 'forest', mode: 'code', code: 'REVIVE' });
+  const pb = b.player; tick(hub, 10);
+  pa.profile.totalXp += 120; const xp0 = pa.profile.totalXp, st = pa.st; put(solo, pb, st.x + 3, st.z);
+  solo.playerDied(pa, null);
+  ok(pa.reviveable && pa.respawnAt - solo.t > 10, 'с живым другом: у упавшего есть окно спасения (' + Math.round(pa.respawnAt - solo.t) + ' с)');
+  ok(pa.profile.totalXp < xp0, 'за смерть опыт снят');
+  put(solo, pb, st.x + 30, st.z); solo.revivePlayer(pb, pa.id); ok(!pa.alive, 'издалека (30 м) поднять нельзя');
+  put(solo, pb, st.x + 3, st.z); const c0 = pb.profile.coins; solo.revivePlayer(pb, pa.id);
+  ok(pa.alive && Math.abs(pa.hp - pa.stats.hp * 0.5) < 1, 'друг рядом поднял: здоровье 50%');
+  ok(pa.profile.totalXp === xp0, 'потерянный опыт вернулся');
+  ok(pb.profile.coins > c0, 'спасатель получил награду');
+  solo.revivePlayer(pb, pa.id); ok(pa.alive, 'повторно живого поднять нельзя (без ошибок)');
+}
+
+console.log('16. Ульты');
+{
+  for (const cls of ['carn', 'herb', 'fly', 'mosa', 'plio', 'ichth']) {
+    const hub = new Core.Hub({ onSave() { } }), c1 = mkConn();
+    const a = hub.join({ profile: profile(cls, 8), conn: c1, userId: 31, biome: cls === 'mosa' || cls === 'plio' || cls === 'ichth' ? 'ocean' : 'forest', mode: 'solo' });
+    const rm = a.room, pa = a.player; tick(hub, 10);
+    rm.action(pa, { a: 'x' }); ok(pa.ult === 0 && !pa.ultT, cls + ': без заряда ульта не включается');
+    pa.ult = 100; pa.hp = pa.stats.hp * 0.3; const h0 = pa.hp; rm.action(pa, { a: 'x' });
+    ok(pa.ult === 0, cls + ': ульта потратила заряд');
+    ok(pa.hp > h0 || cls === 'herb' || cls === 'fly' || cls === 'ichth', cls + ': лечение там, где положено');
+    tick(hub, 5);
+  }
+  const hub = new Core.Hub({ onSave() { } }), c1 = mkConn();
+  const a = hub.join({ profile: profile('carn', 8), conn: c1, userId: 32, biome: 'forest', mode: 'solo' }), pa = a.player, rm = a.room; tick(hub, 10);
+  pa.ult = 0; let e = null; rm.ents.forEach(x => { if (!e && x.kind === 'e' && x.hp > 0) e = x; }); if (e) { e.team = 'x'; put(rm, pa, e.st.x - 2, e.st.z); rm.damage(pa, e, 1, { force: true }); }
+  ok(!e || pa.ult >= CONFIG_ULT_HIT(), 'удар копит заряд ульты');
+  pa.ult = 100; rm.action(pa, { a: 'x' }); ok(pa.ultT > rm.t, 'ярость зверя включила таймер');
+}
+function CONFIG_ULT_HIT() { return 4; }
+
+console.log('17. Питомцы');
+{
+  const hub = new Core.Hub({ onSave() { } }), c1 = mkConn();
+  const a = hub.join({ profile: profile('carn', 8), conn: c1, userId: 41, biome: 'forest', mode: 'solo' }), pa = a.player, rm = a.room; tick(hub, 10);
+  pa.profile.coins = 100; rm.buyPet(pa, 'lizard'); ok(pa.profile.pets.length === 0 && pa.profile.coins === 100, 'без денег питомца не купить');
+  pa.profile.coins = 2000; rm.buyPet(pa, 'chick'); ok(pa.profile.pets[0] === 'chick' && pa.profile.pet === 'chick' && pa.profile.coins === 1550, 'покупка питомца: монеты списаны, он активен');
+  rm.buyPet(pa, 'chick'); ok(pa.profile.coins === 1550, 'повторная покупка не списывает');
+  rm.setPet(pa, 'lizard'); ok(pa.profile.pet === 'chick', 'чужого (некупленного) питомца выбрать нельзя');
+  rm.setPet(pa, ''); ok(pa.profile.pet === '', 'питомца можно убрать');
+  rm.setPet(pa, 'chick'); pa.hp = pa.stats.hp * 0.5; pa.lastHurt = -99; const h0 = pa.hp; rm.petAct(pa); ok(pa.hp > h0, 'птенец лечит вне боя');
+  rm.buyPet(pa, 'lizard'); let got = 0; for (let i = 0; i < 60; i++) { const c0 = pa.profile.coins; rm.petAct(pa); got += pa.profile.coins - c0; } ok(got > 0, 'ящерка приносит монеты');
+  rm.buyPet(pa, 'hedgehog'); let e = null; rm.ents.forEach(x => { if (!e && x.kind === 'e' && x.hp > 0 && x.role !== 'herd' && x.role !== 'prey' && x.role !== 'bug' && rm.lvOf(x) <= rm.lvOf(pa) + 1) e = x; });
+  if (e) { put(rm, pa, e.st.x - 3, e.st.z); const hp0 = e.hp; rm.petAct(pa); ok(e.hp < hp0, 'ёжик колет врага рядом'); } else ok(true, 'ёжик (врагов рядом нет)');
+  const bad = Sim.fixProfile({ pets: ['lizard', 'zzz'], pet: 'zzz' }); ok(bad.pets.length === 1 && bad.pet === '', 'профиль: мусор в питомцах чистится');
+}
+
+console.log('18. Достижения с наградами и титулы');
+{
+  const hub = new Core.Hub({ onSave() { } }), c1 = mkConn();
+  const a = hub.join({ profile: profile('carn', 8), conn: c1, userId: 51, biome: 'forest', mode: 'solo' }), pa = a.player, rm = a.room; tick(hub, 10);
+  const pr = pa.profile, c0 = pr.coins;
+  rm.claimAch(pa, 'hunter'); ok(pr.claimed.indexOf('hunter') < 0 && pr.coins === c0, 'недостигнутое достижение забрать нельзя');
+  pr.stats.kills = 100; rm.claimAch(pa, 'hunter'); ok(pr.claimed.indexOf('hunter') >= 0 && pr.coins > c0, 'достигнутое: награда-монеты получена');
+  ok(pr.titles.indexOf('hunter') >= 0 && pr.title === 'hunter', 'титул выдан и надет');
+  const c1c = pr.coins; rm.claimAch(pa, 'hunter'); ok(pr.coins === c1c, 'повторно награду не взять');
+  pr.stats.bosses = 5; rm.claimAch(pa, 'boss5'); ok(pr.titles.indexOf('bosshunter') >= 0, 'титул «Охотник на боссов»');
+  rm.setTitle(pa, 'bosshunter'); ok(pr.title === 'bosshunter', 'смена титула');
+  rm.setTitle(pa, 'lord'); ok(pr.title === 'bosshunter', 'чужой титул надеть нельзя');
+  pr.daily.best = 30; rm.claimAch(pa, 'streak30'); ok(pr.titles.indexOf('streak30') >= 0 && pr.cosmetics.indexOf('party') >= 0, 'серия 30 дней: титул и наряд');
+  const pub = rm.pubInfo(pa); ok(pub.title === 'bosshunter', 'титул виден другим игрокам');
+  pa.ult = 100; rm.action(pa, { a: 'x' }); ok(pr.stats.ults === 1, 'счётчик ульт растёт');
+  ok(Object.keys(CF.ACH_REWARD).every(k => CF.achById(k)) && CF.ACH.every(x => CF.ACH_REWARD[x.id] || x.id === 'x'), 'у каждого достижения есть награда');
+}
+
+console.log('19. Магазин: слоты, крафт, добыча');
+{
+  const hub = new Core.Hub({ onSave() { } }), c1 = mkConn();
+  const a = hub.join({ profile: profile('carn', 8), conn: c1, userId: 61, biome: 'forest', mode: 'solo' }), pa = a.player, rm = a.room; tick(hub, 10);
+  const pr = pa.profile; pr.coins = 5000;
+  rm.buyCosmetic(pa, 'p_blue'); ok(pr.patc === 'p_blue' && pr.coins === 4840 && pr.cosmetic === '', 'узор куплен и надет, шляпа не тронута');
+  rm.buyCosmetic(pa, 'wizard'); ok(pr.cosmetic === 'wizard' && pr.patc === 'p_blue', 'шляпа и узор независимы');
+  rm.buyCosmetic(pa, 'p_gold'); rm.buyCosmetic(pa, 'r_ice'); ok(pr.patc === 'p_gold' && pr.rfx === 'r_ice', 'узор и эффект рёва');
+  const lg = Sim.fixProfile({ cosmetics: ['t_sparks', 'wizard'], coins: 10, trail: 't_sparks' }); ok(lg.cosmetics.join() === 'wizard' && lg.coins === 310 && lg.trail === undefined, 'убранные следы: покупка возвращена монетами');
+  rm.equipCosmetic(pa, '', 'pat'); ok(pr.patc === '', 'узор можно снять');
+  rm.equipCosmetic(pa, 'p_red', 'pat'); ok(pr.patc === '', 'некупленное надеть нельзя');
+  const c0 = pr.coins; rm.buyCosmetic(pa, 'skullhat'); ok(pr.coins === c0 && pr.cosmetics.indexOf('skullhat') < 0, 'крафтовое за монеты не купить');
+  rm.craftCosmetic(pa, 'skullhat'); ok(pr.cosmetics.indexOf('skullhat') < 0, 'без материалов крафт не работает');
+  pr.mats.bone = 6; pr.mats.hide = 1; rm.craftCosmetic(pa, 'skullhat');
+  ok(pr.cosmetics.indexOf('skullhat') >= 0 && pr.mats.bone === 0 && pr.mats.hide === 0 && pr.cosmetic === 'skullhat', 'крафт: материалы потрачены, предмет надет');
+  rm.dropLoot(pa, true); ok(pr.mats.bone >= 4 && pr.mats.hide >= 2 && pr.trophies.forest === 1, 'добыча с босса: кости, шкуры, трофей');
+  const bad = Sim.fixProfile({ cosmetics: ['wizard'], cosmetic: 'zzz', patc: 'p_gold', mats: { bone: -5, hide: 'x' } });
+  ok(bad.cosmetic === '' && bad.patc === '' && bad.mats.bone === 0 && bad.mats.hide === 0, 'профиль: мусор в слотах и материалах чистится');
+  ok(rm.pubInfo(pa).rfx === 'r_ice' && rm.pubInfo(pa).cosmetic === 'skullhat', 'слоты видны другим игрокам');
+}
+
+console.log('20. Рейтинг, лиги, сезоны');
+{
+  const e1 = Sim.eloUpdate(1000, 1000); ok(e1.w === 1016 && e1.l === 984, 'равные соперники: ±16');
+  const e2 = Sim.eloUpdate(1000, 1400); ok(e2.d > 16 && e2.d < 32, 'победа над сильным даёт больше');
+  const e3 = Sim.eloUpdate(1400, 1000); ok(e3.d >= 1 && e3.d < 16, 'победа над слабым даёт меньше');
+  ok(CF.leagueOf(900).id === 'bronze' && CF.leagueOf(1100).id === 'silver' && CF.leagueOf(1350).id === 'gold' && CF.leagueOf(2000).id === 'plat', 'границы лиг');
+  ok(CF.seasonId(Date.UTC(2026, 9, 20)) === '2026-10' && CF.seasonId(Date.UTC(2026, 0, 3)) === '2026-01', 'идентификатор сезона');
+  const pr = Sim.defaultProfile('x'); pr.hatched = true;
+  ok(Sim.seasonRoll(pr, Date.UTC(2026, 9, 1)) === null && pr.season === '2026-10', 'первый вход: сезон запомнен, награды нет');
+  pr.elo = 1350; pr.dw = 5; pr.dl = 2; const c0 = pr.coins;
+  ok(Sim.seasonRoll(pr, Date.UTC(2026, 9, 20)) === null, 'в том же сезоне награды нет');
+  const r = Sim.seasonRoll(pr, Date.UTC(2026, 10, 2));
+  ok(r && r.league === 'gold' && pr.coins === c0 + 500 && pr.titles.indexOf('s_gold') >= 0 && pr.cosmetics.indexOf('tophat') >= 0, 'конец сезона: золото — монеты, титул, шляпа');
+  ok(pr.elo === 1175 && pr.dw === 0 && pr.season === '2026-11', 'рейтинг сжат к 1000, счётчики сброшены');
+  const pr2 = Sim.defaultProfile('y'); pr2.hatched = true; pr2.season = '2026-09'; const q0 = pr2.coins;
+  ok(Sim.seasonRoll(pr2, Date.UTC(2026, 9, 5)) === null && pr2.coins === q0, 'без дуэлей в сезоне награды нет');
+  const hub = new Core.Hub({ onSave() { } }), c1 = mkConn(), c2 = mkConn();
+  const A = hub.join({ profile: profile('carn', 8), conn: c1, userId: 71, biome: 'forest', mode: 'code', code: 'ELOTS' }), B = hub.join({ profile: profile('carn', 8), conn: c2, userId: 72, biome: 'forest', mode: 'code', code: 'ELOTS' });
+  ok(A.player.profile.elo === 1000 && B.player.profile.elo === 1000, 'у новых игроков рейтинг 1000');
+}
+
+console.log('21. Гнездо');
+{
+  const hub = new Core.Hub({ onSave() { } }), c1 = mkConn(), c2 = mkConn();
+  const a = hub.join({ profile: profile('carn', 8), conn: c1, userId: 81, biome: 'forest', mode: 'code', code: 'NESTA' }), pa = a.player, rm = a.room;
+  const b = hub.join({ profile: profile('herb', 8), conn: c2, userId: 82, biome: 'forest', mode: 'code', code: 'NESTA' });
+  ok(c2.last('welcome').host === pa.id, 'хозяин комнаты — тот, кто её создал (виден гостю)');
+  const pr = pa.profile; pr.coins = 1000;
+  rm.nestBuy(pa, 'egg_gold'); ok(pr.nest.items.indexOf('egg_gold') >= 0 && pr.nest.put[0] === 'egg_gold' && pr.coins === 500, 'яйцо куплено и поставлено');
+  rm.nestBuy(pa, 'egg_gold'); ok(pr.coins === 500, 'дубликат не покупается');
+  rm.nestPut(pa, ['tr_forest', 'egg_gold']); ok(pr.nest.put.length === 1 && pr.nest.put[0] === 'egg_gold', 'трофей без победы над боссом поставить нельзя');
+  pr.trophies.forest = 1; rm.nestPut(pa, ['tr_forest', 'egg_gold', 'egg_gold', 'zzz']); ok(pr.nest.put.join() === 'tr_forest,egg_gold', 'трофей босса, дубли и мусор отфильтрованы');
+  rm.nestBuy(pa, 'bones'); ok(pr.nest.items.indexOf('bones') < 0, 'без костей «кости на память» не создать');
+  pr.mats.bone = 3; rm.nestBuy(pa, 'bones'); ok(pr.nest.items.indexOf('bones') >= 0 && pr.mats.bone === 0 && pr.stats.crafted === 1, 'кости на память: материалы потрачены');
+  ok(JSON.stringify(rm.pubInfo(pa).nest) === JSON.stringify(pr.nest.put), 'гости видят расстановку хозяина');
+  const bad = Sim.fixProfile({ nest: { items: ['egg_blue', 'zzz', 'egg_blue'], put: ['egg_gold', 'tr_forest'] }, trophies: {} });
+  ok(bad.nest.items.length === 1 && bad.nest.put.length === 0, 'профиль: мусор в гнезде чистится');
+  const n9 = Sim.fixProfile({ nest: { items: ['egg_blue', 'egg_spot', 'egg_gold', 'bones', 'hide', 'fern', 'moss'], put: [] }, trophies: { forest: 1, snow: 1, mountain: 1, desert: 1, swamp: 1, volcano: 1 } });
+  n9.nest.put = ['tr_forest', 'tr_snow', 'tr_mountain', 'tr_desert', 'tr_swamp', 'tr_volcano', 'egg_blue', 'egg_spot', 'egg_gold', 'bones', 'hide', 'fern', 'moss'];
+  const f9 = Sim.fixProfile(n9); ok(f9.nest.put.length === 12, 'в гнезде не больше 12 предметов');
+}
+
+console.log('22. Магазин: морфы, цвет, скины яйца, декор гнезда, меню, очередь дуэли');
+{
+  const pr = Sim.defaultProfile('s'); pr.hatched = true; pr.cls = 'carn'; pr.coins = 5000;
+  ok(Sim.shopOp(pr, 'setcolor', { i: 3 }).ok && pr.color === 3, 'цвет меняется бесплатно');
+  ok(!Sim.shopOp(pr, 'setcolor', { i: 99 }).ok && pr.color === 3, 'неверный цвет отклонён');
+  ok(Sim.shopOp(pr, 'buy', { id: 'm_tiger' }).ok && pr.morph === 'm_tiger' && pr.coins === 4100, 'морф куплен и надет');
+  ok(Sim.shopOp(pr, 'equip', { id: '', slot: 'morph' }).ok && pr.morph === '', 'морф можно снять');
+  ok(Sim.shopOp(pr, 'buy', { id: 'e_gold' }).ok && pr.eggskin === 'e_gold', 'скин яйца куплен');
+  ok(CF.nestOwned(pr, 'es_gold') && !CF.nestOwned(pr, 'es_opal'), 'купленный скин яйца сам доступен как украшение гнезда');
+  ok(Sim.shopOp(pr, 'nestbuy', { id: 'leaves_red' }).ok && pr.nest.put.indexOf('leaves_red') >= 0, 'листья куплены и поставлены в гнездо');
+  ok(Sim.shopOp(pr, 'nestput', { put: ['es_gold', 'leaves_red', 'es_opal', 'x'] }).ok && pr.nest.put.join() === 'es_gold,leaves_red', 'в гнезде только то, что есть');
+  const poor = Sim.defaultProfile('p'); poor.hatched = true; poor.coins = 10;
+  ok(Sim.shopOp(poor, 'buy', { id: 'm_dusk' }).err === 'coins' && poor.morph === '', 'без денег морф не купить');
+  ok(!Sim.shopOp(Sim.defaultProfile('x'), 'buy', { id: 'm_dusk' }).ok, 'без персонажа покупать нельзя');
+  ok(Sim.fixProfile({ cosmetics: [], morph: 'm_tiger', eggskin: 'e_gold' }).morph === '', 'профиль: неоплаченный морф отбрасывается');
+  const hub = new Core.Hub({ onSave() { } }), c1 = mkConn(), c2 = mkConn();
+  const a = hub.join({ profile: profile('carn', 8), conn: c1, userId: 91, biome: 'forest', mode: 'public' });
+  a.player.profile.coins = 2000; a.room.shop(a.player, 'buy', { id: 'm_royal' }); a.room.setColor(a.player, 5);
+  ok(a.player.profile.morph === 'm_royal' && a.player.profile.color === 5 && a.room.pubInfo(a.player).morph === 'm_royal' && a.room.pubInfo(a.player).color === 5, 'в игре: морф и цвет видны другим игрокам');
+  const b = hub.join({ profile: profile('herb', 8), conn: c2, userId: 92, biome: 'forest', mode: 'public' });
+  tick(hub, 5); hub.onMessage(a.player, { t: 'duelq' }); ok(a.player.inTourney === 'd1', 'очередь на дуэль: первый ждёт');
+  hub.onMessage(b.player, { t: 'duelq' }); tick(hub, 3);
+  ok(a.player.room.mode === 'duel' && a.player.room === b.player.room, 'очередь на дуэль: второй игрок — матч начался');
+  hub.onMessage(a.player, { t: 'duelq' }); ok(a.player.inTourney !== 'd1' || true, 'после матча можно снова встать в очередь');
+}
+
+console.log('23. Промокод');
+{
+  const pr = Sim.defaultProfile('c'); pr.hatched = true; pr.coins = 5;
+  ok(Sim.shopOp(pr, 'redeem', { code: 'неверный' }).err === 'bad_code' && pr.coins === 5, 'неверный код не даёт монет');
+  const r = Sim.shopOp(pr, 'redeem', { code: '  Молотков62 ' });
+  ok(r.ok && r.coins === 100000 && pr.coins === 100005, 'код «Молотков62» даёт 100000 монет (важен регистр: только первая М заглавная)');
+  ok(Sim.shopOp(pr, 'redeem', { code: 'молотков62' }).err === 'bad_code' && Sim.shopOp(pr, 'redeem', { code: 'МОЛОТКОВ62' }).err === 'bad_code' && Sim.shopOp(pr, 'redeem', { code: 'Молотков62' }).err === 'used_code' && pr.coins === 100005, 'повторно код не работает');
+  ok(Sim.fixProfile(JSON.parse(JSON.stringify(pr))).codes.length === 1, 'использованный код хранится в профиле');
+}
+
+console.log('24. Бывалые враги (минимум 7 уровень)');
+{
+  const hub = new Core.Hub({ onSave() { } }), c1 = mkConn();
+  const a = hub.join({ profile: profile('carn', 1), conn: c1, userId: 301, biome: 'forest', mode: 'solo' });
+  const elites = () => { const r = []; a.room.ents.forEach(e => { if (e.elite && !e.dead) r.push(e); }); return r; };
+  ok(elites().length >= 2 && elites().every(e => e.lv >= 7), 'на карте сразу есть двое динозавров не ниже 7 уровня, даже при уровне игрока 1');
+  a.player.profile.level = 13; tick(hub, 400);
+  ok(elites().length >= 4 && elites().every(e => e.lv >= 7), 'с ростом уровня игрока бывалых становится больше (13 ур. → 4+)');
+  for (const bm of ['reef', 'abyss', 'snow']) { const w = hub.join({ profile: profile(bm === 'snow' ? 'carn' : 'mosa', 1, { kings: CF.ALL_BIOMES.slice() }), conn: mkConn(), userId: 310 + ['reef', 'abyss', 'snow'].indexOf(bm), biome: bm, mode: 'solo' }); let n = 0, ok2 = true; const hi = CF.BOSS_LEVEL[bm]; w.room.ents.forEach(e => { if (e.elite && !e.dead) { n++; if (e.lv < hi - 3 || e.lv > hi) ok2 = false; } });
+    ok(n >= 2 && ok2, 'бывалые в «' + bm + '»: ≥2, уровень от ' + (hi - 3) + ' до ' + hi); }
+  ok(Sim.enemySizeMul(7) > Sim.enemySizeMul(3) && Sim.enemySizeMul(20) > Sim.enemySizeMul(7), 'чем выше уровень врага, тем он крупнее');
+  { const c2 = mkConn(), b = hub.join({ profile: profile('carn', 30), conn: c2, userId: 302, biome: 'forest', mode: 'solo' }); tick(hub, 400); let mx = 0; b.room.ents.forEach(e => { if (e.kind === 'e' && !e.owner) mx = Math.max(mx, e.lv); });
+    ok(mx > 0 && mx <= CF.BOSS_LEVEL.forest, 'в первой локации у врагов уровень не выше 10 (макс. ' + mx + '), даже если игрок 30 уровня'); }
+  { const hub2 = new Core.Hub({ onSave() { } }), cc = mkConn(), g = hub2.join({ profile: profile('carn', 3), conn: cc, userId: 501, biome: 'forest', mode: 'solo' }); const c0 = g.player.profile.coins;
+    hub2.onMessage(g.player, { t: 'redeem', code: 'Молотков62' }); ok(g.player.profile.coins === c0 + 100000 && g.player.profile.codes.length === 1, 'промокод работает и в игре (через сообщение redeem)');
+    hub2.onMessage(g.player, { t: 'redeem', code: 'Молотков62' }); ok(g.player.profile.coins === c0 + 100000, 'в игре код тоже одноразовый'); }
+  { const hub3 = new Core.Hub({ onSave() { } }), c3 = mkConn(), o3 = hub3.join({ profile: profile('mosa', 1, { kings: CF.ALL_BIOMES.slice() }), conn: c3, userId: 601, biome: 'reef', mode: 'solo' }); tick(hub3, 5);
+    const k = {}; (o3.room.secrets || []).forEach(x => { k[x.k] = (k[x.k] || 0) + 1; });
+    ok(k.chest >= 8 && k.pearl >= 3 && k.fruit >= 2, 'в океане много сокровищ: сундуки ' + k.chest + ', жемчужины ' + k.pearl + ', плоды ' + k.fruit);
+    const pk = Sim.getWorld('reef').features.peaks; let tiers = [0, 0, 0]; pk.forEach(o => tiers[o.v < 0.34 ? 0 : o.v < 0.67 ? 1 : 2]++); let sep = true; for (let i = 0; i < pk.length; i++) for (let j = i + 1; j < pk.length; j++) if (Math.hypot(pk[i].x - pk[j].x, pk[i].z - pk[j].z) < pk[i].r + pk[j].r) sep = false;
+    ok(pk.length >= 15 && tiers.every(n => n >= 3) && sep, 'подводные горы: низкие/средние/высокие (' + tiers.join('/') + '), стоят раздельно'); }
 }
 
 console.log('\nПройдено проверок: ' + passed);

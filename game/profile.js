@@ -52,6 +52,11 @@ export async function logout() {
   try { if (state.token) await api('POST', '/api/logout', {}); } catch (e) { /* токен всё равно забываем */ }
   state.token = null; state.user = null; state.admin = false; state.online = false; state.profile = null; lsDel('token'); lsDel('user'); lsDel('admin'); loadLocal();
 }
+// покупки из главного меню (вне комнаты): онлайн — через сервер, одиночный профиль — прямо в браузере
+export async function shopMenu(online, op, a) {
+  if (online) { const d = await api('POST', '/api/shop', Object.assign({ op }, a || {})); setServerProfile(d.profile); return { ok: true, coins: d.coins | 0 }; }
+  const p = state.local, r = Sim.shopOp(p, op, a); if (r.ok) saveLocal(p); return r;
+}
 export async function refreshProfile() {
   if (!state.token) return;
   try { const d = await api('GET', '/api/me'); setServerProfile(d.profile); state.online = true; } catch (e) { if (e.status === 401) state.token = null; }
@@ -63,7 +68,7 @@ export async function createCharacter(fields, online, newRun) {
     setServerProfile(d.profile); return state.profile;
   }
   let p = loadLocal();
-  if (newRun) { const d = Sim.defaultProfile(fields.name); Object.assign(d, { wins: p.wins, kings: p.kings, kingAt: p.kingAt, cosmetics: p.cosmetics, cosmetic: p.cosmetic, coins: p.coins, stats: p.stats, playTime: p.playTime }); p = d; }
+  if (newRun) { const d = Sim.defaultProfile(fields.name); ['wins', 'kings', 'kingAt', 'cosmetics', 'cosmetic', 'pets', 'pet', 'claimed', 'codes', 'titles', 'title', 'patc', 'rfx', 'morph', 'eggskin', 'color', 'mats', 'trophies', 'elo', 'dw', 'dl', 'season', 'coins', 'stats', 'playTime', 'daily', 'tut', 'nest'].forEach(k => { if (p[k] !== undefined) d[k] = p[k]; }); p = d; }
   p.name = fields.name; p.color = fields.color; if (!p.hatched) { p.cls = fields.cls; p.hatched = fields.hatched; }
   saveLocal(p); return p;
 }

@@ -11,9 +11,10 @@
 
   // ---------------------------------------------------------------- комната: вход/выход игрока без пересоздания
   RP.welcomeMsg = function (p) {
+    var li = p.loginInfo || null; p.loginInfo = null; var se = p.seasonInfo || null; p.seasonInfo = null;
     return {
       t: 'welcome', id: p.id, proto: CF.PROTO, room: { id: this.id, biome: this.biome, code: this.code, mode: this.mode }, tick: CF.TICK_RATE,
-      me: Sim.exportState(p.st), prof: p.profile, tod: Core.r3(this.tod), players: this.roster(p.id), nest: this.W.nest, t0: r1(this.t)
+      me: Sim.exportState(p.st), prof: p.profile, tod: Core.r3(this.tod), players: this.roster(p.id), nest: this.W.nest, t0: r1(this.t), login: li, season: se, host: this.hostId || 0
     };
   };
   RP.adopt = function (p, o) {
@@ -41,6 +42,7 @@
     if (m.t === 'duel') this.hub.requestDuel(this, p, m.to | 0);
     else if (m.t === 'duelans') this.hub.answerDuel(this, p, m.from | 0, !!m.ok);
     else if (m.t === 'tourney') this.hub.joinTourney(p, m.code);
+    else if (m.t === 'duelq') this.hub.joinDuelQueue(p, false);
     else if (m.t === 'tourney_cancel') this.hub.dropFromQueues(p, true);
   };
   RP.duelFrozen = function (p) { return !!(this.duel && this.duel.state !== 'fight'); };
@@ -134,6 +136,11 @@
       pr.wins = (pr.wins | 0) + 1;
       var xp = 120 + w.profile.level * 12;
       duel.gainXp(w, xp); duel.gainCoins(w, 20 + (d.tourney ? 10 : 0));
+      var lo = w === A ? B : A, rt = Sim.eloUpdate(pr.elo, lo.profile.elo), wl0 = CF.leagueOf(pr.elo).id;
+      pr.elo = rt.w; lo.profile.elo = rt.l; pr.dw = (pr.dw | 0) + 1; lo.profile.dl = (lo.profile.dl | 0) + 1;
+      var up = CF.leagueOf(pr.elo).id !== wl0;
+      duel.sendTo(w, { t: 'elo', d: rt.d, elo: pr.elo, up: up ? 1 : 0 }); duel.sendTo(lo, { t: 'elo', d: -rt.d, elo: lo.profile.elo, up: 0 });
+      duel.markDirty(lo); duel.flushProfile(lo, true);
       duel.markDirty(w); duel.flushProfile(w, true);
       duel.events.push(['duelwin', w.id, xp]);
     }
@@ -200,8 +207,26 @@
     this.queueNotify(q);
     if (q.players.length >= 4) this.startTourney(q, false);
   };
+  // дуэль 1 на 1 из главного меню: очередь на живого соперника (рейтинговая), через 15 с — бот (без рейтинга)
+  HP.joinDuelQueue = function (p) {
+    var room = p.room;
+    if (!room || p.bot || p.inTourney || room.mode === 'duel' || room.mode === 'rush' || !p.alive) { if (room) room.sendTo(p, { t: 'err', m: 'duel_busy' }); return; }
+    if (room.mode === 'solo') { room.sendTo(p, { t: 'err', m: 'duel_busy' }); return; }
+    this.queues = this.queues || {};
+    var q = this.queues.d1 || (this.queues.d1 = { key: 'd1', players: [], t0: room.t, duel: true });
+    if (q.players.indexOf(p) >= 0) return;
+    var other = q.players.length ? q.players[0] : null;
+    if (other && other.room && other.alive && !other.gone) {
+      q.players.splice(0, 1); other.inTourney = false;
+      if (!q.players.length) delete this.queues.d1;
+      other.room.sendTo(other, { t: 'tq', n: 0 });
+      this.startMatch(other, p, {}); return;
+    }
+    q.players.push(p); p.inTourney = 'd1'; q.t0 = room.t;
+    this.queueNotify(q);
+  };
   HP.queueNotify = function (q) {
-    q.players.forEach(function (p) { if (p.room) p.room.sendTo(p, { t: 'tq', n: q.players.length, code: q.key === 'public' ? null : q.key }); });
+    q.players.forEach(function (p) { if (p.room) p.room.sendTo(p, { t: 'tq', n: q.players.length, duel: q.duel ? 1 : 0, code: q.key === 'public' || q.duel ? null : q.key }); });
   };
   HP.dropFromQueues = function (p, notify) {
     if (!this.queues || !p.inTourney) return;
@@ -269,6 +294,7 @@
       var queue = this.queues[k];
       if (!queue.players.length) { delete this.queues[k]; continue; }
       var host = queue.players[0].room;
+      if (queue.duel) continue;
       if (host && host.t - queue.t0 > 40) this.startTourney(queue, true);
     }
   };

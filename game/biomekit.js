@@ -820,13 +820,29 @@ def('sea', 'seagrass', 'Морская трава', 'Zostera marina', 0.35, r =>
   const B = new Builder(); tuft(B, r, { n: r.int(10, 16), h: r.range(0.8, 1.3), w: 0.04, bend: 0.5, base: C('#2a5a2a'), tip: C('#7aa850'), widthFn: W_STRAP, spread: 0.12, flutter: 1.0 }); return B.build(0.35, 1.5);
 }, { underwater: true });
 def('sea', 'branch_coral', 'Ветвистый коралл', 'Acropora', 0.0, r => {
-  const B = new Builder(), cols = [['#e8705a', '#ffc2a0'], ['#c85aa0', '#f2b2dc'], ['#e8a03a', '#ffe0a0']], [c0, c1] = r.pick(cols).map(C);
-  for (let k = 0; k < r.int(3, 5); k++) {
-    const a = r.range(0, 6.28);
-    branches(B, r, new V3(Math.cos(a) * 0.1, 0, Math.sin(a) * 0.1), new V3(Math.cos(a) * 0.5, 1, Math.sin(a) * 0.5), r.range(0.35, 0.5), 0.07, 0,
-      { depth: 3, kids: [3, 3, 2], start: [0.4, 0.4, 0.4], angle: [0.6, 0.55, 0.5], up: [0.4, 0.5, 0.5], ratio: [0.8, 0.75, 0.7], radRatio: 0.78, taper: 0.7, wob: 0.15, lift: 0.08, seg0: 8, segsPerUnit: 10,
-        colorFn: (c, lx, ly, lz) => mixC(c, c0, c1, ly / 1.2) },
-      (p, d) => B.add(sphereGeo(8, 6), { m: M(p, null, 0.035), color: c1 }));
+  // рогатый коралл: плотный куст тонких сужающихся веток от общего основания, светлые кончики
+  const B = new Builder(), cols = [['#c8705a', '#f6d8c0'], ['#b0609a', '#ecc8e0'], ['#d8a04a', '#fbeccb'], ['#9a8a72', '#e8e0cc']], [c0, c1] = r.pick(cols).map(C);
+  B.add(latheGeo([[0.34, 0], [0.32, 0.05], [0.2, 0.1], [0.08, 0.14], [0, 0.14]], 14), { color: c0.clone().multiplyScalar(0.7) });
+  for (let k = 0; k < r.int(6, 9); k++) {
+    const a = k * 2.4 + r.range(-0.3, 0.3), rr = r.range(0.04, 0.2);
+    branches(B, r, new V3(Math.cos(a) * rr, 0.05, Math.sin(a) * rr), new V3(Math.cos(a) * 0.55, 1, Math.sin(a) * 0.55), r.range(0.45, 0.7), 0.04, 0,
+      { depth: 3, kids: [3, 3, 2], start: [0.35, 0.35, 0.35], angle: [0.7, 0.6, 0.5], up: [0.5, 0.5, 0.5], ratio: [0.78, 0.72, 0.68], radRatio: 0.7, taper: 0.45, wob: 0.14, lift: 0.1, seg0: 7, segsPerUnit: 9,
+        colorFn: (c, lx, ly, lz) => mixC(c, c0, c1, Math.min(1, Math.max(0, ly / 1.1))) },
+      (p, d) => B.add(sphereGeo(6, 4), { m: M(p, null, 0.011), color: c1 }));
+  }
+  return B.build(0.0);
+}, { underwater: true });
+def('sea', 'table_coral', 'Столовый коралл', 'Acropora cytherea', 0.0, r => {
+  const B = new Builder(), [c0, c1] = r.pick([['#6a9a8a', '#c8e8d8'], ['#9a7ab8', '#e0d0f0'], ['#c88a5a', '#f4dcb8']]).map(C), R0 = r.range(0.45, 0.7);
+  B.add(latheGeo([[0.1, 0], [0.09, 0.12], [0.08, 0.2]], 8), { color: c0.clone().multiplyScalar(0.7) });
+  B.add(latheGeo([[0.0, 0.3], [R0 * 0.35, 0.31], [R0 * 0.8, 0.29], [R0, 0.24], [R0 * 0.97, 0.21], [R0 * 0.6, 0.2], [R0 * 0.2, 0.2], [0, 0.2]], 28, 22, 0.05), { colorFn: (c, lx, ly, lz) => mixC(c, c0, c1, Math.min(1, Math.hypot(lx, lz) / R0)) });
+  return B.build(0.0);
+}, { underwater: true });
+def('sea', 'tube_coral', 'Трубчатый коралл', 'Tubastraea', 0.0, r => {
+  const B = new Builder(), [c0, c1] = r.pick([['#d8a020', '#ffd860'], ['#c84a3a', '#ff9a78'], ['#4a7ab8', '#a0c8f0']]).map(C);
+  for (let k = 0; k < r.int(7, 12); k++) {
+    const a = r.range(0, 6.28), rr = r.range(0, 0.2), h = r.range(0.2, 0.5), t = r.range(0.05, 0.085), lean = r.range(0, 0.25), x = Math.cos(a) * rr, z = Math.sin(a) * rr;
+    B.add(latheGeo([[t * 1.1, 0], [t, h * 0.5], [t * 1.1, h], [t * 0.7, h + 0.01], [t * 0.5, h - 0.06]], 10), { m: M(new V3(x, 0, z), qE(Math.cos(a) * lean, 0, Math.sin(a) * lean), 1), colorFn: (c, lx, ly) => mixC(c, c0, c1, Math.min(1, ly / (h + 0.02))) });
   }
   return B.build(0.0);
 }, { underwater: true });

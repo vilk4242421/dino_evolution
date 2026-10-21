@@ -139,6 +139,7 @@ const sstep = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a)
 const hx = (h) => new THREE.Color(h);
 const mixHex = (a, b, t) => hx(a).lerp(hx(b), t).getHex();
 const mulHex = (a, f) => hx(a).multiplyScalar(f).getHex();
+let PATC = null;      // цвет узора из магазина (действует на время сборки модели)
 // палитра из одного цвета: спина темнее, бока — сам цвет, брюхо светлое, полосы — тёмные
 export function palette(color, o) {
   o = o || {};
@@ -146,26 +147,54 @@ export function palette(color, o) {
   const back = new THREE.Color().setHSL(hsl.h, Math.min(1, hsl.s * 0.9), Math.max(0.05, hsl.l * 0.52));
   const belly = hx(color).lerp(hx(o.bellyTo || 0xe6dcc2), o.bellyK === undefined ? 0.62 : o.bellyK);
   const stripe = new THREE.Color().setHSL(hsl.h, Math.min(1, hsl.s * 0.8), Math.max(0.03, hsl.l * 0.32));
-  return { back: o.back || back.getHex(), side: color, belly: o.belly || belly.getHex(), stripe: o.stripe || stripe.getHex(), ns: o.ns || 6 };
+  return { back: o.back || back.getHex(), side: color, belly: o.belly || belly.getHex(), stripe: PATC != null ? PATC : (o.stripe || stripe.getHex()), ns: o.ns || 6 };
 }
 // pat: {type:'stripes'|'spots'|'bands'|'none', amt, freq, from, to}
+let MORPH = null;     // морф из магазина (на время сборки модели): {c1?, c2 спина, c3? брюхо, pc узор, pat}
 function paint(L, pal, pat) {
-  const back = hx(pal.back), side = hx(pal.side), belly = hx(pal.belly), str = hx(pal.stripe), c = new THREE.Color();
+  let backH = pal.back, sideH = pal.side, bellyH = pal.belly, strH = pal.stripe;
+  if (MORPH) {
+    if (MORPH.c1 != null) sideH = MORPH.c1;
+    backH = MORPH.c2; bellyH = MORPH.c3 != null ? MORPH.c3 : mixHex(sideH, 0xffffff, 0.5);
+    if (PATC == null) strH = MORPH.pc != null ? MORPH.pc : mulHex(MORPH.c2, 0.6);
+    if (MORPH.pat) pat = Object.assign({ from: 0, to: 1 }, MORPH.pat);
+  }
+  const back = hx(backH), side = hx(sideH), belly = hx(bellyH), str = hx(strH), c = new THREE.Color(), alt = hx(MORPH && MORPH.c3 != null ? MORPH.c3 : bellyH);
   const pos = L.geo.attributes.position.array, n = pos.length / 3, col = new Float32Array(n * 3);
   const ns = pal.ns || 6; pat = pat || {};
   const amt = pat.amt === undefined ? 0.75 : pat.amt, from = pat.from === undefined ? 0 : pat.from, to = pat.to === undefined ? 0.8 : pat.to, fr = pat.freq || 9;
   for (let i = 0; i < n; i++) {
     const u = L.up[i] || 0, un = L.vu[i] / L.U, x = pos[i * 3], y = pos[i * 3 + 1], z = pos[i * 3 + 2];
-    c.copy(belly).lerp(side, sstep(-0.6, 0.15, u)).lerp(back, sstep(0.25, 0.95, u) * 0.85);
+    if (MORPH) c.copy(belly).lerp(side, sstep(-0.55, -0.05, u)).lerp(back, sstep(0.05, 0.55, u) * 0.95);
+    else c.copy(belly).lerp(side, sstep(-0.6, 0.15, u)).lerp(back, sstep(0.25, 0.95, u) * 0.85);
     const m = vnoise(x * ns, y * ns, z * ns);
-    c.multiplyScalar(0.9 + 0.2 * m);
+    // реализм: крупная неоднородность, мелкая «чешуйчатая» пестрота и светлое брюхо; края узоров рваные (domain warp)
+    const sc = vnoise(x * 34 + 2.1, y * 34 + 7.7, z * 34 + 4.4), sc2 = vnoise(x * 70 + 9.3, y * 70 + 1.2, z * 70 + 5.8);
+    c.multiplyScalar(0.86 + 0.2 * m + 0.14 * sc + 0.06 * sc2);
+    c.offsetHSL((sc2 - 0.5) * 0.012, (sc - 0.5) * 0.06, 0);
+    const wr = (vnoise(x * 4.3 + 5, y * 4.3 + 1, z * 4.3 + 9) - 0.5) * 0.9;
+    const wx = x + wr * 0.35, wy = y + wr * 0.3, wz = z + wr * 0.35;
     if (pat.type === 'stripes' || pat.type === 'bands') {
       const win = sstep(from - 0.04, from + 0.04, un) * (1 - sstep(to - 0.06, to + 0.02, un));
-      const k = Math.pow(Math.max(0, Math.sin(un * fr * PI * 2 + 0.6 + (pat.type === 'stripes' ? Math.abs(z) * 3 : 0))), 4) * sstep(pat.type === 'bands' ? -0.3 : 0.0, 0.6, u) * win;
+      const k = Math.pow(Math.max(0, Math.sin(un * fr * PI * 2 + 0.6 + (pat.type === 'stripes' ? Math.abs(wz) * 3 + wr * 1.4 : 0))), 4) * sstep(pat.type === 'bands' ? -0.3 : 0.0, 0.6, u) * win;
       c.lerp(str, k * amt);
     } else if (pat.type === 'spots') {
-      const f = pat.freq || 3.2, s = vnoise(x * f + 11.3, y * f + 3.1, z * f + 7.7);
+      const f = pat.freq || 3.2, s = vnoise(wx * f + 11.3, wy * f + 3.1, wz * f + 7.7);
       const k = sstep(0.6, 0.68, s) * sstep(-0.35, 0.3, u) * (sstep(from - 0.04, from + 0.04, un) * (1 - sstep(to - 0.04, to + 0.04, un)));
+      c.lerp(str, k * amt); if (k > 0.01) c.multiplyScalar(1 - 0.18 * k * (1 - sstep(0.68, 0.74, s)));
+    } else if (pat.type === 'rosette') {                // розетки леопарда: тёмное кольцо со светлой серединой
+      const f = pat.freq || 3.4, s = vnoise(wx * f + 5.1, wy * f + 9.3, wz * f + 2.7), ring = sstep(0.56, 0.6, s) * (1 - sstep(0.64, 0.68, s)), core = sstep(0.64, 0.7, s);
+      const k = sstep(-0.4, 0.3, u); c.lerp(str, ring * amt * k); c.lerp(alt, core * 0.5 * k);
+    } else if (pat.type === 'camo') {                   // камуфляж: два слоя пятен
+      const f = pat.freq || 2.6, s1 = vnoise(wx * f + 1.7, wy * f + 8.1, wz * f + 4.2), s2 = vnoise(wx * f * 1.8 + 9.1, wy * f * 1.8 + 2.2, wz * f * 1.8 + 6.6);
+      c.lerp(str, sstep(0.52, 0.58, s1) * amt); c.lerp(alt, sstep(0.6, 0.66, s2) * amt * 0.8);
+    } else if (pat.type === 'patch') {                  // арлекин: заплатки двух контрастных цветов
+      const f = pat.freq || 1.6, sp = vnoise(wx * f + 3.3, wy * f + 1.9, wz * f + 7.1);
+      c.lerp(str, sstep(0.57, 0.6, sp) * 0.95); c.lerp(alt, (1 - sstep(0.36, 0.4, sp)) * 0.95);
+    } else if (pat.type === 'ombre') {                  // плавный градиент от головы к хвосту
+      c.lerp(str, sstep(0.15, 1.0, un) * amt);
+    } else if (pat.type === 'chevron') {                // ёлочка вдоль спины
+      const k = Math.pow(Math.max(0, Math.sin(un * fr * PI * 2 + Math.abs(wz) * 9 + wr * 2)), 5) * sstep(-0.2, 0.55, u);
       c.lerp(str, k * amt);
     }
     if (pat.glowLine && Math.abs(u) < 0.08 && un > (pat.from || 0) && un < (pat.to || 1)) c.lerp(hx(pat.glowLine), 0.8);
@@ -1050,9 +1079,11 @@ function finalize(rig, root) {
   rig.root.traverse(m => { if (m.isMesh) m.frustumCulled = true; });
   root.userData.parts = rig; root.userData.phase = Math.random() * 6; root.userData.bite = 0;
 }
-export function buildDino({ cls = 'carn', color = 0x6aa84f, level = 1, evo = {}, cosmetic = '' } = {}) {
+export function buildDino({ cls = 'carn', color = 0x6aa84f, level = 1, evo = {}, cosmetic = '', patc = '', morph = '' } = {}) {
   const stage = CONFIG.stageIndex(level);
-  const rig = (BUILDERS[cls] || buildCarn)({ color, stage, r: CONFIG.evoLook(cls, evo || {}), q: 1 });   // вид модели — по выбранным узлам эволюции
+  PATC = patc && CONFIG.COSMETICS[patc] && CONFIG.COSMETICS[patc].c != null ? CONFIG.COSMETICS[patc].c : null;
+  MORPH = morph && CONFIG.COSMETICS[morph] && CONFIG.COSMETICS[morph].m ? CONFIG.COSMETICS[morph].m : null;
+  let rig; try { rig = (BUILDERS[cls] || buildCarn)({ color, stage, r: CONFIG.evoLook(cls, evo || {}), q: 1 }); } finally { PATC = null; MORPH = null; }   // вид модели — по выбранным узлам эволюции
   const root = rig.root;
   finalize(rig, root);
   root.userData.cls = cls; root.userData.stage = stage; root.userData.level = level;
@@ -1086,11 +1117,49 @@ export function setCosmetic(dino, id) {
     for (const sx of [-1, 1]) put(g, MM(cylG(0.07, 0.07, 0.03, 16), 0x111111, false), sx * (a.eyeX + 0.01), a.eyeY, a.eyeZ + 0.03).rotation.z = Math.PI / 2;
     put(g, MM(boxG(0.025, 0.025, 0.16), 0x111111, false), 0, a.eyeY + 0.03, a.eyeZ);
     a.head.add(g);
+  } else if (id === 'tophat') {
+    put(g, MM(cylG(0.2, 0.2, 0.04, 20), 0x151515, false), 0, a.hatY + 0.02, a.hatZ);
+    put(g, MM(cylG(0.13, 0.13, 0.3, 20), 0x151515, false), 0, a.hatY + 0.18, a.hatZ);
+    put(g, MM(cylG(0.135, 0.135, 0.05, 20), 0xc0302a, false), 0, a.hatY + 0.08, a.hatZ);
+    a.head.add(g);
+  } else if (id === 'wizard') {
+    put(g, MM(cylG(0.2, 0.2, 0.03, 20), 0x2a2a8a, false), 0, a.hatY + 0.02, a.hatZ);
+    put(g, MM(coneG(0.15, 0.55, 16), 0x3a3ab0, false), 0, a.hatY + 0.3, a.hatZ).rotation.z = 0.12;
+    for (const [x, y, z] of [[0.08, 0.2, 0.1], [-0.07, 0.34, 0.08], [0.02, 0.12, -0.13]]) put(g, MM(sphG(0.025, 8, 6), 0xffe14a, false), x, a.hatY + y, a.hatZ + z);
+    a.head.add(g);
+  } else if (id === 'viking') {
+    put(g, MM(sphG(0.17, 14, 8), 0x8c8c94, false), 0, a.hatY + 0.06, a.hatZ).scale.set(1, 0.75, 1);
+    for (const sx of [-1, 1]) { const h = put(g, MM(coneG(0.045, 0.3, 8), 0xf2efe0, false), sx * 0.2, a.hatY + 0.2, a.hatZ); h.rotation.z = -sx * 0.7; }
+    a.head.add(g);
+  } else if (id === 'flower') {
+    put(g, MM(new THREE.TorusGeometry(0.16, 0.025, 6, 20), 0x3f8f3a, false), 0, a.hatY + 0.04, a.hatZ).rotation.x = Math.PI / 2;
+    const cols = [0xff6a9a, 0xffe14a, 0xffffff, 0xff9a3a, 0xc08aff, 0xff6a9a];
+    cols.forEach((c, i) => { const an = i / cols.length * 6.283; put(g, MM(sphG(0.05, 8, 6), c, false), Math.cos(an) * 0.16, a.hatY + 0.06, a.hatZ + Math.sin(an) * 0.16); });
+    a.head.add(g);
+  } else if (id === 'plume') {
+    const cols = [0xff4a6a, 0xffd23a, 0x3ac8ff];
+    cols.forEach((c, i) => { const f = put(g, MM(sphG(0.05, 8, 6), c, false), (i - 1) * 0.06, a.hatY + 0.28, a.hatZ - 0.1 - i * 0.02); f.scale.set(0.5, 4.2, 1.2); f.rotation.x = -0.5; f.rotation.z = (i - 1) * 0.35; });
+    a.head.add(g);
+  } else if (id === 'skullhat') {
+    put(g, MM(sphG(0.19, 14, 10), 0xf2efe0, false), 0, a.hatY + 0.08, a.hatZ).scale.set(1, 0.85, 1.1);
+    for (const sx of [-1, 1]) put(g, MM(sphG(0.045, 8, 6), 0x151515, false), sx * 0.08, a.hatY + 0.08, a.hatZ + 0.17);
+    put(g, MM(boxG(0.1, 0.07, 0.1), 0xe0dccb, false), 0, a.hatY - 0.02, a.hatZ + 0.19);
+    a.head.add(g);
   } else if (id === 'aura') {
     const s = new THREE.Mesh(new THREE.RingGeometry(0.9, 1.25, 40), new THREE.MeshBasicMaterial({ color: 0xffd35a, transparent: true, opacity: 0.55, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending }));
     s.rotation.x = -Math.PI / 2; s.position.y = 0.06; s.userData.aura = true; g.add(s);
     dino.add(g);
   }
+}
+// отдельная корона (для ролика коронации): основание, зубцы, камни; центр — на оси, низ на y=0
+export function buildCrownMesh(mode) {
+  const g = new THREE.Group(), gold = sMat(0xffd35a, 0x8a5a00);
+  const base = new THREE.Mesh(cylG(0.2, 0.22, 0.12, 20), gold); base.position.set(0, 0.06, 0); g.add(base);
+  const n = mode === 2 ? 7 : 5;
+  for (let i = 0; i < n; i++) { const ang = i / n * 6.283, c = new THREE.Mesh(coneG(0.045, mode === 2 ? 0.26 : 0.18, 8), gold); c.position.set(Math.cos(ang) * 0.18, 0.2 + (mode === 2 ? 0.07 : 0.03), Math.sin(ang) * 0.18); g.add(c);
+    const j = new THREE.Mesh(sphG(0.028, 8, 6), sMat(i % 2 ? 0xff4a4a : 0x4ac8ff, 0x802020)); j.position.set(Math.cos(ang) * 0.205, 0.1, Math.sin(ang) * 0.205); g.add(j); }
+  if (mode === 2) { const m = new THREE.Mesh(sphG(0.07, 12, 10), sMat(0x7af0ff, 0x2a90a0)); m.position.set(0, 0.36, 0); g.add(m); }
+  return g;
 }
 export function setCrown(dino, mode) {      // mode: 0 нет, 1 король, 2 владыка эпох
   const P = dino.userData.parts, a = P.anch; if (!a) return;
@@ -1291,21 +1360,61 @@ export function makeHpBar(w) {
 }
 
 // ---------- актёр игрока ----------
-export function makeActor({ nick, color, cls, level, evo, cosmetic, admin, king, lord, label }) {
+
+// ---------------------------------------------------------------- питомцы: маленькие следующие за игроком существа
+export function buildPet(id) {
+  const g = new THREE.Group(), M = (c, e) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.8, emissive: e || 0x000000 });
+  const sph = (r, m, x, y, z, sx, sy, sz) => { const o = new THREE.Mesh(new THREE.SphereGeometry(r, 12, 10), m); o.position.set(x, y, z); o.scale.set(sx || 1, sy || 1, sz || 1); g.add(o); return o; };
+  const eye = (x, y, z) => sph(0.04, M(0x111111), x, y, z);
+  if (id === 'lizard') {
+    const m = M(0x4fae4f); sph(0.22, m, 0, 0.18, 0, 1.5, 0.7, 0.8); sph(0.15, m, 0.3, 0.22, 0); eye(0.4, 0.28, 0.07); eye(0.4, 0.28, -0.07);
+    const tail = new THREE.Mesh(new THREE.ConeGeometry(0.1, 0.5, 8), m); tail.rotation.z = Math.PI / 2; tail.position.set(-0.45, 0.14, 0); g.add(tail);
+    for (const [x, z] of [[0.12, 0.14], [0.12, -0.14], [-0.12, 0.14], [-0.12, -0.14]]) sph(0.06, m, x, 0.06, z);
+  } else if (id === 'chick') {
+    const m = M(0xffd84a); sph(0.24, m, 0, 0.26, 0); sph(0.15, m, 0.12, 0.5, 0); eye(0.24, 0.55, 0.07); eye(0.24, 0.55, -0.07);
+    const beak = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.12, 6), M(0xff9a2a)); beak.rotation.z = -Math.PI / 2; beak.position.set(0.3, 0.5, 0); g.add(beak);
+    sph(0.1, m, -0.05, 0.3, 0.2, 1.4, 0.5, 0.5); sph(0.1, m, -0.05, 0.3, -0.2, 1.4, 0.5, 0.5);
+  } else if (id === 'hedgehog') {
+    const m = M(0x7a5a3a); sph(0.26, m, 0, 0.24, 0, 1.3, 0.9, 1); sph(0.12, M(0xd8b48a), 0.32, 0.18, 0); eye(0.42, 0.22, 0.06); eye(0.42, 0.22, -0.06);
+    const sp = M(0x3a2a1a);
+    for (let i = 0; i < 14; i++) { const a = (i / 14) * Math.PI * 1.4 - 0.7 + Math.PI, c = new THREE.Mesh(new THREE.ConeGeometry(0.04, 0.2, 5), sp); c.position.set(Math.cos(a) * 0.28, 0.3 + Math.sin(i * 1.7) * 0.06 + 0.14, Math.sin(a * 2.3) * 0.2); c.rotation.z = -Math.cos(a) * 0.9; g.add(c); }
+  } else {
+    const m = new THREE.MeshBasicMaterial({ color: 0xfff2a0 }); sph(0.1, m, 0, 0.9, 0);
+    const halo = new THREE.Mesh(new THREE.SphereGeometry(0.28, 12, 10), new THREE.MeshBasicMaterial({ color: 0xffe066, transparent: true, opacity: 0.25, depthWrite: false, blending: THREE.AdditiveBlending })); halo.position.y = 0.9; g.add(halo);
+    const halo2 = new THREE.Mesh(new THREE.SphereGeometry(0.55, 12, 10), new THREE.MeshBasicMaterial({ color: 0xffe066, transparent: true, opacity: 0.1, depthWrite: false, blending: THREE.AdditiveBlending })); halo2.position.y = 0.9; g.add(halo2);
+  }
+  g.userData.id = id; g.userData.fly = id === 'firefly'; g.userData.ph = Math.random() * 6;
+  return g;
+}
+
+function titleText(id) { const t = id && CONFIG.TITLES[id]; return t && typeof window !== 'undefined' && window.TN ? t.ico + ' ' + window.TN(t.n) : ''; }
+export function makeActor({ nick, color, cls, level, evo, cosmetic, admin, king, lord, label, pet, title, patc, morph, colorIdx }) {
   const group = new THREE.Group();
-  const actor = { group, color: CONFIG.COLORS[color] != null ? CONFIG.COLORS[color] : color, cls, level, evo: evo || {}, cosmetic: cosmetic || '', dino: null, tag: null, king: king ? 1 : 0, lord: lord ? 1 : 0, admin: !!admin, nick, st: {} };
+  const actor = { title: title || '', patc: patc || '', morph: morph || '', group, color: CONFIG.COLORS[color] != null ? CONFIG.COLORS[color] : color, cls, level, evo: evo || {}, cosmetic: cosmetic || '', dino: null, tag: null, king: king ? 1 : 0, lord: lord ? 1 : 0, admin: !!admin, nick, st: {} };
   function rebuild() {
     if (actor.dino) group.remove(actor.dino);
-    actor.dino = buildDino({ cls, color: actor.color, level: actor.level, evo: actor.evo, cosmetic: actor.cosmetic });
+    actor.dino = buildDino({ cls, color: actor.color, level: actor.level, evo: actor.evo, cosmetic: actor.cosmetic, patc: actor.patc, morph: actor.morph });
     group.add(actor.dino); setCrown(actor.dino, actor.lord ? 2 : actor.king ? 1 : 0);
     if (actor.tag) group.remove(actor.tag);
-    actor.tag = makeNameTag(nick, { badge: actor.admin ? '★Admin' : '', color: actor.admin ? '#ffd35a' : actor.lord ? '#7af0ff' : '#ffffff', sub: label || '' });
+    actor.tag = makeNameTag(nick, { badge: actor.admin ? '★Admin' : '', color: actor.admin ? '#ffd35a' : actor.lord ? '#7af0ff' : '#ffffff', sub: label || titleText(actor.title) });
     group.add(actor.tag);
-    actor.tag.position.y = (cls === 'fly' ? 2.5 : 2.3) * Sim.scaleOf(actor.level) + 0.7;
+    actor.tag.position.y = (cls === 'fly' ? 2.5 : 2.3) * Sim.scaleOf(actor.level) + 0.7 + (['party', 'tophat', 'wizard', 'viking', 'flower', 'plume', 'skullhat'].indexOf(actor.cosmetic) >= 0 ? 0.45 : 0);
   }
   rebuild();
+  actor.petId = ''; actor.petM = null;
+  function setPet(id) {
+    if (actor.petM) { group.remove(actor.petM); actor.petM.traverse(o => { o.geometry && o.geometry.dispose(); }); actor.petM = null; }
+    actor.petId = id || '';
+    if (id) { actor.petM = buildPet(id); actor.petM.position.set(-2, 0, 1.2); group.add(actor.petM); }
+  }
+  setPet(pet);
   actor.set = (o) => {
+    if (o.pet != null && o.pet !== actor.petId) setPet(o.pet);
+    if (o.title != null && o.title !== actor.title) { actor.title = o.title; rebuild(); }
     let r = false;
+    if (o.patc != null && o.patc !== actor.patc) { actor.patc = o.patc; r = true; }
+    if (o.morph != null && o.morph !== actor.morph) { actor.morph = o.morph; r = true; }
+    if (o.color != null && CONFIG.COLORS[o.color] != null && CONFIG.COLORS[o.color] !== actor.color) { actor.color = CONFIG.COLORS[o.color]; r = true; }
     if (o.level != null && o.level !== actor.level) {
       // рост: новая модель плавно «дорастает» от прежнего размера до нового (при смене ступени — с лёгким рывком)
       const prevSc = Sim.scaleOf(actor.level); actor.grow = { t: 0, from: prevSc, stage: CONFIG.stageIndex(o.level) !== CONFIG.stageIndex(actor.level) };
@@ -1325,6 +1434,15 @@ export function makeActor({ nick, color, cls, level, evo, cosmetic, admin, king,
       if (k >= 1) { actor.grow = null; actor.dino.scale.setScalar(to); }
     }
     animateDino(actor.dino, t, speed01, dt, st);
+    const pm = actor.petM;
+    if (pm) {
+      const sc = Sim.scaleOf(actor.level), d = 2.0 * sc + 0.6, tx = -Math.sin(face) * d + Math.cos(face) * 0.9, tz = -Math.cos(face) * d - Math.sin(face) * 0.9;
+      const dx = tx - pm.position.x, dz = tz - pm.position.z, dd = Math.hypot(dx, dz);
+      if (dd > 7) pm.position.set(tx, 0, tz); else { const k = 1 - Math.exp(-dt * 3.2); pm.position.x += dx * k; pm.position.z += dz * k; }
+      if (dd > 0.15) pm.rotation.y = Math.atan2(-dz, dx) * 1 + 0; 
+      const hop = pm.userData.fly ? 0.6 * sc + Math.sin(t * 2.4 + pm.userData.ph) * 0.25 : Math.max(0, Math.sin(t * 9 + pm.userData.ph)) * Math.min(0.25, dd * 0.3);
+      pm.position.y = hop; pm.scale.setScalar(Math.max(0.8, sc * 0.55));
+    }
   };
   actor.dispose = () => { group.parent && group.parent.remove(group); };
   return actor;
@@ -1618,24 +1736,90 @@ export function animateBoss(g, t, speed, dt, o) {
 }
 
 // ---------- яйцо: гладкая скорлупа с нарисованными пятнами (ничего не торчит наружу) ----------
-export function makeEggMesh(colorHex) {
+// рисует скорлупу 512×256 по «скину» (classic, speckle, stripe, gold, crystal, lava, galaxy, jungle, candy, opal)
+export function eggCanvas(skin, colorHex) {
+  const c = document.createElement('canvas'); c.width = 512; c.height = 256; const g = c.getContext('2d');
+  const base = new THREE.Color(colorHex == null ? 0x6aa84f : colorHex);
+  let sd = 7; const R = () => ((sd = (sd * 9301 + 49297) % 233280) / 233280), W = 512, H = 256;
+  const hsl = (h, s, l, a) => `hsla(${h},${s}%,${l}%,${a == null ? 1 : a})`;
+  // мягкое пятнистое «облако»: маленький шум, растянутый со сглаживанием (по горизонтали замкнут)
+  const cloud = (cell, rgb, alpha, mode) => {
+    const w = Math.ceil(W / cell), h = Math.ceil(H / cell), n = document.createElement('canvas'); n.width = w; n.height = h; const ng = n.getContext('2d'), im = ng.createImageData(w, h);
+    const row = new Array(w); for (let y = 0; y < h; y++) { for (let x = 0; x < w; x++) { const v = R(); const i = (y * w + x) * 4; im.data[i] = rgb[0]; im.data[i + 1] = rgb[1]; im.data[i + 2] = rgb[2]; im.data[i + 3] = v * 255; } }
+    ng.putImageData(im, 0, 0); g.save(); g.globalAlpha = alpha; if (mode) g.globalCompositeOperation = mode; g.imageSmoothingEnabled = true; g.drawImage(n, 0, 0, W, H); g.restore();
+  };
+  const blot = (x, y, rx, ry, rot, col, a) => { for (const ox of [-W, 0, W]) { g.save(); g.translate(x + ox, y); g.rotate(rot); g.scale(1, ry / rx); const gr = g.createRadialGradient(0, 0, 0, 0, 0, rx); gr.addColorStop(0, col.replace('A', a)); gr.addColorStop(0.6, col.replace('A', a * 0.7)); gr.addColorStop(1, col.replace('A', 0)); g.fillStyle = gr; g.beginPath(); g.arc(0, 0, rx, 0, 6.3); g.fill(); g.restore(); } };
+  const vgrad = (stops) => { const gr = g.createLinearGradient(0, 0, 0, H); stops.forEach((s, i) => gr.addColorStop(i / (stops.length - 1), s)); g.fillStyle = gr; g.fillRect(0, 0, W, H); };
+  const pores = (n, a) => { for (let i = 0; i < n; i++) { g.fillStyle = `rgba(60,45,30,${R() * a})`; g.fillRect(R() * W, R() * H, 1 + R() * 1.6, 1 + R() * 1.6); } };
+  if (skin === 'speckle') {
+    // пёстрое яйцо птицы: тёплая кремовая скорлупа, подкожные сиреневые и верхние бурые пятна, гуще к тупому концу
+    g.fillStyle = '#e9dcbd'; g.fillRect(0, 0, W, H); cloud(14, [196, 170, 120], 0.35); cloud(5, [250, 244, 224], 0.25);
+    for (let i = 0; i < 220; i++) { const y = H * (0.2 + 0.8 * Math.sqrt(R())); blot(R() * W, y, 4 + R() * 9, 3 + R() * 6, R() * 3, 'rgba(120,110,150,A)', 0.14 + R() * 0.2); }
+    for (let i = 0; i < 520; i++) { const y = H * (0.15 + 0.85 * Math.pow(R(), 0.6)), r = 1 + R() * R() * 7; blot(R() * W, y, r * 1.5, r, R() * 3, `rgba(${70 + R() * 40 | 0},${42 + R() * 24 | 0},${24 + R() * 16 | 0},A)`, 0.55 + R() * 0.4); }
+    pores(1200, 0.12);
+  } else if (skin === 'stripe') {
+    // прожилки как у чибиса: оливково-серая скорлупа и тёмные петляющие «каракули»
+    g.fillStyle = '#b7ae8a'; g.fillRect(0, 0, W, H); cloud(16, [140, 140, 95], 0.4); cloud(6, [230, 222, 190], 0.25);
+    g.lineCap = 'round'; g.lineJoin = 'round';
+    for (let i = 0; i < 90; i++) { let x = R() * W, y = R() * H, a = R() * 6.3; g.beginPath(); g.moveTo(x, y); const L = 10 + R() * 22; for (let k = 0; k < L; k++) { a += (R() - 0.5) * 1.3; x += Math.cos(a) * 5; y += Math.sin(a) * 4; g.lineTo(x, y); } g.strokeStyle = `rgba(${40 + R() * 25 | 0},${30 + R() * 20 | 0},22,${0.55 + R() * 0.4})`; g.lineWidth = 1 + R() * 2.2; g.stroke(); }
+    for (let i = 0; i < 160; i++) blot(R() * W, R() * H, 3 + R() * 6, 3 + R() * 5, R() * 3, 'rgba(70,60,45,A)', 0.3);
+    pores(900, 0.1);
+  } else if (skin === 'gold') {
+    // кованое золото: тёплые переливы, мелкая «ковка» и лёгкая патина
+    vgrad(['#b98414', '#f3cf55', '#fff0a8', '#e4b230', '#a7730e']); cloud(10, [255, 235, 140], 0.35); cloud(4, [120, 78, 8], 0.22, 'multiply');
+    for (let i = 0; i < 700; i++) { const x = R() * W, y = R() * H, r = 3 + R() * 7; const gr = g.createRadialGradient(x - r * .3, y - r * .3, 0, x, y, r); gr.addColorStop(0, 'rgba(255,248,200,.22)'); gr.addColorStop(1, 'rgba(110,70,0,.2)'); g.fillStyle = gr; g.beginPath(); g.arc(x, y, r, 0, 6.3); g.fill(); }
+    for (let i = 0; i < 40; i++) blot(R() * W, R() * H, 10 + R() * 20, 6 + R() * 10, R() * 3, 'rgba(90,70,20,A)', 0.2);
+  } else if (skin === 'crystal') {
+    // кальцит / агат: молочно-голубые концентрические полосы с прозрачными прожилками
+    g.fillStyle = '#dbe9f1'; g.fillRect(0, 0, W, H);
+    for (let k = 0; k < 14; k++) { const y0 = k * 19 + R() * 6; g.beginPath(); g.moveTo(0, y0); for (let x = 0; x <= W; x += 16) g.lineTo(x, y0 + Math.sin(x / W * 12.56 + k) * 9 + Math.sin(x / 19 + k * 2) * 3); g.lineTo(W, y0 + 18); for (let x = W; x >= 0; x -= 16) g.lineTo(x, y0 + 18 + Math.sin(x / W * 12.56 + k) * 9); g.closePath(); g.fillStyle = hsl(195 + R() * 25, 35 + R() * 25, 62 + R() * 28, 0.55); g.fill(); }
+    cloud(12, [255, 255, 255], 0.35); cloud(5, [120, 170, 205], 0.15, 'multiply');
+    g.strokeStyle = 'rgba(255,255,255,.65)'; g.lineWidth = 1; for (let i = 0; i < 30; i++) { let x = R() * W, y = R() * H; g.beginPath(); g.moveTo(x, y); for (let k = 0; k < 6; k++) { x += (R() - 0.3) * 30; y += (R() - 0.5) * 14; g.lineTo(x, y); } g.stroke(); }
+  } else if (skin === 'lava') {
+    // вулканическое: шершавый базальт и тонкие тлеющие трещины
+    g.fillStyle = '#2b2522'; g.fillRect(0, 0, W, H); cloud(9, [75, 60, 52], 0.5); cloud(3, [15, 12, 12], 0.45, 'multiply'); pores(1500, 0.4);
+    for (let i = 0; i < 14; i++) { let x = R() * W, y = R() * H; const pts = [[x, y]]; for (let k = 0; k < 12; k++) { x += (R() - 0.5) * 44; y += (R() - 0.45) * 30; pts.push([x, y]); }
+      for (const [lw, st] of [[9, 'rgba(255,70,10,.18)'], [4, 'rgba(255,110,20,.55)'], [1.6, 'rgba(255,215,120,.95)']]) { g.beginPath(); pts.forEach((p, j) => j ? g.lineTo(p[0], p[1]) : g.moveTo(p[0], p[1])); g.strokeStyle = st; g.lineWidth = lw; g.lineJoin = 'round'; g.stroke(); } }
+  } else if (skin === 'galaxy') {
+    // чёрный опал: тёмная основа и вспышки зелёного, синего и пурпурного
+    g.fillStyle = '#0c0f1a'; g.fillRect(0, 0, W, H); cloud(20, [20, 25, 50], 0.6);
+    const hs = [150, 190, 270, 310, 40, 220]; for (let i = 0; i < 55; i++) { const h = hs[i % 6] + R() * 20; blot(R() * W, R() * H, 16 + R() * 40, 10 + R() * 22, R() * 3, `hsla(${h},95%,${50 + R() * 15 | 0}%,A)`, 0.35 + R() * 0.4); }
+    cloud(7, [255, 255, 255], 0.06, 'overlay'); for (let i = 0; i < 160; i++) { g.fillStyle = `rgba(210,235,255,${R() * 0.8})`; g.fillRect(R() * W, R() * H, 1, 1); }
+  } else if (skin === 'jungle') {
+    // как яйцо эму: тёмно-зелёная пористая скорлупа с пятнами светлее и тёмнее
+    g.fillStyle = '#37543a'; g.fillRect(0, 0, W, H); cloud(14, [90, 120, 70], 0.45); cloud(6, [20, 40, 28], 0.4, 'multiply');
+    for (let i = 0; i < 240; i++) blot(R() * W, R() * H, 4 + R() * 12, 3 + R() * 8, R() * 3, R() < 0.5 ? 'rgba(15,28,20,A)' : 'rgba(130,150,90,A)', 0.25 + R() * 0.3);
+    for (let i = 0; i < 2200; i++) { g.fillStyle = R() < 0.5 ? `rgba(10,20,14,${R() * 0.55})` : `rgba(170,190,130,${R() * 0.35})`; const r = 0.6 + R() * 1.6; g.beginPath(); g.arc(R() * W, R() * H, r, 0, 6.3); g.fill(); }
+  } else if (skin === 'candy') {
+    // яйцо малиновки: чистая голубая скорлупа, несколько редких веснушек
+    g.fillStyle = '#8fd0d6'; g.fillRect(0, 0, W, H); cloud(18, [140, 215, 215], 0.4); cloud(6, [80, 160, 175], 0.2, 'multiply'); cloud(5, [255, 255, 255], 0.12);
+    for (let i = 0; i < 40; i++) { const y = H * (0.3 + 0.7 * R()); blot(R() * W, y, 1.5 + R() * 3, 1.2 + R() * 2.4, R() * 3, 'rgba(150,80,60,A)', 0.45 + R() * 0.4); }
+    pores(700, 0.07);
+  } else if (skin === 'opal') {
+    // жемчуг: перламутровые переходы розового, мятного и золотистого
+    vgrad(['#f4e6ec', '#e3eef5', '#e8f4e8', '#f7efdc', '#f4e6ec']);
+    for (let i = 0; i < 40; i++) blot(R() * W, R() * H, 20 + R() * 60, 12 + R() * 28, R() * 3, `hsla(${[330, 190, 150, 45][i % 4]},65%,80%,A)`, 0.35 + R() * 0.3);
+    cloud(16, [255, 255, 255], 0.3); cloud(4, [150, 140, 150], 0.08, 'multiply');
+  } else {
+    // обычное яйцо: подкрашенная в цвет динозавра скорлупа с естественными крапинами
+    const pale = base.clone().lerp(new THREE.Color(0xf1e8d2), 0.62), dark = base.clone().multiplyScalar(0.45);
+    g.fillStyle = '#' + pale.getHexString(); g.fillRect(0, 0, W, H); cloud(14, [dark.r * 255, dark.g * 255, dark.b * 255].map(v => v | 0), 0.18); cloud(5, [255, 252, 240], 0.22);
+    const dc = `rgba(${dark.r * 255 | 0},${dark.g * 255 | 0},${dark.b * 255 | 0},A)`;
+    for (let i = 0; i < 70; i++) blot(R() * W, R() * H, 3 + R() * 8, 3 + R() * 6, R() * 3, `rgba(${base.r * 200 | 0},${base.g * 200 | 0},${base.b * 200 | 0},A)`, 0.12 + R() * 0.15);
+    for (let i = 0; i < 220; i++) { const r = 1 + R() * R() * 6; blot(R() * W, R() * H, r * 1.4, r, R() * 3, dc, 0.5 + R() * 0.4); }
+    pores(1200, 0.1);
+  }
+  return c;
+}
+export function makeEggMesh(colorHex, skin) {
   const pts = [];
   for (let i = 0; i <= 24; i++) { const t = i / 24, a = t * PI, r = Math.sin(a) * (0.82 + 0.12 * Math.cos(a)), y = -Math.cos(a) * 1.18; pts.push(new THREE.Vector2(Math.max(0.0001, r), y)); }
-  const c = document.createElement('canvas'); c.width = 512; c.height = 256; const g = c.getContext('2d');
-  g.fillStyle = '#f3ead6'; g.fillRect(0, 0, 512, 256);
-  for (let i = 0; i < 2400; i++) { g.fillStyle = `rgba(120,100,70,${Math.random() * 0.12})`; g.fillRect(Math.random() * 512, Math.random() * 256, 1.5, 1.5); }
-  const col = '#' + new THREE.Color(colorHex).getHexString();
-  const rnd = (a) => { let s = a * 9301 + 49297; return () => ((s = (s * 9301 + 49297) % 233280) / 233280); };
-  const R = rnd(7);
-  for (let i = 0; i < 26; i++) {
-    const x = R() * 512, y = 30 + R() * 196, rr = 6 + R() * 16;
-    for (const ox of [-512, 0, 512]) { g.fillStyle = col; g.globalAlpha = 0.75 + R() * 0.2; g.beginPath(); g.ellipse(x + ox, y, rr * 1.3, rr, R() * 3, 0, PI * 2); g.fill(); }
-  }
-  g.globalAlpha = 1;
+  const c = eggCanvas(skin, colorHex);
   const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace; tex.wrapS = THREE.RepeatWrapping;
   const crack = document.createElement('canvas'); crack.width = 512; crack.height = 256; const cg = crack.getContext('2d'); cg.fillStyle = '#000'; cg.fillRect(0, 0, 512, 256);
   const ctex = new THREE.CanvasTexture(crack);
-  const mat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.55, metalness: 0, bumpMap: BUMP, bumpScale: 0.004, emissiveMap: ctex, emissive: new THREE.Color(0xfff2c0), emissiveIntensity: 0 });
+  const shiny = { gold: [0.3, 0.2], crystal: [0.22, 0.0], opal: [0.18, 0.0], lava: [0.85, 0.0], galaxy: [0.2, 0.0], candy: [0.45, 0.0], jungle: [0.8, 0.0] }[skin] || [0.5, 0];
+  const mat = new THREE.MeshStandardMaterial({ map: tex, roughness: shiny[0], metalness: shiny[1], bumpMap: BUMP, bumpScale: 0.004, emissiveMap: ctex, emissive: new THREE.Color(0xfff2c0), emissiveIntensity: 0 });
   const mk = (from, to) => {
     const p = pts.slice(from, to + 1); const geo = new THREE.LatheGeometry(p, 40);
     const uv = geo.attributes.uv; for (let i = 0; i < uv.count; i++) uv.setY(i, (from + uv.getY(i) * (to - from)) / 24);

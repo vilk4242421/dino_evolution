@@ -11,7 +11,7 @@ const AUTH_ERR = {
   bad_nick: { ru: 'Ник: 3–14 символов (буквы, цифры, _ и -)', en: 'Nickname: 3–14 chars (letters, digits, _ and -)' }, bad_password: { ru: 'Пароль: от 6 символов', en: 'Password: 6+ characters' },
   nick_taken: { ru: 'Этот ник уже занят', en: 'Nickname already taken' }, bad_credentials: { ru: 'Неверный ник или пароль', en: 'Wrong nickname or password' },
   rate_limited: { ru: 'Слишком много попыток, подождите минуту', en: 'Too many attempts, wait a minute' }, server_error: { ru: 'Ошибка сервера', en: 'Server error' },
-  in_game: { ru: 'Сначала выйдите из игры', en: 'Leave the game first' }, class_locked: { ru: 'Класс нельзя менять', en: 'Class is locked' }
+  in_game: { ru: 'Сначала выйдите из игры', en: 'Leave the game first' }, class_locked: { ru: 'Класс нельзя менять', en: 'Class is locked' }, type_locked: { ru: 'Этот вид откроется на 7 уровне любого типа', en: 'This type unlocks at level 7 of any type' }
 };
 const errText = e => { const m = AUTH_ERR[e && e.message]; return m ? m[window.I18N.lang] : (e && e.name === 'TypeError' ? T('server_off') : (e && e.message) || T('server_off')); };
 const inGame = () => !!(ctl.session && ctl.session.welcomed);
@@ -28,7 +28,26 @@ function openPanel(name, html, after) {
 function panelClose() { $('panel').classList.remove('on'); closePanelState(); if (!inGame()) showMenu(); else ctl.relock(); }
 function btnClick(root, sel, fn) { root.querySelectorAll(sel).forEach(b => b.addEventListener('click', e => { ctl.audio.init(); ctl.audio.sfx('click'); fn(b, e); })); }
 
+function questText(q) { const d = CONFIG.QUESTS[q.id]; return TN(d.t).replace('{n}', d.mins ? Math.round(q.n / 60) : q.n); }
+// окно «Задания»: серия входов и 3 задания дня
+function openQuests() {
+  const live = inGame(), real = live ? ctl.session.profile : activeProf();
+  if (!real || !real.hatched) { UI.toast(T('quest_need_dino')); return; }
+  const pr = JSON.parse(JSON.stringify(real)); Sim.dailyRoll(pr, Date.now());      // показываем уже с учётом новой даты
+  const d = pr.daily, doneN = d.q.filter(x => x.done).length;
+  const rows = d.q.map(x => { const def = CONFIG.QUESTS[x.id], pct = Math.round(100 * x.h / x.n), cur = def.mins ? Math.floor(x.h / 60) : x.h, need = def.mins ? Math.round(x.n / 60) : x.n;
+    return `<div class="a ${x.done ? 'on' : ''}"><i>${def.ico}</i><div style="flex:1"><b>${esc(questText(x))}</b><span>${cur}/${need} · +${def.coins} 🪙${x.done ? ' ✅' : ''}</span><div class="qbar"><i style="width:${pct}%"></i></div></div></div>`; }).join('');
+  const left = 7 - (d.streak % 7 || 7);
+  openPanel('quests', `<h2>📅 ${T('quests')} <small style="color:var(--mut)">${doneN}/${d.q.length}</small></h2>
+    <p class="sub">🔥 ${T('streak_n', { n: d.streak })} · ${T('streak_best', { n: d.best })}<br>${left ? T('streak_gift', { n: left }) : T('streak_gift_today')}</p>
+    <div class="ach qlist">${rows}</div>
+    <p class="sub">${T('quest_bonus', { c: CONFIG.QUEST_BONUS })}${d.bonus ? ' ✅' : ''}</p>
+    <p class="sub">${T('quest_new_day')}</p>
+    <button id="pn-x" style="margin-top:12px">${T('back')}</button>`, root => { $('pn-x').onclick = panelClose; });
+}
+
 export const UI = {
+  questText,
   init(c) {
     ctl = c;
     $('a-close').onclick = () => { showMenu(); };
@@ -46,7 +65,7 @@ export const UI = {
   toast(msg, ms) { const t = $('toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(toastT); toastT = setTimeout(() => { t.style.display = 'none'; }, ms || 2600); },
   banner(msg, ms) { const b = $('banner'); b.textContent = msg; b.classList.add('on'); clearTimeout(bannerT); bannerT = setTimeout(() => b.classList.remove('on'), ms || 2200); },
   note(msg) { const n = document.createElement('div'); n.textContent = msg; $('notes').appendChild(n); setTimeout(() => n.remove(), 4600); while ($('notes').children.length > 5) $('notes').firstChild.remove(); },
-  closeAll, showMenu, openAbout, openChange, openEvo, openAch, openLeaders, openSettings, openPause, openPlayers, duelRequest,
+  closeAll, showMenu, openAbout, openChange, openEvo, openShop, openAch, openLeaders, openSettings, openPause, openPlayers, duelRequest,
   refreshOpen() { if (openName && openRender) openRender(); }
 };
 
@@ -66,16 +85,18 @@ export function showMenu() {
     <div class="grid2">
       <button data-go="leaders">${T('leaderboard')}</button><button data-go="evo">${T('evolution')}</button>
       <button data-go="ach">${T('achievements')}</button><button data-go="settings">${T('settings')}</button>
-    </div>`;
+    </div>
+    <div class="grid2"><button data-go="quests">📅 ${T('quests')}</button><button data-go="nest">🪺 ${T('nest')}</button></div>
+    <div class="grid2"><button data-go="duel">⚔ ${T('duel_menu')}</button><button data-go="shop">🛍 ${T('shop')}</button></div>`;
   const root = $('menu-card');
   $('m-acc').onclick = async () => { ctl.audio.init(); if (st.user) { await P.logout(); showMenu(); } else openAuth(() => showMenu()); };
   btnClick(root, '[data-go]', b => {
     const g = b.dataset.go;
     if (g === 'online' || g === 'code' || g === 'single') goPlay(g);
-    else if (g === 'leaders') openLeaders(); else if (g === 'evo') openEvo(); else if (g === 'ach') openAch(); else openSettings();
+    else if (g === 'leaders') openLeaders(); else if (g === 'quests') openQuests(); else if (g === 'evo') openEvo(); else if (g === 'ach') openAch(); else if (g === 'nest') openNest(); else if (g === 'duel') openDuelMenu(); else if (g === 'shop') openShop(); else openSettings();
   });
   show('menu');
-  if (prof && prof.hatched) ctl.menuSetDino({ cls: prof.cls, color: CONFIG.COLORS[prof.color], level: prof.level, evo: prof.evo, cosmetic: prof.cosmetic }); else ctl.menuShowEgg(0x6aa84f);
+  if (prof && prof.hatched) ctl.menuSetDino({ cls: prof.cls, color: CONFIG.COLORS[prof.color], level: prof.level, evo: prof.evo, cosmetic: prof.cosmetic, patc: prof.patc, morph: prof.morph }); else ctl.menuShowEgg(0x6aa84f);
   ctl.audio.setScene('menu');
 }
 
@@ -120,6 +141,8 @@ function openPlayPanel(online, codeFocus) {
   };
   const typeCard = (k) => {
     const I = CONFIG.CLS_INFO[k], lv = Sim.typeLevel(prof, k), st = lv ? T('level_short') + lv + ' · ' + T('stage_' + CONFIG.STAGES[CONFIG.stageIndex(lv)].id) : T('type_new');
+    const lockN = CONFIG.TYPE_MIN_LV[k] && !Sim.typeUnlocked(prof, k) ? CONFIG.TYPE_MIN_LV[k] : 0;
+    if (lockN) return `<div class="tp lock" data-lock="${lockN}" style="opacity:.45"><i>🔒</i><b>${esc(TN(I.n))}</b><small>${T('type_lock_n', { n: lockN })}</small></div>`;
     return `<div class="tp ${k === cls ? 'sel' : ''}" data-k="${k}"><i>${I.ico}</i><b>${esc(TN(I.n))}</b><small>${st}</small></div>`;
   };
   const render = () => {
@@ -140,7 +163,7 @@ function openPlayPanel(online, codeFocus) {
   };
   const bind = (root) => {
     btnClick(root, '.bm', b => { if (!b.classList.contains('lock')) { sel = b.dataset.b; draw(); } });
-    btnClick(root, '.tp', b => { cls = b.dataset.k; ctl.menuSetDino({ cls, color: CONFIG.COLORS[prof.color], level: Math.max(1, Sim.typeLevel(prof, cls)), evo: {} }); draw(); });
+    btnClick(root, '.tp', b => { if (b.dataset.lock) { UI.toast(T('type_lock_n', { n: b.dataset.lock })); return; } cls = b.dataset.k; ctl.menuSetDino({ cls, color: CONFIG.COLORS[prof.color], level: Math.max(1, Sim.typeLevel(prof, cls)), evo: {} }); draw(); });
     btnClick(root, '.wt', b => { const w = b.dataset.w; if (w !== world) { world = w; sel = firstOpen(w); cls = bestType(w); draw(); } });
     const go = (mode, code) => { closeAll(); ctl.start({ online, biome: sel, cls, mode, code }); };
     $('pp-back') && ($('pp-back').onclick = () => showMenu());
@@ -161,7 +184,7 @@ let createState = null;
 // значки способностей типа: Атака · E · Q · F
 function abilChips(k) {
   const A = CONFIG.ABILITIES[k], AI = CONFIG.ABIL_INFO, f = k === 'fly' ? 'fly' : k === 'herb' ? 'climb' : '';
-  return [['atk', 'LMB'], [A.e.id, 'E'], [A.q.id, 'Q'], f ? [f, 'F'] : null].filter(Boolean).map(([id, key]) => `<u>${key === 'LMB' ? CONFIG.CLS_INFO[k].atkIco : AI[id].ico} ${esc(TN(id === 'atk' ? CONFIG.CLS_INFO[k].atkN : AI[id].n))}</u>`).join('');
+  return [['atk', 'LMB'], [A.e.id, 'E'], [A.q.id, 'Q'], f ? [f, 'F'] : null, CONFIG.ULTS[k] ? [CONFIG.ULTS[k].id, 'X'] : null].filter(Boolean).map(([id, key]) => `<u>${key === 'LMB' ? CONFIG.CLS_INFO[k].atkIco : AI[id].ico} ${esc(TN(id === 'atk' ? CONFIG.CLS_INFO[k].atkN : AI[id].n))}</u>`).join('');
 }
 // краткие характеристики типа для выбора: здоровье, урон, скорость, выносливость и т.д. (на уровне lv, без эволюции)
 function statsGrid(k, lv) {
@@ -178,7 +201,7 @@ function abilList(k) {
   const row = (key, ico, nm, d) => `<li><b>${ico} ${esc(nm)}</b> <kbd>${key}</kbd><span>${esc(d)}</span></li>`;
   const cdf = (id, cd) => TN(AI[id].d).replace('{cd}', cd);
   return '<ul class="abl">' + row(IS_TOUCH_UI ? '⚔' : 'ЛКМ', CONFIG.CLS_INFO[k].atkIco, TN(CONFIG.CLS_INFO[k].atkN), TN(AI.atk.d)) + row('E', AI[A.e.id].ico, TN(AI[A.e.id].n), cdf(A.e.id, A.e.cd)) + row('Q', AI[A.q.id].ico, TN(AI[A.q.id].n), cdf(A.q.id, A.q.cd))
-    + (f ? row('F', AI[f].ico, TN(AI[f].n), cdf(f, 0)) : '') + '</ul>';
+    + (f ? row('F', AI[f].ico, TN(AI[f].n), cdf(f, 0)) : '') + (CONFIG.ULTS[k] ? row('X', AI[CONFIG.ULTS[k].id].ico, TN(AI[CONFIG.ULTS[k].id].n), cdf(CONFIG.ULTS[k].id, 0)) : '') + '</ul>';
 }
 const IS_TOUCH_UI = typeof matchMedia === 'function' && matchMedia('(pointer:coarse)').matches;
 function openCreate(online, done, newRun) {
@@ -187,11 +210,12 @@ function openCreate(online, done, newRun) {
   $('c-name').value = createState.name; $('c-err').textContent = '';
   $('c-colors').innerHTML = CONFIG.COLORS.map((c, i) => `<div class="sw ${i === createState.color ? 'sel' : ''}" data-c="${i}" style="background:#${c.toString(16).padStart(6, '0')}"></div>`).join('');
   const clsCard = k => { const I = CONFIG.CLS_INFO[k], A = CONFIG.ABILITIES[k];
-    return `<div class="cls ${k === createState.cls ? 'sel' : ''}" data-k="${k}"><b>${I.ico} ${esc(TN(I.n))}</b><span>${esc(TN(I.d))}</span><em>${abilChips(k)}</em>${statsGrid(k, 1)}</div>`; };
+    const lk = !!CONFIG.TYPE_MIN_LV[k];
+    return `<div class="cls ${lk ? 'lock' : ''} ${k === createState.cls ? 'sel' : ''}" data-k="${k}" ${lk ? 'style="opacity:.45"' : ''}><b>${lk ? '🔒 ' : ''}${I.ico} ${esc(TN(I.n))}${lk ? ' <small>' + T('type_lock_n', { n: CONFIG.TYPE_MIN_LV[k] }) + '</small>' : ''}</b><span>${esc(TN(I.d))}</span><em>${abilChips(k)}</em>${statsGrid(k, 1)}</div>`; };
   $('c-classes').innerHTML = ['land', 'sea'].map(w => `<div class="wh">${w === 'sea' ? '🌊 ' + T('world_sea') : '🌍 ' + T('world_land')}</div>` + CONFIG.TYPES[w].map(clsCard).join('')).join('');
   const preview = () => ctl.menuSetDino({ cls: createState.cls, color: CONFIG.COLORS[createState.color], level: 1, evo: {} });
   btnClick($('c-colors'), '.sw', b => { createState.color = +b.dataset.c; $('c-colors').querySelectorAll('.sw').forEach(x => x.classList.toggle('sel', x === b)); preview(); });
-  btnClick($('c-classes'), '.cls', b => { createState.cls = b.dataset.k; $('c-classes').querySelectorAll('.cls').forEach(x => x.classList.toggle('sel', x === b)); preview(); });
+  btnClick($('c-classes'), '.cls', b => { if (CONFIG.TYPE_MIN_LV[b.dataset.k]) { UI.toast(T('type_lock_n', { n: CONFIG.TYPE_MIN_LV[b.dataset.k] })); return; } createState.cls = b.dataset.k; $('c-classes').querySelectorAll('.cls').forEach(x => x.classList.toggle('sel', x === b)); preview(); });
   $('c-back').onclick = () => showMenu();
   $('c-go').onclick = async () => {
     const name = $('c-name').value.replace(/[<>]/g, '').trim();
@@ -208,7 +232,7 @@ function openCreate(online, done, newRun) {
     } catch (e) { $('c-err').textContent = errText(e); }
     $('c-go').disabled = false;
   };
-  UI.applyLang(); show('create'); ctl.menuShowEgg(CONFIG.COLORS[createState.color]);
+  UI.applyLang(); show('create'); ctl.menuShowEgg(CONFIG.COLORS[createState.color], (activeProf() || {}).eggskin);
   // на экране создания сразу показываем выбранного динозавра
   setTimeout(preview, 0);
 }
@@ -222,8 +246,7 @@ function openEvo(tab) {
   const render = () => {
     const live = inGame(), prof = live ? ctl.session.profile : activeProf();
     if (!prof || !prof.hatched) { openPanel('evo', `<h2>${T('evolution')}</h2><p class="sub">${T('no_character')}</p><button id="pn-x">${T('back')}</button>`, r => { $('pn-x').onclick = panelClose; }); return; }
-    const pts = CONFIG.evoPoints(prof.level, prof.evo), head = `<div class="row" style="margin-bottom:8px"><h2 style="margin:0;flex:2">${CLS_ICO[prof.cls]} ${esc(prof.name)} · ${T('level_short')}${prof.level}</h2><div class="pts" style="text-align:right">${T('evo_points', { n: pts })} · 🪙 ${prof.coins}</div></div>
-      <div class="tabs"><button data-tab="evo" class="${tab === 'evo' ? 'on' : ''}">${T('evolution')}</button><button data-tab="shop" class="${tab === 'shop' ? 'on' : ''}">${T('shop')}</button></div>`;
+    const pts = CONFIG.evoPoints(prof.level, prof.evo), head = `<div class="row" style="margin-bottom:8px"><h2 style="margin:0;flex:2">${CLS_ICO[prof.cls]} ${esc(prof.name)} · ${T('level_short')}${prof.level}</h2><div class="pts" style="text-align:right">${T('evo_points', { n: pts })} · 🪙 ${prof.coins}</div></div>`;
     let body = '';
     if (tab === 'evo') {
       // деревья эволюции: граф 2 → 4 → 8; выбранная ветка светится, соседняя развилка — тусклая
@@ -257,22 +280,13 @@ function openEvo(tab) {
       }
       body = `<div class="ttabs">${tabs2}</div><div class="etree"><svg viewBox="0 0 ${Wd} 330" preserveAspectRatio="none">${lines}</svg>${nodes}</div>${card}
         <div class="row" style="margin-top:10px"><button data-reset="1" class="red" ${live && CONFIG.evoSpent(prof.evo) > 0 ? '' : 'disabled'}>${T('evo_reset_free')}</button></div>${live ? '' : `<p class="sub">${T('offline_progress')}</p>`}`;
-    } else {
-      body = '<div class="shop">' + Object.keys(CONFIG.COSMETICS).map(id => {
-        const c = CONFIG.COSMETICS[id], own = prof.cosmetics.indexOf(id) >= 0, eq = prof.cosmetic === id;
-        const btn = own ? `<button data-eq="${eq ? '' : id}" ${live ? '' : 'disabled'}>${eq ? T('unequip') : T('equip')}</button>` : `<button data-shop="${id}" ${live && prof.coins >= c.price ? '' : 'disabled'}>${T('buy')} · 🪙 ${c.price}</button>`;
-        return `<div class="br"><h4>${esc(TN(c.n))}</h4><p>${own ? T('owned') : ''}</p>${btn}</div>`;
-      }).join('') + '</div>';
     }
     openPanel('evo', head + body + `<button id="pn-x" style="margin-top:12px">${T('back')}</button>`, root => {
-      btnClick(root, '[data-tab]', b => { tab = b.dataset.tab; render(); });
       btnClick(root, '[data-buy]', b => ctl.send({ t: 'evo', id: b.dataset.buy }));
       btnClick(root, '[data-sw]', b => ctl.send({ t: 'evosw', id: b.dataset.sw }));
       btnClick(root, '[data-tree]', b => { evoTree = b.dataset.tree; evoSel = ''; render(); });
       btnClick(root, '[data-node]', b => { evoSel = b.dataset.node; render(); });
       btnClick(root, '[data-reset]', () => ctl.send({ t: 'evoreset' }));
-      btnClick(root, '[data-shop]', b => ctl.send({ t: 'buy', id: b.dataset.shop }));
-      btnClick(root, '[data-eq]', b => ctl.send({ t: 'equip', id: b.dataset.eq }));
       $('pn-x').onclick = panelClose;
     });
     openRender = render;
@@ -282,10 +296,149 @@ function openEvo(tab) {
 
 // ---------------------------------------------------------------- достижения и рейтинг
 function openAch() {
-  const prof = inGame() ? ctl.session.profile : activeProf();
-  const list = CONFIG.ACH.map(a => { const ok = prof && prof.hatched ? !!a.t(prof) : false; return `<div class="a ${ok ? 'on' : ''}"><i>${a.ico}</i><div><b>${esc(TN(a.n))}</b><span>${esc(TN(a.d))}</span></div></div>`; });
-  const n = list.filter(x => x.includes('class="a on"')).length;
-  openPanel('ach', `<h2>🏆 ${T('ach_title')} <small style="color:var(--mut)">${n}/${CONFIG.ACH.length}</small></h2><div class="ach">${list.join('')}</div><button id="pn-x" style="margin-top:12px">${T('back')}</button>`, () => { $('pn-x').onclick = panelClose; });
+  const live = inGame(), prof = live ? ctl.session.profile : activeProf(), had = prof && prof.hatched;
+  const claimed = (prof && prof.claimed) || [], titles = (prof && prof.titles) || [];
+  let ready = 0;
+  const list = CONFIG.ACH.map(a => {
+    const ok = had ? !!a.t(prof) : false, r = CONFIG.ACH_REWARD[a.id] || {}, got = claimed.indexOf(a.id) >= 0;
+    const rw = [r.c ? '🪙 ' + r.c : '', r.title ? CONFIG.TITLES[r.title].ico + ' ' + TN(CONFIG.TITLES[r.title].n) : '', r.cos && CONFIG.COSMETICS[r.cos] ? '🎁 ' + TN(CONFIG.COSMETICS[r.cos].n) : ''].filter(Boolean).join(' · ');
+    let btn = '';
+    if (ok && !got) { ready++; btn = live ? `<button data-claim="${a.id}" class="claim">${T('claim')}</button>` : `<em>${T('claim_in_game')}</em>`; } else if (got) btn = `<em>✔ ${T('claimed')}</em>`;
+    return `<div class="a ${ok ? 'on' : ''}"><i>${a.ico}</i><div><b>${esc(TN(a.n))}</b><span>${esc(TN(a.d))}</span><span class="rw">${esc(rw)}</span>${btn}</div></div>`;
+  });
+  const n = CONFIG.ACH.filter(a => had && a.t(prof)).length;
+  const curT = prof && prof.title;
+  const tit = `<h3>${T('titles')}</h3><div class="titles"><button data-title="" class="${curT ? '' : 'sel'}">${T('no_title')}</button>` + titles.map(id => `<button data-title="${id}" class="${curT === id ? 'sel' : ''}" ${live ? '' : 'disabled'}>${CONFIG.TITLES[id].ico} ${esc(TN(CONFIG.TITLES[id].n))}</button>`).join('') + '</div>';
+  openPanel('ach', `<h2>🏆 ${T('ach_title')} <small style="color:var(--mut)">${n}/${CONFIG.ACH.length}</small></h2>${tit}${ready && live ? `<button id="ach-all" class="claim">${T('claim_all')} (${ready})</button>` : ''}<div class="ach">${list.join('')}</div><button id="pn-x" style="margin-top:12px">${T('back')}</button>`, root => {
+    const again = () => setTimeout(openAch, 450);
+    btnClick(root, '[data-claim]', b => { ctl.send({ t: 'claim', id: b.dataset.claim }); again(); });
+    btnClick(root, '[data-title]', b => { ctl.send({ t: 'settitle', id: b.dataset.title }); again(); });
+    const all = root.querySelector('#ach-all'); if (all) all.onclick = () => { root.querySelectorAll('[data-claim]').forEach(b => ctl.send({ t: 'claim', id: b.dataset.claim })); again(); };
+    $('pn-x').onclick = panelClose;
+  });
+}
+
+// ---------------------------------------------------------------- магазин (отдельное окно; в главном меню и в игре)
+let shopTab = 'color', shopOnline = null;
+function openShop(tab) {
+  if (tab) shopTab = tab;
+  const live = inGame(), hasOnline = !!(P.state.token && P.state.profile && P.state.profile.hatched), hasLocal = !!(P.state.local && P.state.local.hatched);
+  if (!live && shopOnline === null) shopOnline = hasOnline;
+  if (!live && shopOnline && !hasOnline) shopOnline = false;
+  const prof = live ? ctl.session.profile : (shopOnline ? P.state.profile : P.state.local);
+  if (!prof || !prof.hatched) { openPanel('shop', `<h2>🛍 ${T('shop')}</h2><p class="sub">${T('no_character')}</p><button id="pn-x">${T('back')}</button>`, () => { $('pn-x').onclick = panelClose; }); return; }
+  const mats = prof.mats || { bone: 0, hide: 0 };
+  const act = async (op, a) => {
+    try {
+      if (live) { ctl.send(Object.assign({ t: op }, a)); setTimeout(() => openShop(), 450); }
+      else { const r = await P.shopMenu(shopOnline, op, a); if (!r.ok) UI.toast(T(r.err === 'coins' ? 'err_coins' : 'err_mats')); if (!live) { const pf = shopOnline ? P.state.profile : P.state.local; ctl.menuSetDino && pf && ctl.menuSetDino({ cls: pf.cls, color: CONFIG.COLORS[pf.color], level: pf.level, evo: pf.evo, cosmetic: pf.cosmetic, patc: pf.patc, morph: pf.morph }); openShop(); } }
+    } catch (e) { UI.toast(T('server_off')); }
+  };
+  const priceBtn = (id, c, extra) => {
+    const own = prof.cosmetics.indexOf(id) >= 0, slot = CONFIG.cosSlot(id), f = CONFIG.SLOT_FIELD[slot], eq = prof[f] === id;
+    if (own) return `<button data-eq="${eq ? '' : id}" data-slot="${slot}">${eq ? T('unequip') : T('equip')}</button>`;
+    if (c.craft) { const okc = mats.bone >= (c.craft.bone | 0) && mats.hide >= (c.craft.hide | 0); return `<button data-craft="${id}" ${okc ? '' : 'disabled'}>🛠 ${T('craft')} · 🦴${c.craft.bone | 0} 🟫${c.craft.hide | 0}</button>`; }
+    return `<button data-buy="${id}" ${prof.coins >= c.price ? '' : 'disabled'}>${T('buy')} · 🪙 ${c.price}</button>`;
+  };
+  const hx6 = n => '#' + n.toString(16).padStart(6, '0');
+  const cosCard = id => {
+    const c = CONFIG.COSMETICS[id], own = prof.cosmetics.indexOf(id) >= 0; let pre = '';
+    if (c.m) { const base = c.m.c1 != null ? c.m.c1 : CONFIG.COLORS[prof.color]; pre = `<div class="mo"><i style="background:${hx6(base)}"></i><i style="background:${hx6(c.m.c2)}"></i>${c.m.c3 != null ? `<i style="background:${hx6(c.m.c3)}"></i>` : ''}<b>${c.m.c3 != null ? '3' : '2'}</b></div>`; }
+    else if (CONFIG.cosSlot(id) === 'egg') pre = `<img class="eggp" src="${ctl.eggThumb(id.slice(2), CONFIG.COLORS[prof.color])}">`;
+    else if (c.c != null) pre = `<i class="sw" style="background:${hx6(c.c)}"></i>`;
+    return `<div class="br">${pre}<h4>${esc(TN(c.n))}</h4><p>${own ? T('owned') : ''}</p>${priceBtn(id, c)}</div>`;
+  };
+  const bySlot = (slot, craft) => Object.keys(CONFIG.COSMETICS).filter(id => CONFIG.cosSlot(id) === slot && !!CONFIG.COSMETICS[id].craft === !!craft);
+  const grid = ids => '<div class="shop">' + ids.map(cosCard).join('') + '</div>';
+  let body = '';
+  if (shopTab === 'color') {
+    body = `<h4 class="sh">${T('shop_color')}</h4><p class="sub">${T('shop_color_hint')}</p><div class="swatches">` + CONFIG.COLORS.map((c, i) => `<button data-color="${i}" class="${prof.color === i ? 'sel' : ''}" style="background:${hx6(c)}"></button>`).join('') + '</div>'
+      + `<h4 class="sh">${T('shop_morphs')}</h4><p class="sub">${T('shop_morphs_hint')}</p><div class="row"><button data-eq="" data-slot="morph" ${prof.morph ? '' : 'class="sel"'}>${T('no_morph')}</button></div>` + grid(bySlot('morph', false));
+  } else if (shopTab === 'outfit') body = `<h4 class="sh">${T('shop_hats')}</h4>` + grid(bySlot('hat', false)) + `<h4 class="sh">${T('shop_pats')}</h4><p class="sub">${T('shop_pats_hint')}</p>` + grid(bySlot('pat', false));
+  else if (shopTab === 'pets') body = '<div class="shop">' + Object.keys(CONFIG.PETS).map(id => {
+    const c = CONFIG.PETS[id], own = prof.pets.indexOf(id) >= 0, eq = prof.pet === id;
+    const btn = own ? `<button data-pet="${eq ? '' : id}">${eq ? T('unequip') : T('equip')}</button>` : `<button data-buypet="${id}" ${prof.coins >= c.price ? '' : 'disabled'}>${T('buy')} · 🪙 ${c.price}</button>`;
+    return `<div class="br"><h4>${c.ico} ${esc(TN(c.n))}</h4><p>${esc(TN(c.d))} ${own ? '· ' + T('owned') : ''}</p>${btn}</div>`; }).join('') + '</div>';
+  else if (shopTab === 'fx') body = `<h4 class="sh">${T('shop_roars')}</h4>` + grid(bySlot('rfx', false));
+  else if (shopTab === 'egg') body = `<h4 class="sh">${T('shop_eggs')}</h4><p class="sub">${T('shop_eggs_hint')}</p><div class="row"><button data-eq="" data-slot="egg" ${prof.eggskin ? '' : 'class="sel"'}>${T('egg_classic')}</button></div>` + grid(bySlot('egg', false));
+  else if (shopTab === 'nest') {
+    const nest = prof.nest || { items: [], put: [] };
+    body = `<p class="sub">${T('nest_hint')}</p><div class="shop">` + Object.keys(CONFIG.NEST_ITEMS).filter(id => !CONFIG.NEST_ITEMS[id].craft).map(id => {
+      const it = CONFIG.NEST_ITEMS[id], own = nest.items.indexOf(id) >= 0;
+      return `<div class="br"><h4>${it.ico} ${esc(TN(it.n))}</h4><p>${own ? T('owned') : ''}</p>${own ? '' : `<button data-nbuy="${id}" ${prof.coins >= it.price ? '' : 'disabled'}>${T('buy')} · 🪙 ${it.price}</button>`}</div>`; }).join('') + `</div><button id="sh-nest" style="margin-top:8px">🪺 ${T('nest_open')}</button>`;
+  } else body = `<h4 class="sh">🛠 ${T('shop_craft')}</h4><p class="sub">${T('mats_hint')}</p>` + grid(Object.keys(CONFIG.COSMETICS).filter(id => CONFIG.COSMETICS[id].craft));
+  const tabs = [['color', '🎨', T('tab_color')], ['outfit', '👒', T('tab_outfit')], ['pets', '🐾', T('shop_pets')], ['fx', '✨', T('tab_fx')], ['egg', '🥚', T('tab_egg')], ['nest', '🪺', T('tab_nest')], ['craft', '🛠', T('tab_craft')]];
+  const srcSw = !live && hasOnline && hasLocal ? `<div class="tabs"><button data-src="1" class="${shopOnline ? 'on' : ''}">🌐 ${T('prof_online')}</button><button data-src="0" class="${shopOnline ? '' : 'on'}">👤 ${T('prof_local')}</button></div>` : '';
+  openPanel('shop', `<div class="row" style="margin-bottom:6px"><h2 style="margin:0;flex:2">🛍 ${T('shop')}</h2><div class="pts" style="text-align:right">🪙 ${prof.coins} · 🦴 ${mats.bone} · 🟫 ${mats.hide}</div></div>${srcSw}
+    <div class="row" style="margin:4px 0 8px"><input id="sh-code" maxlength="30" placeholder="🎟 ${T('promo')}" autocomplete="off" style="flex:2"><button id="sh-redeem" style="flex:1">${T('promo_go')}</button></div>
+    <div class="tabs shoptabs">${tabs.map(([k, i, n]) => `<button data-st="${k}" class="${shopTab === k ? 'on' : ''}">${i} ${n}</button>`).join('')}</div>${body}<button id="pn-x" style="margin-top:12px">${T('back')}</button>`, root => {
+    const rb = root.querySelector('#sh-redeem');
+    if (rb) rb.onclick = async () => {
+      const code = $('sh-code').value; if (!code.trim()) return;
+      if (live) { ctl.send({ t: 'redeem', code }); return; }
+      try { const r = await P.shopMenu(shopOnline, 'redeem', { code }); if (!r.ok) { UI.toast(T(r.err === 'used_code' ? 'promo_used' : 'promo_bad')); return; } UI.toast(T('promo_ok').replace('{c}', r.coins || 100000)); openShop(); }
+      catch (e) { UI.toast(T(e.message === 'used_code' ? 'promo_used' : e.message === 'rate_limited' ? 'promo_rate' : e.message === 'bad_code' ? 'promo_bad' : 'server_off')); }
+    };
+    btnClick(root, '[data-st]', b => { shopTab = b.dataset.st; openShop(); });
+    btnClick(root, '[data-src]', b => { shopOnline = b.dataset.src === '1'; openShop(); });
+    btnClick(root, '[data-buy]', b => act('buy', { id: b.dataset.buy }));
+    btnClick(root, '[data-craft]', b => act('craft', { id: b.dataset.craft }));
+    btnClick(root, '[data-eq]', b => act('equip', { id: b.dataset.eq, slot: b.dataset.slot }));
+    btnClick(root, '[data-buypet]', b => act('buypet', { id: b.dataset.buypet }));
+    btnClick(root, '[data-pet]', b => act('setpet', { id: b.dataset.pet }));
+    btnClick(root, '[data-color]', b => act('setcolor', { i: +b.dataset.color }));
+    btnClick(root, '[data-nbuy]', b => act('nestbuy', { id: b.dataset.nbuy }));
+    const nb = root.querySelector('#sh-nest'); if (nb) nb.onclick = openNest;
+    $('pn-x').onclick = panelClose;
+  });
+}
+
+// ---------------------------------------------------------------- гнездо: трофеи и яйца
+function openNest() {
+  const live = inGame(), prof = live ? ctl.session.profile : activeProf(); if (!prof || !prof.hatched) return;
+  const nest = prof.nest || { items: [], put: [] }, mats = prof.mats || { bone: 0, hide: 0 };
+  const owned = [], shop = [];
+  CONFIG.ALL_BIOMES.forEach(b => { if (CONFIG.nestOwned(prof, 'tr_' + b)) owned.push('tr_' + b); });
+  Object.keys(CONFIG.NEST_ITEMS).forEach(id => { (nest.items.indexOf(id) >= 0 ? owned : shop).push(id); });
+  const put = nest.put.slice();
+  const nm = id => { const it = CONFIG.nestItem(id); return id.indexOf('tr_') === 0 ? '💀 ' + T('trophy_of', { b: TN(CONFIG.BIOME[id.slice(3)].n) }) : it.ico + ' ' + TN(it.n); };
+  const ownedHtml = owned.map(id => { const on = put.indexOf(id) >= 0; return `<div class="br"><h4>${esc(nm(id))}</h4><button data-np="${id}" ${live ? '' : 'disabled'}>${on ? '✔ ' + T('nest_placed') : T('nest_place')}</button></div>`; }).join('');
+  const shopHtml = shop.map(id => { const it = CONFIG.NEST_ITEMS[id]; const okb = it.craft ? mats.bone >= (it.craft.bone | 0) && mats.hide >= (it.craft.hide | 0) : prof.coins >= it.price;
+    return `<div class="br"><h4>${esc(nm(id))}</h4><button data-nb="${id}" ${live && okb ? '' : 'disabled'}>${it.craft ? '🛠 ' + T('craft') + ' · ' + (it.craft.bone ? '🦴' + it.craft.bone : '🟫' + it.craft.hide) : T('buy') + ' · 🪙 ' + it.price}</button></div>`; }).join('');
+  openPanel('nest', `<h2>🪺 ${T('nest')} <small style="color:var(--mut)">${put.length}/${CONFIG.NEST_MAX}</small></h2><p class="sub">${T('nest_hint')}</p><p class="sub">🪙 ${prof.coins} · 🦴 ${mats.bone} · 🟫 ${mats.hide}</p>
+    <h4 class="sh">${T('nest_have')}</h4><div class="shop">${ownedHtml || `<p class="sub">${T('nest_none')}</p>`}</div>${shopHtml ? `<h4 class="sh">${T('nest_shop')}</h4><div class="shop">${shopHtml}</div>` : ''}<button id="pn-x" style="margin-top:12px">${T('back')}</button>`, root => {
+    const again = () => setTimeout(openNest, 450);
+    btnClick(root, '[data-np]', b => { const id = b.dataset.np, i = put.indexOf(id); if (i >= 0) put.splice(i, 1); else if (put.length < CONFIG.NEST_MAX) put.push(id); ctl.send({ t: 'nestput', put }); again(); });
+    btnClick(root, '[data-nb]', b => { ctl.send({ t: 'nestbuy', id: b.dataset.nb }); again(); });
+    $('pn-x').onclick = panelClose;
+  });
+}
+
+// ---------------------------------------------------------------- дуэль из главного меню
+function openDuelMenu() {
+  const prof = P.state.profile && P.state.token ? P.state.profile : null, up = P.state.serverUp;
+  const lg = CONFIG.leagueOf((prof && prof.elo) || 1000);
+  openPanel('duelm', `<h2>⚔ ${T('duel_menu')}</h2>${prof ? `<div class="ratehead"><b>${lg.ico} ${esc(TN(lg.n))} · ${prof.elo | 0}</b><span>${T('duels_wl', { w: prof.dw | 0, l: prof.dl | 0 })}</span></div>` : ''}
+    <p class="sub">${T('duel_menu_hint')}</p>
+    <button class="pri" id="dm-q" ${up ? '' : 'disabled'}>⚔ ${T('duel_find')}</button>
+    <button id="dm-t" ${up ? '' : 'disabled'}>🏆 ${T('tourney')}</button>
+    <button id="pn-x" style="margin-top:10px">${T('back')}</button>`, () => {
+    const go = (kind) => {
+      const online = true;
+      if (!P.state.token) { openAuth(() => go(kind)); return; }
+      const prof = online ? P.state.profile : P.state.local;
+      if (!prof || !prof.hatched) { openCreate(online, () => go(kind), false); return; }
+      panelClose();
+      ctl.start({ online, biome: Sim.homeBiome(prof), mode: online ? 'public' : 'solo', duelq: kind === 'q', tourneyJoin: kind === 't' });
+    };
+    $('dm-q').onclick = () => go('q'); $('dm-t').onclick = () => go('t'); $('pn-x').onclick = panelClose;
+  });
+}
+function ratingHead() {
+  const pr = inGame() ? ctl.session.profile : activeProf(); if (!pr) return '';
+  const elo = pr.elo | 0 || 1000, lg = CONFIG.leagueOf(elo), nx = CONFIG.LEAGUES.find(x => x.min > elo);
+  const rw = lg.reward, rewTxt = '🪙 ' + rw.c + (rw.title ? ' · ' + CONFIG.TITLES[rw.title].ico + ' ' + TN(CONFIG.TITLES[rw.title].n) : '') + (rw.cos ? ' · 🎁 ' + TN(CONFIG.COSMETICS[rw.cos].n) : '');
+  return `<div class="ratehead"><b>${lg.ico} ${esc(TN(lg.n))} · ${elo}</b><span>${T('duels_wl', { w: pr.dw | 0, l: pr.dl | 0 })}${nx ? ' · ' + T('to_next', { n: nx.min - elo, l: TN(nx.n) }) : ''}</span><span>${T('season_left', { d: CONFIG.seasonLeftDays(Date.now()) })} · ${T('season_reward')}: ${esc(rewTxt)}</span></div>`;
 }
 async function openLeaders(tab) {
   tab = tab || 'wins';
@@ -295,12 +448,12 @@ async function openLeaders(tab) {
   let table;
   if (!data) table = `<p class="sub">${T('server_off')}</p>`;
   else {
-    const rows = tab === 'wins' ? data.wins : data.kings;
-    table = rows.length ? `<table><tr><th>${T('lb_place')}</th><th>${T('lb_name')}</th><th>${tab === 'wins' ? T('lb_wins_n') : T('lb_kings_n')}</th><th>${T('level_short')}</th></tr>` + rows.map((r, i) =>
-      `<tr class="${r.nickKey === me ? 'me' : ''}"><td>${i + 1}</td><td>${r.cls ? CLS_ICO[r.cls] + ' ' : ''}${esc(r.nick)}${r.lord ? ' 🌟' : ''}</td><td>${tab === 'wins' ? r.wins : r.count + '/6'}</td><td>${r.level || ''}</td></tr>`).join('') + '</table>' : `<p class="sub">${T('lb_empty')}</p>`;
+    const rows = tab === 'wins' ? data.wins : tab === 'elo' ? (data.elo || []) : tab === 'coins' ? (data.coins || []) : data.kings;
+    table = rows.length ? `<table><tr><th>${T('lb_place')}</th><th>${T('lb_name')}</th><th>${tab === 'wins' ? T('lb_wins_n') : tab === 'elo' ? T('rating') : tab === 'coins' ? T('lb_coins_n') : T('lb_kings_n')}</th><th>${T('level_short')}</th></tr>` + rows.map((r, i) =>
+      `<tr class="${r.nickKey === me ? 'me' : ''}"><td>${i + 1}</td><td>${r.cls ? CLS_ICO[r.cls] + ' ' : ''}${esc(r.nick)}${r.lord ? ' 🌟' : ''}</td><td>${tab === 'wins' ? r.wins : tab === 'elo' ? CONFIG.leagueOf(r.elo).ico + ' ' + r.elo : tab === 'coins' ? '🪙 ' + r.coins : r.count + '/6'}</td><td>${r.level || ''}</td></tr>`).join('') + '</table>' : `<p class="sub">${T('lb_empty')}</p>`;
   }
   if (openName !== 'lb') return;
-  openPanel('lb', `<h2>🏆 ${T('lb_title')}</h2><div class="tabs"><button data-t="wins" class="${tab === 'wins' ? 'on' : ''}">${T('lb_wins')}</button><button data-t="kings" class="${tab === 'kings' ? 'on' : ''}">${T('lb_kings')}</button></div>${table}<button id="pn-x" style="margin-top:12px">${T('back')}</button>`, root => {
+  openPanel('lb', `<h2>🏆 ${T('lb_title')}</h2><div class="tabs"><button data-t="wins" class="${tab === 'wins' ? 'on' : ''}">${T('lb_wins')}</button><button data-t="kings" class="${tab === 'kings' ? 'on' : ''}">${T('lb_kings')}</button><button data-t="elo" class="${tab === 'elo' ? 'on' : ''}">${T('rating')}</button><button data-t="coins" class="${tab === 'coins' ? 'on' : ''}">🪙 ${T('lb_coins')}</button></div>${tab === 'elo' ? ratingHead() : ''}${table}<button id="pn-x" style="margin-top:12px">${T('back')}</button>`, root => {
     btnClick(root, '[data-t]', b => openLeaders(b.dataset.t)); $('pn-x').onclick = panelClose;
   });
 }
@@ -341,9 +494,10 @@ function openPause() {
   openPanel('pause', `<h2>${T('menu')} Dino Evolution</h2>${code ? `<p class="sub">${T('copy_code')}: <b style="color:var(--ac2);font-size:20px">${code}</b></p>` : ''}
     <button class="pri" id="ps-resume">${T('resume')}</button>
     <div class="grid2"><button id="ps-about">🦖 ${T('about_dino')}</button><button id="ps-chg" ${S.room.mode === 'duel' || S.room.mode === 'rush' ? 'disabled' : ''}>🔄 ${T('change_dino')}</button></div>
-    <div class="grid2"><button id="ps-evo">${T('evolution')}</button><button id="ps-pl">${T('players')}</button><button id="ps-ach">${T('achievements')}</button><button id="ps-set">${T('settings')}</button></div>
+    <div class="grid2"><button id="ps-evo">${T('evolution')}</button><button id="ps-pl">${T('players')}</button><button id="ps-ach">${T('achievements')}</button><button id="ps-set">${T('settings')}</button><button id="ps-nest">🪺 ${T('nest')}</button><button id="ps-shop">🛍 ${T('shop')}</button></div>
+    <button id="ps-q">📅 ${T('quests')}</button>
     <button class="red" id="ps-exit">${T('to_menu')}</button>`, root => {
-    $('ps-resume').onclick = panelClose; $('ps-about').onclick = openAbout; $('ps-chg').onclick = openChange; $('ps-evo').onclick = () => openEvo(); $('ps-pl').onclick = openPlayers; $('ps-ach').onclick = openAch; $('ps-set').onclick = openSettings;
+    $('ps-resume').onclick = panelClose; $('ps-about').onclick = openAbout; $('ps-chg').onclick = openChange; $('ps-evo').onclick = () => openEvo(); $('ps-pl').onclick = openPlayers; $('ps-ach').onclick = openAch; $('ps-nest').onclick = openNest; $('ps-shop').onclick = () => openShop(); $('ps-set').onclick = openSettings; $('ps-q').onclick = openQuests;
     $('ps-exit').onclick = () => { closePanelState(); $('panel').classList.remove('on'); ctl.leave(); };
   });
 }
@@ -352,11 +506,11 @@ function openChange() {
   if (!inGame()) return;
   const S = ctl.session, pr = S.profile, world = CONFIG.clsWorld(pr.cls);
   const card = k => {
-    const I = CONFIG.CLS_INFO[k], lv = Sim.typeLevel(pr, k), cur = k === pr.cls;
-    return `<div class="cls ${cur ? 'sel' : ''}" data-k="${k}"><b>${I.ico} ${esc(TN(I.n))} <small>${lv ? T('level_short') + lv + ' · ' + T('stage_' + CONFIG.STAGES[CONFIG.stageIndex(lv)].id) : T('type_new')}${cur ? ' · ' + T('now_playing') : ''}</small></b><span>${esc(TN(I.d))}</span><em>${abilChips(k)}</em>${statsGrid(k, Math.max(1, lv))}</div>`;
+    const I = CONFIG.CLS_INFO[k], lv = Sim.typeLevel(pr, k), cur = k === pr.cls, lk = !Sim.typeUnlocked(pr, k);
+    return `<div class="cls ${cur ? 'sel' : ''} ${lk ? 'lock' : ''}" data-k="${k}" ${lk ? 'data-lk="1" style="opacity:.45"' : ''}><b>${I.ico} ${esc(TN(I.n))} <small>${lv ? T('level_short') + lv + ' · ' + T('stage_' + CONFIG.STAGES[CONFIG.stageIndex(lv)].id) : T('type_new')}${cur ? ' · ' + T('now_playing') : ''}</small></b><span>${esc(TN(I.d))}</span><em>${abilChips(k)}</em>${statsGrid(k, Math.max(1, lv))}</div>`;
   };
   openPanel('change', `<h2>🔄 ${T('change_dino')}</h2><p class="sub">${T('change_dino_d')}</p>${CONFIG.TYPES[world].map(card).join('')}<button id="pn-x" style="margin-top:12px">${T('resume')}</button>`, root => {
-    btnClick(root, '.cls', b => { if (b.dataset.k === pr.cls) { panelClose(); return; } closePanelState(); $('panel').classList.remove('on'); ctl.switchType(b.dataset.k); });
+    btnClick(root, '.cls', b => { if (b.dataset.lk) { UI.toast(T('type_lock_n', { n: CONFIG.TYPE_MIN_LV[b.dataset.k] })); return; } if (b.dataset.k === pr.cls) { panelClose(); return; } closePanelState(); $('panel').classList.remove('on'); ctl.switchType(b.dataset.k); });
     $('pn-x').onclick = panelClose;
   });
 }

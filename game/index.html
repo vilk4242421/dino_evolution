@@ -44,6 +44,10 @@
   #acc { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:12px; font-size:14px; color:var(--mut); }
   #acc b { color:var(--tx); }
   .swatches { display:grid; grid-template-columns:repeat(6,1fr); gap:8px; margin:6px 0 12px; }
+  .ratehead { display:flex; flex-direction:column; gap:2px; margin:8px 0; padding:8px 12px; border-radius:12px; background:rgba(255,211,90,.12); border:1px solid rgba(255,211,90,.4); } .ratehead span { font-size:12px; color:var(--mut); }
+  .mo { display:flex; gap:3px; align-items:center; margin-bottom:4px; } .mo i { width:26px; height:18px; border-radius:6px; border:1px solid #fff8; } .mo b { font-size:11px; color:#ffd35a; margin-left:4px; }
+  .eggp { width:60px; height:75px; object-fit:contain; margin:0 auto 4px; display:block; } .swatches { display:flex; flex-wrap:wrap; gap:8px; margin:6px 0; } .swatches button { width:38px; height:38px; border-radius:50%; border:2px solid #fff6; padding:0; } .swatches button.sel { outline:3px solid #ffd35a; } button.sel { outline:2px solid #ffd35a; }
+  .shoptabs { flex-wrap:wrap; } .shoptabs button { padding:6px 10px; }
   .sw { aspect-ratio:1; border-radius:50%; border:3px solid transparent; cursor:pointer; }
   .sw.sel { border-color:#fff; box-shadow:0 0 0 2px var(--ac); }
   .cls { display:block; text-align:left; padding:9px 12px; margin:6px 0; border-radius:12px; border:2px solid rgba(155,227,122,.25); background:rgba(0,0,0,.25); cursor:pointer; }
@@ -89,11 +93,30 @@
   .br button { padding:6px; font-size:13px; margin:0; }
   .pts { color:var(--ac2); font-weight:700; }
   .ach { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:8px; } .a { display:flex; gap:10px; padding:8px 10px; border-radius:12px; background:rgba(0,0,0,.28); opacity:.45; } .a.on { opacity:1; border:1px solid rgba(255,211,90,.5); } .a i { font-style:normal; font-size:26px; } .a b { font-size:14px; } .a span { display:block; font-size:12px; color:var(--mut); }
+  .sw { display:inline-block; width:14px; height:14px; border-radius:50%; margin-right:6px; vertical-align:-2px; border:1px solid #fff8; } h4.sh { margin:12px 0 6px; color:#ffd35a; }
   .shop { display:grid; grid-template-columns:repeat(auto-fill,minmax(170px,1fr)); gap:8px; }
   /* HUD */
   #hud { position:fixed; inset:0; display:none; pointer-events:none; z-index:10; }
   #hud.on { display:block; }
   #bars { position:absolute; left:max(12px,env(safe-area-inset-left)); top:max(12px,env(safe-area-inset-top)); width:min(46vw,260px); }
+  #hurtfx { position:fixed; inset:0; z-index:44; pointer-events:none; opacity:0; background:radial-gradient(ellipse at center, rgba(255,30,10,0) 45%, rgba(220,20,10,.55) 100%); } #hurtfx.go { animation:hurtgo .45s ease-out; } @keyframes hurtgo { 0% { opacity:1; } 100% { opacity:0; } }
+  #tut { position:fixed; left:50%; top:calc(max(8px,env(safe-area-inset-top)) + 46px); transform:translateX(-50%); z-index:40; display:none; align-items:center; gap:10px; max-width:min(92vw,520px); padding:8px 12px; border-radius:14px; background:rgba(0,0,0,.62); border:1px solid rgba(255,211,90,.55); color:#fff; font-size:14px; pointer-events:none; } #tut.on { display:flex; } #tut b { color:#ffd35a; } #tut button { pointer-events:auto; margin:0; padding:2px 9px; font-size:14px; width:auto; background:rgba(255,255,255,.15); }
+  #revbtn { position:fixed; left:50%; bottom:calc(max(22px,env(safe-area-inset-bottom)) + 70px); transform:translateX(-50%); z-index:41; display:none; padding:10px 18px; min-width:190px; margin:0; border-radius:14px; background:rgba(30,120,60,.85); color:#fff; border:2px solid #9bffb4; font-weight:800; font-size:16px; overflow:hidden; } #revbtn.on { display:block; } #revbtn-f { position:absolute; left:0; top:0; bottom:0; width:0; background:rgba(160,255,190,.45); } #revbtn-t { position:relative; }
+  #boltfx { position:fixed; inset:0; z-index:43; pointer-events:none; opacity:0; background:#dfeaff; } #boltfx.go { animation:boltgo .35s ease-out; } @keyframes boltgo { 0% { opacity:.55; } 20% { opacity:.15; } 35% { opacity:.4; } 100% { opacity:0; } }
+  #buff { position:absolute; left:12px; top:calc(max(8px,env(safe-area-inset-top)) + 118px); display:none; padding:3px 10px; border-radius:10px; background:rgba(0,0,0,.5); border:1px solid rgba(255,211,90,.6); color:#ffd35a; font-weight:700; font-size:13px; }
+  /* коронация */
+  #coro { position:fixed; inset:0; z-index:45; display:none; pointer-events:none; } #coro.on { display:block; }
+  #coro .cb { position:absolute; left:0; right:0; height:0; background:#000; transition:height .7s ease; } #coro.on .cb { height:13vh; } #coro .cb.top { top:0; } #coro .cb.bot { bottom:0; }
+  #coro-flash { position:absolute; inset:0; background:#fff; opacity:0; } #coro-flash.go { animation:coroflash 1.1s ease-out; } @keyframes coroflash { 0% { opacity:.95; } 100% { opacity:0; } }
+  #coro-title { position:absolute; left:0; right:0; bottom:calc(13vh + 3vh); text-align:center; padding:0 5vw; opacity:0; transition:opacity .8s; } #coro.landed #coro-title { opacity:1; }
+  #coro-t1 { font-weight:900; font-size:clamp(26px,7vw,64px); letter-spacing:3px; color:#ffd35a; text-shadow:0 0 18px rgba(255,190,60,.85), 0 3px 8px #000; }
+  #coro-t2, #coro-t3 { font-weight:700; font-size:clamp(14px,3.2vw,24px); color:#fff; text-shadow:0 2px 6px #000; opacity:0; transition:opacity .8s; margin-top:8px; } #coro.sub #coro-t2, #coro.sub #coro-t3 { opacity:1; }
+  #coro-skip { position:absolute; right:14px; bottom:calc(13vh + 6px); font-size:12px; color:#fff; opacity:.6; text-shadow:0 1px 3px #000; }
+  body.cine #hud { opacity:0; transition:opacity .4s; } body.cine #fsbtn { opacity:0; pointer-events:none; }
+  .a .rw { color:#ffd35a; font-size:11px; display:block; } .a em { font-size:11px; color:var(--mut); font-style:normal; } button.claim { background:#ffb800; color:#222; font-weight:800; padding:4px 10px; border-radius:8px; margin-top:4px; }
+  .titles { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px; } .titles button { padding:5px 10px; border-radius:10px; } .titles button.sel { outline:2px solid #ffd35a; }
+  .qlist { grid-template-columns:1fr; } .qlist .a { opacity:1; } .qlist .a.on { background:rgba(155,227,122,.22); }
+  .qbar { height:8px; background:rgba(0,0,0,.45); border-radius:6px; overflow:hidden; margin-top:5px; } .qbar i { display:block; height:100%; background:var(--ac2); border-radius:6px; }
   .bar { height:14px; background:rgba(0,0,0,.5); border-radius:8px; margin:0 0 5px; overflow:hidden; position:relative; border:1px solid rgba(255,255,255,.15); }
   .bar > div { height:100%; border-radius:8px; transition:width .1s; }
   .bar span { position:absolute; left:8px; top:-1px; font-size:11px; font-weight:700; text-shadow:0 1px 2px #000; }
@@ -103,12 +126,11 @@
   #coins { color:var(--ac2); } #debuf { font-size:12px; min-height:16px; text-shadow:0 1px 2px #000; }
   #mini { position:absolute; right:max(12px,env(safe-area-inset-right)); top:max(12px,env(safe-area-inset-top)); width:clamp(104px,24vw,160px); aspect-ratio:1; border-radius:50%; overflow:hidden; border:3px solid rgba(255,255,255,.7); background:#000; box-shadow:0 4px 16px rgba(0,0,0,.5); }
   #mini canvas { width:100%; height:100%; display:block; } #mini { cursor:pointer; pointer-events:auto; }
-  #bigmap { position:fixed; inset:0; z-index:60; display:none; align-items:center; justify-content:center; background:rgba(4,10,8,.72); backdrop-filter:blur(3px); }
+  #bigmap { position:fixed; inset:0; z-index:60; pointer-events:auto; display:none; align-items:center; justify-content:center; background:rgba(4,10,8,.72); backdrop-filter:blur(3px); }
   #bigmap.on { display:flex; } #bigmap .bm-in { display:flex; flex-direction:column; align-items:center; gap:6px; }
   #bigmap canvas { width:min(92vw,84vh); height:min(92vw,84vh); border-radius:16px; border:3px solid rgba(255,255,255,.7); box-shadow:0 8px 40px rgba(0,0,0,.6); background:#0a1410; }
   #bigmap-x { position:absolute; right:max(12px,env(safe-area-inset-right)); top:max(12px,env(safe-area-inset-top)); z-index:2; width:52px; height:52px; margin:0; padding:0; border-radius:50%; font-size:26px; line-height:1; background:rgba(200,50,40,.9); color:#fff; border:2px solid #fff; }
-  #bigmap-close { margin:4px 0 0; padding:12px 26px; font-size:17px; font-weight:800; background:rgba(200,50,40,.92); color:#fff; border:2px solid #fff; border-radius:14px; }
-  #bigmap-x { z-index:5; width:60px; height:60px; }
+  #bigmap-x { z-index:5; width:60px; height:60px; right:auto; left:max(12px,env(safe-area-inset-left)); }
   #bigmap-t { font-weight:800; font-size:18px; color:#fff; text-shadow:0 2px 4px #000; } .bm-leg { font-size:12px; color:#dfe; opacity:.85; text-align:center; padding:0 12px; }
   #info { position:absolute; right:max(12px,env(safe-area-inset-right)); top:calc(max(12px,env(safe-area-inset-top)) + clamp(104px,24vw,160px) + 8px); font-size:12px; color:#fff; text-shadow:0 1px 3px #000; text-align:right; line-height:1.4; }
   #fsbtn { position:fixed; z-index:60; top:max(8px,env(safe-area-inset-top)); right:max(8px,env(safe-area-inset-right)); width:38px; height:38px; padding:0; margin:0; display:flex; align-items:center; justify-content:center; border-radius:10px; background:rgba(0,0,0,.45); border:1px solid rgba(255,255,255,.18); color:#e8f3df; cursor:pointer; }
@@ -133,6 +155,7 @@
   #abil { position:absolute; left:50%; bottom:max(14px,env(safe-area-inset-bottom)); transform:translateX(-50%); display:flex; gap:10px; pointer-events:none; }
   .ab { width:56px; height:56px; border-radius:14px; background:rgba(0,0,0,.5); border:2px solid rgba(255,255,255,.5); position:relative; overflow:hidden; display:flex; align-items:center; justify-content:center; font-size:22px; pointer-events:auto; padding:0; margin:0; touch-action:none; color:#fff; }
   .ab small { position:absolute; left:4px; top:1px; font-size:10px; font-weight:800; color:#ffd35a; } .ab .cd { position:absolute; left:0; bottom:0; width:100%; background:rgba(0,0,0,.65); height:0; } .ab .nm { position:absolute; bottom:1px; width:100%; text-align:center; font-size:9px; color:#ddd; }
+  .ab.ult-ready { border-color:#ffd35a; box-shadow:0 0 14px 3px #ffb800; animation:ultp 1s infinite alternate; } .ab.ult-on { border-color:#ff5a2a; background:rgba(255,90,42,.45); } @keyframes ultp { to { box-shadow:0 0 22px 7px #ffe066; } }
   .ab.held { background:rgba(155,227,122,.55); }
   #joy { position:absolute; left:max(18px,env(safe-area-inset-left)); bottom:max(22px,env(safe-area-inset-bottom)); width:108px; height:108px; border-radius:50%; background:rgba(255,255,255,.12); border:2px solid rgba(255,255,255,.35); pointer-events:auto; display:none; touch-action:none; }
   #joy i { position:absolute; left:50%; top:50%; width:50px; height:50px; margin:-25px 0 0 -25px; border-radius:50%; background:rgba(255,255,255,.4); }
@@ -164,6 +187,10 @@
 <div id="loading"><div class="sp"></div><div>Dino Evolution</div><div id="loaderr" style="font-size:14px;color:#e8573f;max-width:80vw;text-align:center"></div></div>
 
 <div id="verlbl"></div>
+<div id="hurtfx"></div><div id="boltfx"></div>
+<button id="revbtn"><span id="revbtn-f"></span><span id="revbtn-t"></span></button>
+<div id="tut"><span>🎓 <b id="tut-n"></b></span><span id="tut-t" style="flex:1"></span><button id="tut-x" title="✕">✕</button></div>
+<div id="coro"><div class="cb top"></div><div class="cb bot"></div><div id="coro-flash"></div><div id="coro-title"><div id="coro-t1"></div><div id="coro-t2"></div><div id="coro-t3"></div></div><div id="coro-skip" data-i="coro_skip"></div></div>
 <div id="menu" class="screen"><div class="card" id="menu-card"></div></div>
 <div id="auth" class="screen dim"><div class="card">
   <h2 data-i="account">Аккаунт</h2>
@@ -184,6 +211,7 @@
 <div id="panel" class="screen dim"><div class="card wide" id="panel-card"></div></div>
 
 <div id="hud">
+  <div id="buff"></div>
   <div id="bars">
     <div id="lvl"><span id="lvl-t"></span><span id="coins"></span></div>
     <div class="bar" id="b-hp"><div></div><span>HP</span></div>
@@ -194,7 +222,7 @@
     <div id="debuf"></div>
   </div>
   <div id="mini"><canvas id="mini-cv" width="200" height="200"></canvas></div>
-  <div id="bigmap"><button id="bigmap-x">✕</button><div class="bm-in"><div id="bigmap-t"></div><canvas id="bigmap-cv" width="900" height="900"></canvas><div class="bm-leg" data-i="map_legend"></div><button id="bigmap-close">✕ Закрыть карту</button></div></div>
+  <div id="bigmap"><button id="bigmap-x">✕</button><div class="bm-in"><div id="bigmap-t"></div><canvas id="bigmap-cv" width="900" height="900"></canvas><div class="bm-leg" data-i="map_legend"></div></div></div>
   <div id="info"></div>
   <button id="menubtn">☰</button>
   <div id="bossbar"><div class="nm"></div><div class="bar"><div></div></div><div class="ph"></div></div>

@@ -11,6 +11,10 @@ const lastKing = p => { const k = (p && p.kingAt) || {}; let m = 0; for (const b
 function winsRow(u) { const p = u.profile || {}; return { nick: u.display, nickKey: u.nick, wins: p.wins | 0, level: p.level | 0, cls: p.cls || null }; }
 const LAND = ['forest', 'snow', 'mountain', 'desert', 'swamp', 'volcano'];   // «Владыка эпох» — все 6 боссов суши (океан считается в общем числе корон)
 function kingsRow(u) { const p = u.profile || {}, ks = p.kings || [], k = ks.length; return { nick: u.display, nickKey: u.nick, count: k, lord: LAND.every(b => ks.indexOf(b) >= 0), at: lastKing(p), level: p.level | 0 }; }
+function eloRow(u) { const p = u.profile || {}; return { nick: u.display, nickKey: u.nick, elo: p.elo | 0, played: (p.dw | 0) + (p.dl | 0), level: p.level | 0, cls: p.cls || null }; }
+function coinsRow(u) { const p = u.profile || {}; return { nick: u.display, nickKey: u.nick, coins: p.coins | 0, level: p.level | 0, cls: p.cls || null }; }
+function sortCoins(rows) { return rows.filter(r => r.coins > 0).sort((a, b) => b.coins - a.coins); }
+function sortElo(rows) { return rows.filter(r => r.played > 0).sort((a, b) => b.elo - a.elo || b.played - a.played); }
 function sortWins(rows) { return rows.filter(r => r.wins > 0).sort((a, b) => b.wins - a.wins || b.level - a.level); }
 function sortKings(rows) { return rows.filter(r => r.count > 0).sort((a, b) => b.count - a.count || a.at - b.at); }
 
@@ -56,7 +60,9 @@ function jsonStore(file) {
     async saveProfile(id, profile) { if (data.users[id]) { data.users[id].profile = profile; schedule(); } },
     async countUsers() { return Object.keys(data.users).length; },
     async topWins(n) { return sortWins(Object.values(data.users).map(winsRow)).slice(0, n); },
-    async topKings(n) { return sortKings(Object.values(data.users).map(kingsRow)).slice(0, n); }
+    async topKings(n) { return sortKings(Object.values(data.users).map(kingsRow)).slice(0, n); },
+    async topElo(n) { return sortElo(Object.values(data.users).map(eloRow)).slice(0, n); },
+    async topCoins(n) { return sortCoins(Object.values(data.users).map(coinsRow)).slice(0, n); }
   };
 }
 
@@ -93,6 +99,14 @@ async function pgStore(url) {
     async topKings(n) {
       const r = await pool.query("SELECT nick, display, profile FROM users WHERE jsonb_array_length(COALESCE(profile->'kings','[]'::jsonb)) > 0 ORDER BY jsonb_array_length(profile->'kings') DESC LIMIT 200");
       return sortKings(r.rows.map(kingsRow)).slice(0, n);
+    },
+    async topElo(n) {
+      const r = await pool.query("SELECT nick, display, profile FROM users WHERE (COALESCE((profile->>'dw')::int,0) + COALESCE((profile->>'dl')::int,0)) > 0 ORDER BY COALESCE((profile->>'elo')::int,1000) DESC LIMIT $1", [n]);
+      return sortElo(r.rows.map(eloRow));
+    },
+    async topCoins(n) {
+      const r = await pool.query("SELECT nick, display, profile FROM users WHERE COALESCE((profile->>'coins')::bigint,0) > 0 ORDER BY (profile->>'coins')::bigint DESC LIMIT $1", [n]);
+      return sortCoins(r.rows.map(coinsRow));
     }
   };
 }

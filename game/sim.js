@@ -73,7 +73,13 @@
     if (id === 'arctic') put(F.bergs, 22, 7, 18, 10);
     if (id === 'vents') put(F.vents, 26, 3.5, 5.5, 14);
     if (id === 'abyss' || id === 'kelp') put(F.spires, id === 'abyss' ? 30 : 18, 3, 7, 10);
-    put(F.peaks, 16, 14, 34, 20);                                                    // подводные горы разной высоты: от холмов до вершин почти у поверхности
+    // подводные горы трёх размеров (низкие, средние, высокие), стоят отдельно друг от друга — без длинных хребтов
+    for (var kp = 0; kp < 900 && F.peaks.length < 26; kp++) {
+      a = r() * 6.283; d = 80 + r() * (HALF - 120);
+      var px = Math.cos(a) * d, pz = Math.sin(a) * d, pv = (F.peaks.length % 3) / 3 + r() / 3, pr = 9 + r() * 16 + (pv < 0.34 ? 4 : 0), pok = true;
+      for (var jp = 0; jp < F.peaks.length; jp++) if (Math.hypot(F.peaks[jp].x - px, F.peaks[jp].z - pz) < (F.peaks[jp].r + pr) * 1.9 + 14) { pok = false; break; }
+      if (pok) F.peaks.push({ x: px, z: pz, r: pr, v: pv });
+    }                                                    // подводные горы разной высоты: от холмов до вершин почти у поверхности
     // сквозные пещеры: подводный скальный массив с туннелем по оси (две стены + каменный свод, рисует клиент)
     var CAVE_F = { reef: -26, kelp: -42, arctic: -46, vents: -58, abyss: -92 }, nc = { reef: 10, kelp: 12, arctic: 12, vents: 12, abyss: 14 }[id] || 10, ndef = DEF[id];
     for (var kc = 0; kc < 4000 && F.caves.length < nc; kc++) {
@@ -89,11 +95,11 @@
     if (id === 'reef') {
       h = -8 + (fbm(x / 120, z / 120, seed, 4) - 0.5) * 7;
       var rr = 1 - Math.abs(fbm(x / 38, z / 38, seed + 21, 3) * 2 - 1);                // гряды кораллов почти до поверхности
-      h += smooth(0.72, 0.96, rr) * 6.2;
+      h += smooth(0.72, 0.96, rr) * 3.0;
       for (i = 0; i < F.islands.length; i++) { o = F.islands[i]; d = Math.hypot(x - o.x, z - o.z); if (d < o.r * 2.2) h = Math.max(h, lerp(h, 1.4 + o.v * 0.8, 1 - smooth(o.r * 0.6, o.r * 2.2, d))); }
     } else if (id === 'kelp') {
       h = -13 + (fbm(x / 90, z / 90, seed, 4) - 0.5) * 9 + (fbm(x / 24, z / 24, seed + 11, 2) - 0.5) * 2;
-      var kr = 1 - Math.abs(fbm(x / 60, z / 60, seed + 31, 3) * 2 - 1); h += smooth(0.7, 0.95, kr) * 5;      // скальные гряды
+      var kr = 1 - Math.abs(fbm(x / 60, z / 60, seed + 31, 3) * 2 - 1); h += smooth(0.7, 0.95, kr) * 2.6;      // скальные гряды
     } else if (id === 'arctic') {
       h = -12 + (fbm(x / 100, z / 100, seed, 4) - 0.5) * 7;
       for (i = 0; i < F.bergs.length; i++) { o = F.bergs[i]; d = Math.hypot(x - o.x, z - o.z); if (d < o.r * 1.25) { var top = 2.2 + o.v * 3 + (fbm(x / 9, z / 9, seed + i, 2) - 0.5) * 1.6; h = Math.max(h, lerp(h, top, 1 - smooth(o.r * 0.85, o.r * 1.25, d))); } }
@@ -107,7 +113,13 @@
     }
     if (h < 0) h *= ({ reef: 3.9, kelp: 4.05, arctic: 4.65, vents: 4.5, abyss: 4.8 }[id] || 2.6);       // глубина океана: до ~40–100 м
     for (i = 0; i < F.spires.length; i++) { o = F.spires[i]; d = Math.hypot(x - o.x, z - o.z); if (d < o.r * 1.6) h += (1 - smooth(o.r * 0.4, o.r * 1.6, d)) * (id === 'abyss' ? 24 : 12) * (0.4 + o.v * 1.4); }
-    for (i = 0; F.peaks && i < F.peaks.length; i++) { o = F.peaks[i]; d = Math.hypot(x - o.x, z - o.z); if (d < o.r * 2.2) { var pk = (1 - smooth(o.r * 0.25, o.r * 2.2, d)) * (0.65 + 0.35 * fbm(x / 12, z / 12, seed + 90 + i, 2)); h = Math.max(h, Math.min(h + pk * (8 + o.v * o.v * 70), -3.5 - (1 - o.v) * (1 - o.v) * 34)); } }
+    for (i = 0; F.peaks && i < F.peaks.length; i++) {      // подводные горы: куполом с гладкой, скруглённой вершиной; высоты сильно разные (от холмов до вершин у поверхности), в целом ниже прежних
+      o = F.peaks[i]; d = Math.hypot(x - o.x, z - o.z); var PR = o.r * 2.2;
+      if (d < PR) {
+        var ps = 1 - (d / PR) * (d / PR), fl = { reef: -31, kelp: -52, arctic: -56, vents: -72, abyss: -115 }[id] || -40, fr = o.v < 0.34 ? 0.25 + o.v / 0.34 * 0.15 : o.v < 0.67 ? 0.5 + (o.v - 0.34) / 0.33 * 0.18 : 0.8 + (o.v - 0.67) / 0.33 * 0.15, top = Math.min(-4, fl * (1 - fr)), pw = Math.pow(ps, 1.5) * (0.94 + 0.06 * fbm(x / 40, z / 40, seed + 90 + i, 2));
+        if (top > h) h += (top - h) * pw;
+      }
+    }
     for (i = 0; F.caves && i < F.caves.length; i++) {
       o = F.caves[i]; var cdx = x - o.x, cdz = z - o.z; if (cdx * cdx + cdz * cdz > 70 * 70) continue;
       var cu = Math.abs(cdx * Math.cos(o.a) + cdz * Math.sin(o.a)), cv = Math.abs(-cdx * Math.sin(o.a) + cdz * Math.cos(o.a));
@@ -362,7 +374,7 @@
   var STAGE_SCALE = [1, 1.3, 1.6, 1.85];
   function scaleOf(level) {
     var l = clamp(level | 0 || 1, 1, CF.MAX_LEVEL);
-    return (0.5 + (l - 1) * 0.022) * STAGE_SCALE[CF.stageIndex(l)];
+    return 0.36 * Math.pow(2.1 / 0.36, Math.pow((l - 1) / (CF.MAX_LEVEL - 1), 0.9));   // плавный рост: 0.36 на 1 уровне → 2.1 на 30
   }
   // характеристики из класса, уровня и эволюции (evo: {ветка: ранг}); одинаково считаются на клиенте и сервере
   function statsFor(cls, level, evo) {
@@ -554,15 +566,150 @@
     return p;
   }
 
+
+  // ======================================================================== ЕЖЕДНЕВНЫЕ ЗАДАНИЯ
+  function fixDaily(d) {
+    var o = { day: 0, streak: 0, best: 0, q: [], bonus: 0 };
+    if (!d || typeof d !== 'object') return o;
+    o.day = Math.max(0, d.day | 0); o.streak = clamp(d.streak | 0, 0, 9999); o.best = clamp(d.best | 0, 0, 9999); o.bonus = d.bonus ? 1 : 0;
+    if (Array.isArray(d.q)) d.q.slice(0, 4).forEach(function (x) {
+      if (x && CF.QUESTS[x.id]) o.q.push({ id: x.id, n: Math.max(1, x.n | 0), h: Math.max(0, x.h | 0), done: x.done ? 1 : 0 });
+    });
+    return o;
+  }
+  // номер игрового дня (смена в 00:00 по Москве)
+  function dayNum(ms) { return Math.floor((ms + 3 * 3600000) / 86400000); }
+  function pickQuests(day, lv) {
+    var seed = (day * 2654435761) >>> 0;
+    var rnd = function () { seed = (seed + 0x6D2B79F5) >>> 0; var t = seed; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+    var first = rnd() < 0.5 ? 'kill' : 'killh', ids = [first, 'eat'], pool = ['play'];
+    if (lv >= CF.QUESTS.boss.minLv) pool.push('boss'); else pool.push(first === 'kill' ? 'killh' : 'kill');
+    ids.push(pool[(rnd() * pool.length) | 0]);
+    return ids.map(function (id) { return { id: id, n: CF.QUESTS[id].n(lv), h: 0, done: 0 }; });
+  }
+  // смена дня: новые задания, серия входов и награда за вход. Возвращает {streak, coins, cos} при новом дне (иначе null); coins/cos уже начислены
+  function dailyRoll(pr, now) {
+    var d = pr.daily = fixDaily(pr.daily), today = dayNum(now || Date.now());
+    if (d.day === today || today < d.day) return null;
+    var cont = d.day === today - 1;
+    d.streak = cont ? d.streak + 1 : 1; d.best = Math.max(d.best, d.streak); d.day = today; d.bonus = 0;
+    d.q = pickQuests(today, pr.level | 0);
+    var coins = CF.STREAK_COINS * Math.min(d.streak, 7), cos = '';
+    if (d.streak % 7 === 0) {
+      var ids = Object.keys(CF.COSMETICS).filter(function (k) { return CF.COSMETICS[k].price; }).sort(function (a, b) { return CF.COSMETICS[a].price - CF.COSMETICS[b].price; });
+      for (var i = 0; i < ids.length; i++) if (pr.cosmetics.indexOf(ids[i]) < 0) { cos = ids[i]; break; }
+      if (cos) pr.cosmetics.push(cos); else coins += 200;
+    }
+    pr.coins += coins; pr.stats.coinsEarned = (pr.stats.coinsEarned || 0) + coins;
+    return { streak: d.streak, coins: coins, cos: cos };
+  }
+  // прогресс по заданию; возвращает список завершённых [{i, id, coins, all}] (монеты начисляет вызывающий)
+  function questAdd(pr, type, n) {
+    var d = pr.daily = fixDaily(pr.daily), out = [];
+    for (var i = 0; i < d.q.length; i++) {
+      var x = d.q[i]; if (x.id !== type || x.done) continue;
+      x.h = Math.min(x.n, x.h + n);
+      if (x.h >= x.n) { x.done = 1; out.push({ i: i, id: x.id, coins: CF.QUESTS[x.id].coins, all: false }); }
+    }
+    if (out.length && !d.bonus && d.q.every(function (z) { return z.done; })) { d.bonus = 1; out[out.length - 1].all = true; }
+    return out;
+  }
+
   // ======================================================================== ПРОФИЛЬ
   function defaultProfile(name) {
     return {
       name: name || '', color: 0, cls: null, hatched: false,
-      level: 1, xp: 0, totalXp: 0, evo: {}, kings: [], kingAt: {}, cosmetics: [], cosmetic: '',
+      level: 1, xp: 0, totalXp: 0, evo: {}, kings: [], kingAt: {}, cosmetics: [], cosmetic: '', pets: [], pet: '', codes: [], claimed: [], titles: [], title: '', patc: '', rfx: '', morph: '', eggskin: '', mats: { bone: 0, hide: 0 }, trophies: {}, elo: 1000, dw: 0, dl: 0, season: '', nest: { items: [], put: [] },
       coins: 0, playTime: 0, wins: 0, biome: 'forest', savedAt: 0,
+      daily: { day: 0, streak: 0, best: 0, q: [], bonus: 0 }, tut: 0,     // ежедневные задания и серия входов
       slots: {}, seen: [],          // slots — сохранённый прогресс других типов; seen — победённые виды (бестиарий)
-      stats: { kills: 0, deaths: 0, bosses: 0, eaten: 0, tourney: 0, rush: 0, coinsEarned: 0 }
+      stats: { kills: 0, deaths: 0, bosses: 0, eaten: 0, tourney: 0, rush: 0, coinsEarned: 0, ults: 0, quests: 0 }
     };
+  }
+
+
+
+  // ---------- промокоды: в исходниках только хэши; каждый код — один раз на профиль ----------
+  var PROMOS = { '1n9etfo-hf2tw1': { id: 'molotkov62', coins: 100000 } };
+  function codeHash(str) {
+    function h(seed) { var x = seed >>> 0; for (var i = 0; i < str.length; i++) { x ^= str.charCodeAt(i); x = Math.imul(x, 16777619) >>> 0; x = (x ^ (x >>> 13)) >>> 0; } return x.toString(36); }
+    return h(2166136261) + '-' + h(305419896);
+  }
+  function redeem(pr, raw) {
+    var code = String(raw || '').trim().slice(0, 40), pm = PROMOS[codeHash(code)];
+    if (!pm) return { ok: false, err: 'bad_code' };
+    if (pr.codes.indexOf(pm.id) >= 0) return { ok: false, err: 'used_code' };
+    pr.codes.push(pm.id); pr.coins += pm.coins; pr.stats.coinsEarned = (pr.stats.coinsEarned || 0) + pm.coins;
+    return { ok: true, field: 'coins', coins: pm.coins };
+  }
+
+  // ---------- магазин: чистые операции над профилем (используются и в игре, и в главном меню, и на сервере) ----------
+  // возвращает { ok, err, changed: [поля] }
+  function shopOp(pr, op, a) {
+    a = a || {};
+    var id = typeof a.id === 'string' ? a.id : '', c, f, fail = function (e) { return { ok: false, err: e }; };
+    if (!pr || !pr.hatched) return fail('no_char');
+    if (op === 'redeem') return redeem(pr, a.code);
+    if (op === 'buy') {
+      c = CF.COSMETICS[id]; if (!c || !c.price || pr.cosmetics.indexOf(id) >= 0) return fail('bad');
+      if (pr.coins < c.price) return fail('coins');
+      pr.coins -= c.price; pr.cosmetics.push(id); pr[CF.SLOT_FIELD[CF.cosSlot(id)]] = id; return { ok: true, field: CF.SLOT_FIELD[CF.cosSlot(id)] };
+    }
+    if (op === 'craft') {
+      c = CF.COSMETICS[id]; if (!c || !c.craft || pr.cosmetics.indexOf(id) >= 0) return fail('bad');
+      if (pr.mats.bone < (c.craft.bone | 0) || pr.mats.hide < (c.craft.hide | 0)) return fail('mats');
+      pr.mats.bone -= c.craft.bone | 0; pr.mats.hide -= c.craft.hide | 0; pr.cosmetics.push(id); pr.stats.crafted = (pr.stats.crafted | 0) + 1;
+      pr[CF.SLOT_FIELD[CF.cosSlot(id)]] = id; return { ok: true, field: CF.SLOT_FIELD[CF.cosSlot(id)] };
+    }
+    if (op === 'equip') {
+      f = id ? CF.SLOT_FIELD[CF.cosSlot(id)] : CF.SLOT_FIELD[a.slot || 'hat']; if (!f) return fail('bad');
+      if (id && pr.cosmetics.indexOf(id) < 0) return fail('bad');
+      pr[f] = id; return { ok: true, field: f };
+    }
+    if (op === 'buypet') {
+      c = CF.PETS[id]; if (!c || pr.pets.indexOf(id) >= 0) return fail('bad');
+      if (pr.coins < c.price) return fail('coins');
+      pr.coins -= c.price; pr.pets.push(id); pr.pet = id; return { ok: true, field: 'pet' };
+    }
+    if (op === 'setpet') { if (id && pr.pets.indexOf(id) < 0) return fail('bad'); pr.pet = id; return { ok: true, field: 'pet' }; }
+    if (op === 'setcolor') { var i = a.i | 0; if (i < 0 || i >= CF.COLORS.length) return fail('bad'); pr.color = i; return { ok: true, field: 'color' }; }
+    if (op === 'nestbuy') {
+      c = CF.NEST_ITEMS[id]; if (!c || pr.nest.items.indexOf(id) >= 0) return fail('bad');
+      if (c.craft) {
+        if (pr.mats.bone < (c.craft.bone | 0) || pr.mats.hide < (c.craft.hide | 0)) return fail('mats');
+        pr.mats.bone -= c.craft.bone | 0; pr.mats.hide -= c.craft.hide | 0; pr.stats.crafted = (pr.stats.crafted | 0) + 1;
+      } else { if (pr.coins < c.price) return fail('coins'); pr.coins -= c.price; }
+      pr.nest.items.push(id); if (pr.nest.put.length < CF.NEST_MAX) pr.nest.put.push(id);
+      return { ok: true, field: 'nest' };
+    }
+    if (op === 'nestput') {
+      var list = Array.isArray(a.put) ? a.put : [], out = [];
+      list.forEach(function (x) { if (typeof x === 'string' && out.indexOf(x) < 0 && CF.nestOwned(pr, x) && out.length < CF.NEST_MAX) out.push(x); });
+      pr.nest.put = out; return { ok: true, field: 'nest' };
+    }
+    return fail('bad');
+  }
+
+  // рейтинг Elo: возвращает новые рейтинги победителя и проигравшего
+  function eloUpdate(rw, rl) {
+    var e = 1 / (1 + Math.pow(10, (rl - rw) / 400)), d = Math.round(CF.ELO_K * (1 - e));
+    return { w: rw + Math.max(1, d), l: Math.max(0, rl - Math.max(1, d)), d: Math.max(1, d) };
+  }
+  // смена сезона: награда по лиге итогового рейтинга, рейтинг сжимается к 1000
+  function seasonRoll(pr, now) {
+    var id = CF.seasonId(now);
+    if (!pr.season) { pr.season = id; return null; }
+    if (pr.season === id) return null;
+    var out = null, played = (pr.dw | 0) + (pr.dl | 0) > 0;
+    if (played) {
+      var lg = CF.leagueOf(pr.elo), r = lg.reward;
+      pr.coins += r.c; pr.stats.coinsEarned = (pr.stats.coinsEarned || 0) + r.c;
+      if (r.cos && pr.cosmetics.indexOf(r.cos) < 0) pr.cosmetics.push(r.cos);
+      if (r.title && pr.titles.indexOf(r.title) < 0) { pr.titles.push(r.title); if (!pr.title) pr.title = r.title; }
+      out = { league: lg.id, elo: pr.elo, coins: r.c, cos: r.cos || '', title: r.title || '', season: pr.season };
+    }
+    pr.elo = Math.round(1000 + (pr.elo - 1000) / 2); pr.season = id; pr.dw = 0; pr.dl = 0;
+    return out;
   }
   function fixProfile(p) {
     var d = defaultProfile('');
@@ -573,6 +720,23 @@
     if (!Array.isArray(p.kings)) p.kings = [];
     if (!p.kingAt || typeof p.kingAt !== 'object') p.kingAt = {};
     if (!Array.isArray(p.cosmetics)) p.cosmetics = [];
+    // убранные из игры следы: покупка возвращается монетами
+    var LEG = { t_dust: 150, t_sparks: 300, t_stars: 450, t_embers: 0, m_harlequin: 900, m_galaxy: 1000, m_candy: 800, m_camo: 800 };
+    if (Array.isArray(p.cosmetics)) p.cosmetics = p.cosmetics.filter(function (x) { if (LEG[x] !== undefined && !CF.COSMETICS[x]) { p.coins = (+p.coins || 0) + LEG[x]; return false; } return true; });
+    delete p.trail;
+    if (!Array.isArray(p.codes)) p.codes = []; p.codes = p.codes.filter(function (x) { return typeof x === 'string'; }).slice(0, 50);
+    if (!Array.isArray(p.claimed)) p.claimed = []; if (!Array.isArray(p.titles)) p.titles = [];
+    p.titles = p.titles.filter(function (x) { return CF.TITLES[x]; }); if (!p.title || p.titles.indexOf(p.title) < 0) p.title = '';
+    ['patc', 'rfx', 'morph', 'eggskin'].forEach(function (f) { if (typeof p[f] !== 'string' || (p[f] && p.cosmetics.indexOf(p[f]) < 0)) p[f] = ''; });
+    if (typeof p.cosmetic !== 'string' || (p.cosmetic && p.cosmetics.indexOf(p.cosmetic) < 0)) p.cosmetic = '';
+    if (!p.mats || typeof p.mats !== 'object') p.mats = {}; p.mats = { bone: Math.max(0, p.mats.bone | 0), hide: Math.max(0, p.mats.hide | 0) };
+    if (!p.trophies || typeof p.trophies !== 'object') p.trophies = {};
+    p.elo = Math.max(0, Math.min(4000, +p.elo || 1000)); p.dw = Math.max(0, p.dw | 0); p.dl = Math.max(0, p.dl | 0); if (typeof p.season !== 'string') p.season = '';
+    if (!p.nest || typeof p.nest !== 'object') p.nest = {}; if (!Array.isArray(p.nest.items)) p.nest.items = []; if (!Array.isArray(p.nest.put)) p.nest.put = [];
+    p.nest.items = p.nest.items.filter(function (x, i, a) { return CF.NEST_ITEMS[x] && a.indexOf(x) === i; });
+    p.nest.put = p.nest.put.filter(function (x, i, a) { return CF.nestOwned(p, x) && a.indexOf(x) === i; }).slice(0, CF.NEST_MAX);
+    if (!Array.isArray(p.pets)) p.pets = []; p.pets = p.pets.filter(function (x) { return CF.PETS[x]; });
+    if (!p.pet || p.pets.indexOf(p.pet) < 0) p.pet = '';
     if (p.cls === 'aqua') p.cls = 'mosa';                  // старый морской динозавр стал мозазавром
     if (p.cls && !CF.CLASSES[p.cls]) p.cls = 'carn';
     var sl = {};
@@ -584,12 +748,16 @@
       sl[key] = { level: lv, totalXp: tx, xp: Math.max(0, Math.min(tx - CF.cumXp(lv), +q.xp || 0)), evo: CF.evoClean(q.evo || {}) };
     }
     p.slots = sl;
+    p.daily = fixDaily(p.daily); p.tut = p.tut ? 1 : 0;
     p.seen = (Array.isArray(p.seen) ? p.seen : []).filter(function (id, i, a) { return CF.ENEMIES[id] && a.indexOf(id) === i; }).slice(0, 120);
     return p;
   }
   // переключить активный тип (хищный / травоядный / летающий / морские): прогресс прежнего типа сохраняется, у нового — свой. Возвращает 'same' | 'switch' | 'new' | 'bad'
+  function bestLevel(p) { var b = p.cls ? (p.level | 0) : 0, s = p.slots || {}; for (var k in s) if (s[k] && (s[k].level | 0) > b) b = s[k].level | 0; return b; }
+  function typeUnlocked(p, cls) { var m = CF.TYPE_MIN_LV && CF.TYPE_MIN_LV[cls]; return !m || p.cls === cls || bestLevel(p) >= m; }
   function switchType(p, cls) {
     if (!CF.CLASSES[cls]) return 'bad';
+    if (!typeUnlocked(p, cls)) return 'locked';
     if (p.cls === cls) return 'same';
     var slots = Object.assign({}, p.slots || {});
     if (p.cls) slots[p.cls] = { level: p.level, totalXp: p.totalXp, xp: p.xp, evo: p.evo || {} };
@@ -616,7 +784,7 @@
 
   // ======================================================================== ВРАГИ (общие формулы)
   // враги 1–3 уровней были слишком мелкими: крупнее, чтобы их было видно и удобно бить
-  function enemySizeMul(lv) { return lv <= 1 ? 2.0 : lv === 2 ? 1.8 : lv === 3 ? 1.58 : lv === 4 ? 1.35 : lv === 5 ? 1.18 : lv === 6 ? 1.08 : 1; }
+  function enemySizeMul(lv) { lv = lv | 0; return lv < 10 ? 0.62 + 0.38 * Math.max(0, lv - 1) / 9 : 1 + Math.min(20, lv - 10) * 0.012; }   // чем выше уровень, тем крупнее враг
   function enemyScale(lv) { return { hp: 1 + 0.12 * (lv - 1), dmg: 1 + 0.08 * (lv - 1) }; }   // 1.5: враги заметно крепче с уровнем
   // награда опыта за победу над врагом уровня lv игроком уровня plv
   function xpReward(arch, lv, plv) {
@@ -631,7 +799,8 @@
     getWorld: getWorld, obstaclesNear: obstaclesNear, DEF: DEF,
     step: step, newPlayer: newPlayer, exportState: exportState, importState: importState, applyLock: applyLock, resolve: resolve,
     cleanInput: cleanInput, statsFor: statsFor, scaleOf: scaleOf,
-    defaultProfile: defaultProfile, fixProfile: fixProfile, unlockedBiomes: unlockedBiomes, canEnterBiome: canEnterBiome, typeFits: typeFits, switchType: switchType, typeLevel: typeLevel, isLord: isLord, homeBiome: homeBiome,
+    shopOp: shopOp, eloUpdate: eloUpdate, seasonRoll: seasonRoll, dailyRoll: dailyRoll, questAdd: questAdd, fixDaily: fixDaily, dayNum: dayNum,
+    defaultProfile: defaultProfile, fixProfile: fixProfile, unlockedBiomes: unlockedBiomes, canEnterBiome: canEnterBiome, typeFits: typeFits, switchType: switchType, typeUnlocked: typeUnlocked, typeLevel: typeLevel, isLord: isLord, homeBiome: homeBiome,
     enemyScale: enemyScale, enemySizeMul: enemySizeMul, xpReward: xpReward, TREE_H: TREE_H
   };
 });

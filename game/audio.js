@@ -39,6 +39,8 @@ export function sfx(name, pan) {
   const d = sfxG, t = now;
   switch (name) {
     case 'hit': noise(t, 0.14, 0.5, d, 1800, 300); tone(160, t, 0.12, 'square', 0.18, d, 80); break;
+    case 'thud': noise(t, 0.22, 0.6, d, 500, 70); tone(75, t, 0.28, 'sine', 0.5, d, 38); break;      // тяжёлый удар
+    case 'crit': noise(t, 0.1, 0.45, d, 5200, 1200); tone(1500, t, 0.1, 'square', 0.1, d, 700); tone(180, t, 0.18, 'square', 0.22, d, 70); noise(t + 0.02, 0.2, 0.4, d, 700, 120); break;
     case 'crack': noise(t, 0.06, 0.55, d, 4200, 1600); noise(t + 0.03, 0.05, 0.3, d, 2600, 900); tone(1200, t, 0.03, 'square', 0.06, d, 600); break;
     case 'bite': noise(t, 0.1, 0.35, d, 3000, 600, 'bandpass'); tone(220, t, 0.09, 'sawtooth', 0.12, d, 120); break;
     case 'swing': noise(t, 0.12, 0.18, d, 900, 2400, 'bandpass'); break;

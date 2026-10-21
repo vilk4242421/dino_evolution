@@ -66,6 +66,11 @@ async function logout() {
   try { if (state.token) await api('POST', '/api/logout', {}); } catch (e) { /* токен всё равно забываем */ }
   state.token = null; state.user = null; state.admin = false; state.online = false; state.profile = null; lsDel('token'); lsDel('user'); lsDel('admin'); loadLocal();
 }
+// покупки из главного меню (вне комнаты): онлайн — через сервер, одиночный профиль — прямо в браузере
+async function shopMenu(online, op, a) {
+  if (online) { const d = await api('POST', '/api/shop', Object.assign({ op }, a || {})); setServerProfile(d.profile); return { ok: true, coins: d.coins | 0 }; }
+  const p = state.local, r = Sim.shopOp(p, op, a); if (r.ok) saveLocal(p); return r;
+}
 async function refreshProfile() {
   if (!state.token) return;
   try { const d = await api('GET', '/api/me'); setServerProfile(d.profile); state.online = true; } catch (e) { if (e.status === 401) state.token = null; }
@@ -77,13 +82,13 @@ async function createCharacter(fields, online, newRun) {
     setServerProfile(d.profile); return state.profile;
   }
   let p = loadLocal();
-  if (newRun) { const d = Sim.defaultProfile(fields.name); Object.assign(d, { wins: p.wins, kings: p.kings, kingAt: p.kingAt, cosmetics: p.cosmetics, cosmetic: p.cosmetic, coins: p.coins, stats: p.stats, playTime: p.playTime }); p = d; }
+  if (newRun) { const d = Sim.defaultProfile(fields.name); ['wins', 'kings', 'kingAt', 'cosmetics', 'cosmetic', 'pets', 'pet', 'claimed', 'codes', 'titles', 'title', 'patc', 'rfx', 'morph', 'eggskin', 'color', 'mats', 'trophies', 'elo', 'dw', 'dl', 'season', 'coins', 'stats', 'playTime', 'daily', 'tut', 'nest'].forEach(k => { if (p[k] !== undefined) d[k] = p[k]; }); p = d; }
   p.name = fields.name; p.color = fields.color; if (!p.hatched) { p.cls = fields.cls; p.hatched = fields.hatched; }
   saveLocal(p); return p;
 }
 async function leaderboard() { return api('GET', '/api/leaderboard'); }
 
-return {"api":api,"state":state,"apiBase":apiBase,"wsUrl":wsUrl,"loadLocal":loadLocal,"saveLocal":saveLocal,"setServerProfile":setServerProfile,"restore":restore,"register":register,"login":login,"logout":logout,"refreshProfile":refreshProfile,"createCharacter":createCharacter,"leaderboard":leaderboard};
+return {"api":api,"state":state,"apiBase":apiBase,"wsUrl":wsUrl,"loadLocal":loadLocal,"saveLocal":saveLocal,"setServerProfile":setServerProfile,"restore":restore,"register":register,"login":login,"logout":logout,"shopMenu":shopMenu,"refreshProfile":refreshProfile,"createCharacter":createCharacter,"leaderboard":leaderboard};
 })();
 __m["audio"]=(function(){
 /* Звук без файлов: эффекты и музыка (по биому, с боевой темой) синтезируются Web Audio. */
@@ -127,6 +132,8 @@ function sfx(name, pan) {
   const d = sfxG, t = now;
   switch (name) {
     case 'hit': noise(t, 0.14, 0.5, d, 1800, 300); tone(160, t, 0.12, 'square', 0.18, d, 80); break;
+    case 'thud': noise(t, 0.22, 0.6, d, 500, 70); tone(75, t, 0.28, 'sine', 0.5, d, 38); break;      // тяжёлый удар
+    case 'crit': noise(t, 0.1, 0.45, d, 5200, 1200); tone(1500, t, 0.1, 'square', 0.1, d, 700); tone(180, t, 0.18, 'square', 0.22, d, 70); noise(t + 0.02, 0.2, 0.4, d, 700, 120); break;
     case 'crack': noise(t, 0.06, 0.55, d, 4200, 1600); noise(t + 0.03, 0.05, 0.3, d, 2600, 900); tone(1200, t, 0.03, 'square', 0.06, d, 600); break;
     case 'bite': noise(t, 0.1, 0.35, d, 3000, 600, 'bandpass'); tone(220, t, 0.09, 'sawtooth', 0.12, d, 120); break;
     case 'swing': noise(t, 0.12, 0.18, d, 900, 2400, 'bandpass'); break;
@@ -343,6 +350,7 @@ const sstep = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a)
 const hx = (h) => new THREE.Color(h);
 const mixHex = (a, b, t) => hx(a).lerp(hx(b), t).getHex();
 const mulHex = (a, f) => hx(a).multiplyScalar(f).getHex();
+let PATC = null;      // цвет узора из магазина (действует на время сборки модели)
 // палитра из одного цвета: спина темнее, бока — сам цвет, брюхо светлое, полосы — тёмные
 function palette(color, o) {
   o = o || {};
@@ -350,26 +358,54 @@ function palette(color, o) {
   const back = new THREE.Color().setHSL(hsl.h, Math.min(1, hsl.s * 0.9), Math.max(0.05, hsl.l * 0.52));
   const belly = hx(color).lerp(hx(o.bellyTo || 0xe6dcc2), o.bellyK === undefined ? 0.62 : o.bellyK);
   const stripe = new THREE.Color().setHSL(hsl.h, Math.min(1, hsl.s * 0.8), Math.max(0.03, hsl.l * 0.32));
-  return { back: o.back || back.getHex(), side: color, belly: o.belly || belly.getHex(), stripe: o.stripe || stripe.getHex(), ns: o.ns || 6 };
+  return { back: o.back || back.getHex(), side: color, belly: o.belly || belly.getHex(), stripe: PATC != null ? PATC : (o.stripe || stripe.getHex()), ns: o.ns || 6 };
 }
 // pat: {type:'stripes'|'spots'|'bands'|'none', amt, freq, from, to}
+let MORPH = null;     // морф из магазина (на время сборки модели): {c1?, c2 спина, c3? брюхо, pc узор, pat}
 function paint(L, pal, pat) {
-  const back = hx(pal.back), side = hx(pal.side), belly = hx(pal.belly), str = hx(pal.stripe), c = new THREE.Color();
+  let backH = pal.back, sideH = pal.side, bellyH = pal.belly, strH = pal.stripe;
+  if (MORPH) {
+    if (MORPH.c1 != null) sideH = MORPH.c1;
+    backH = MORPH.c2; bellyH = MORPH.c3 != null ? MORPH.c3 : mixHex(sideH, 0xffffff, 0.5);
+    if (PATC == null) strH = MORPH.pc != null ? MORPH.pc : mulHex(MORPH.c2, 0.6);
+    if (MORPH.pat) pat = Object.assign({ from: 0, to: 1 }, MORPH.pat);
+  }
+  const back = hx(backH), side = hx(sideH), belly = hx(bellyH), str = hx(strH), c = new THREE.Color(), alt = hx(MORPH && MORPH.c3 != null ? MORPH.c3 : bellyH);
   const pos = L.geo.attributes.position.array, n = pos.length / 3, col = new Float32Array(n * 3);
   const ns = pal.ns || 6; pat = pat || {};
   const amt = pat.amt === undefined ? 0.75 : pat.amt, from = pat.from === undefined ? 0 : pat.from, to = pat.to === undefined ? 0.8 : pat.to, fr = pat.freq || 9;
   for (let i = 0; i < n; i++) {
     const u = L.up[i] || 0, un = L.vu[i] / L.U, x = pos[i * 3], y = pos[i * 3 + 1], z = pos[i * 3 + 2];
-    c.copy(belly).lerp(side, sstep(-0.6, 0.15, u)).lerp(back, sstep(0.25, 0.95, u) * 0.85);
+    if (MORPH) c.copy(belly).lerp(side, sstep(-0.55, -0.05, u)).lerp(back, sstep(0.05, 0.55, u) * 0.95);
+    else c.copy(belly).lerp(side, sstep(-0.6, 0.15, u)).lerp(back, sstep(0.25, 0.95, u) * 0.85);
     const m = vnoise(x * ns, y * ns, z * ns);
-    c.multiplyScalar(0.9 + 0.2 * m);
+    // реализм: крупная неоднородность, мелкая «чешуйчатая» пестрота и светлое брюхо; края узоров рваные (domain warp)
+    const sc = vnoise(x * 34 + 2.1, y * 34 + 7.7, z * 34 + 4.4), sc2 = vnoise(x * 70 + 9.3, y * 70 + 1.2, z * 70 + 5.8);
+    c.multiplyScalar(0.86 + 0.2 * m + 0.14 * sc + 0.06 * sc2);
+    c.offsetHSL((sc2 - 0.5) * 0.012, (sc - 0.5) * 0.06, 0);
+    const wr = (vnoise(x * 4.3 + 5, y * 4.3 + 1, z * 4.3 + 9) - 0.5) * 0.9;
+    const wx = x + wr * 0.35, wy = y + wr * 0.3, wz = z + wr * 0.35;
     if (pat.type === 'stripes' || pat.type === 'bands') {
       const win = sstep(from - 0.04, from + 0.04, un) * (1 - sstep(to - 0.06, to + 0.02, un));
-      const k = Math.pow(Math.max(0, Math.sin(un * fr * PI * 2 + 0.6 + (pat.type === 'stripes' ? Math.abs(z) * 3 : 0))), 4) * sstep(pat.type === 'bands' ? -0.3 : 0.0, 0.6, u) * win;
+      const k = Math.pow(Math.max(0, Math.sin(un * fr * PI * 2 + 0.6 + (pat.type === 'stripes' ? Math.abs(wz) * 3 + wr * 1.4 : 0))), 4) * sstep(pat.type === 'bands' ? -0.3 : 0.0, 0.6, u) * win;
       c.lerp(str, k * amt);
     } else if (pat.type === 'spots') {
-      const f = pat.freq || 3.2, s = vnoise(x * f + 11.3, y * f + 3.1, z * f + 7.7);
+      const f = pat.freq || 3.2, s = vnoise(wx * f + 11.3, wy * f + 3.1, wz * f + 7.7);
       const k = sstep(0.6, 0.68, s) * sstep(-0.35, 0.3, u) * (sstep(from - 0.04, from + 0.04, un) * (1 - sstep(to - 0.04, to + 0.04, un)));
+      c.lerp(str, k * amt); if (k > 0.01) c.multiplyScalar(1 - 0.18 * k * (1 - sstep(0.68, 0.74, s)));
+    } else if (pat.type === 'rosette') {                // розетки леопарда: тёмное кольцо со светлой серединой
+      const f = pat.freq || 3.4, s = vnoise(wx * f + 5.1, wy * f + 9.3, wz * f + 2.7), ring = sstep(0.56, 0.6, s) * (1 - sstep(0.64, 0.68, s)), core = sstep(0.64, 0.7, s);
+      const k = sstep(-0.4, 0.3, u); c.lerp(str, ring * amt * k); c.lerp(alt, core * 0.5 * k);
+    } else if (pat.type === 'camo') {                   // камуфляж: два слоя пятен
+      const f = pat.freq || 2.6, s1 = vnoise(wx * f + 1.7, wy * f + 8.1, wz * f + 4.2), s2 = vnoise(wx * f * 1.8 + 9.1, wy * f * 1.8 + 2.2, wz * f * 1.8 + 6.6);
+      c.lerp(str, sstep(0.52, 0.58, s1) * amt); c.lerp(alt, sstep(0.6, 0.66, s2) * amt * 0.8);
+    } else if (pat.type === 'patch') {                  // арлекин: заплатки двух контрастных цветов
+      const f = pat.freq || 1.6, sp = vnoise(wx * f + 3.3, wy * f + 1.9, wz * f + 7.1);
+      c.lerp(str, sstep(0.57, 0.6, sp) * 0.95); c.lerp(alt, (1 - sstep(0.36, 0.4, sp)) * 0.95);
+    } else if (pat.type === 'ombre') {                  // плавный градиент от головы к хвосту
+      c.lerp(str, sstep(0.15, 1.0, un) * amt);
+    } else if (pat.type === 'chevron') {                // ёлочка вдоль спины
+      const k = Math.pow(Math.max(0, Math.sin(un * fr * PI * 2 + Math.abs(wz) * 9 + wr * 2)), 5) * sstep(-0.2, 0.55, u);
       c.lerp(str, k * amt);
     }
     if (pat.glowLine && Math.abs(u) < 0.08 && un > (pat.from || 0) && un < (pat.to || 1)) c.lerp(hx(pat.glowLine), 0.8);
@@ -1254,9 +1290,11 @@ function finalize(rig, root) {
   rig.root.traverse(m => { if (m.isMesh) m.frustumCulled = true; });
   root.userData.parts = rig; root.userData.phase = Math.random() * 6; root.userData.bite = 0;
 }
-function buildDino({ cls = 'carn', color = 0x6aa84f, level = 1, evo = {}, cosmetic = '' } = {}) {
+function buildDino({ cls = 'carn', color = 0x6aa84f, level = 1, evo = {}, cosmetic = '', patc = '', morph = '' } = {}) {
   const stage = CONFIG.stageIndex(level);
-  const rig = (BUILDERS[cls] || buildCarn)({ color, stage, r: CONFIG.evoLook(cls, evo || {}), q: 1 });   // вид модели — по выбранным узлам эволюции
+  PATC = patc && CONFIG.COSMETICS[patc] && CONFIG.COSMETICS[patc].c != null ? CONFIG.COSMETICS[patc].c : null;
+  MORPH = morph && CONFIG.COSMETICS[morph] && CONFIG.COSMETICS[morph].m ? CONFIG.COSMETICS[morph].m : null;
+  let rig; try { rig = (BUILDERS[cls] || buildCarn)({ color, stage, r: CONFIG.evoLook(cls, evo || {}), q: 1 }); } finally { PATC = null; MORPH = null; }   // вид модели — по выбранным узлам эволюции
   const root = rig.root;
   finalize(rig, root);
   root.userData.cls = cls; root.userData.stage = stage; root.userData.level = level;
@@ -1290,11 +1328,49 @@ function setCosmetic(dino, id) {
     for (const sx of [-1, 1]) put(g, MM(cylG(0.07, 0.07, 0.03, 16), 0x111111, false), sx * (a.eyeX + 0.01), a.eyeY, a.eyeZ + 0.03).rotation.z = Math.PI / 2;
     put(g, MM(boxG(0.025, 0.025, 0.16), 0x111111, false), 0, a.eyeY + 0.03, a.eyeZ);
     a.head.add(g);
+  } else if (id === 'tophat') {
+    put(g, MM(cylG(0.2, 0.2, 0.04, 20), 0x151515, false), 0, a.hatY + 0.02, a.hatZ);
+    put(g, MM(cylG(0.13, 0.13, 0.3, 20), 0x151515, false), 0, a.hatY + 0.18, a.hatZ);
+    put(g, MM(cylG(0.135, 0.135, 0.05, 20), 0xc0302a, false), 0, a.hatY + 0.08, a.hatZ);
+    a.head.add(g);
+  } else if (id === 'wizard') {
+    put(g, MM(cylG(0.2, 0.2, 0.03, 20), 0x2a2a8a, false), 0, a.hatY + 0.02, a.hatZ);
+    put(g, MM(coneG(0.15, 0.55, 16), 0x3a3ab0, false), 0, a.hatY + 0.3, a.hatZ).rotation.z = 0.12;
+    for (const [x, y, z] of [[0.08, 0.2, 0.1], [-0.07, 0.34, 0.08], [0.02, 0.12, -0.13]]) put(g, MM(sphG(0.025, 8, 6), 0xffe14a, false), x, a.hatY + y, a.hatZ + z);
+    a.head.add(g);
+  } else if (id === 'viking') {
+    put(g, MM(sphG(0.17, 14, 8), 0x8c8c94, false), 0, a.hatY + 0.06, a.hatZ).scale.set(1, 0.75, 1);
+    for (const sx of [-1, 1]) { const h = put(g, MM(coneG(0.045, 0.3, 8), 0xf2efe0, false), sx * 0.2, a.hatY + 0.2, a.hatZ); h.rotation.z = -sx * 0.7; }
+    a.head.add(g);
+  } else if (id === 'flower') {
+    put(g, MM(new THREE.TorusGeometry(0.16, 0.025, 6, 20), 0x3f8f3a, false), 0, a.hatY + 0.04, a.hatZ).rotation.x = Math.PI / 2;
+    const cols = [0xff6a9a, 0xffe14a, 0xffffff, 0xff9a3a, 0xc08aff, 0xff6a9a];
+    cols.forEach((c, i) => { const an = i / cols.length * 6.283; put(g, MM(sphG(0.05, 8, 6), c, false), Math.cos(an) * 0.16, a.hatY + 0.06, a.hatZ + Math.sin(an) * 0.16); });
+    a.head.add(g);
+  } else if (id === 'plume') {
+    const cols = [0xff4a6a, 0xffd23a, 0x3ac8ff];
+    cols.forEach((c, i) => { const f = put(g, MM(sphG(0.05, 8, 6), c, false), (i - 1) * 0.06, a.hatY + 0.28, a.hatZ - 0.1 - i * 0.02); f.scale.set(0.5, 4.2, 1.2); f.rotation.x = -0.5; f.rotation.z = (i - 1) * 0.35; });
+    a.head.add(g);
+  } else if (id === 'skullhat') {
+    put(g, MM(sphG(0.19, 14, 10), 0xf2efe0, false), 0, a.hatY + 0.08, a.hatZ).scale.set(1, 0.85, 1.1);
+    for (const sx of [-1, 1]) put(g, MM(sphG(0.045, 8, 6), 0x151515, false), sx * 0.08, a.hatY + 0.08, a.hatZ + 0.17);
+    put(g, MM(boxG(0.1, 0.07, 0.1), 0xe0dccb, false), 0, a.hatY - 0.02, a.hatZ + 0.19);
+    a.head.add(g);
   } else if (id === 'aura') {
     const s = new THREE.Mesh(new THREE.RingGeometry(0.9, 1.25, 40), new THREE.MeshBasicMaterial({ color: 0xffd35a, transparent: true, opacity: 0.55, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending }));
     s.rotation.x = -Math.PI / 2; s.position.y = 0.06; s.userData.aura = true; g.add(s);
     dino.add(g);
   }
+}
+// отдельная корона (для ролика коронации): основание, зубцы, камни; центр — на оси, низ на y=0
+function buildCrownMesh(mode) {
+  const g = new THREE.Group(), gold = sMat(0xffd35a, 0x8a5a00);
+  const base = new THREE.Mesh(cylG(0.2, 0.22, 0.12, 20), gold); base.position.set(0, 0.06, 0); g.add(base);
+  const n = mode === 2 ? 7 : 5;
+  for (let i = 0; i < n; i++) { const ang = i / n * 6.283, c = new THREE.Mesh(coneG(0.045, mode === 2 ? 0.26 : 0.18, 8), gold); c.position.set(Math.cos(ang) * 0.18, 0.2 + (mode === 2 ? 0.07 : 0.03), Math.sin(ang) * 0.18); g.add(c);
+    const j = new THREE.Mesh(sphG(0.028, 8, 6), sMat(i % 2 ? 0xff4a4a : 0x4ac8ff, 0x802020)); j.position.set(Math.cos(ang) * 0.205, 0.1, Math.sin(ang) * 0.205); g.add(j); }
+  if (mode === 2) { const m = new THREE.Mesh(sphG(0.07, 12, 10), sMat(0x7af0ff, 0x2a90a0)); m.position.set(0, 0.36, 0); g.add(m); }
+  return g;
 }
 function setCrown(dino, mode) {      // mode: 0 нет, 1 король, 2 владыка эпох
   const P = dino.userData.parts, a = P.anch; if (!a) return;
@@ -1495,21 +1571,61 @@ function makeHpBar(w) {
 }
 
 // ---------- актёр игрока ----------
-function makeActor({ nick, color, cls, level, evo, cosmetic, admin, king, lord, label }) {
+
+// ---------------------------------------------------------------- питомцы: маленькие следующие за игроком существа
+function buildPet(id) {
+  const g = new THREE.Group(), M = (c, e) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.8, emissive: e || 0x000000 });
+  const sph = (r, m, x, y, z, sx, sy, sz) => { const o = new THREE.Mesh(new THREE.SphereGeometry(r, 12, 10), m); o.position.set(x, y, z); o.scale.set(sx || 1, sy || 1, sz || 1); g.add(o); return o; };
+  const eye = (x, y, z) => sph(0.04, M(0x111111), x, y, z);
+  if (id === 'lizard') {
+    const m = M(0x4fae4f); sph(0.22, m, 0, 0.18, 0, 1.5, 0.7, 0.8); sph(0.15, m, 0.3, 0.22, 0); eye(0.4, 0.28, 0.07); eye(0.4, 0.28, -0.07);
+    const tail = new THREE.Mesh(new THREE.ConeGeometry(0.1, 0.5, 8), m); tail.rotation.z = Math.PI / 2; tail.position.set(-0.45, 0.14, 0); g.add(tail);
+    for (const [x, z] of [[0.12, 0.14], [0.12, -0.14], [-0.12, 0.14], [-0.12, -0.14]]) sph(0.06, m, x, 0.06, z);
+  } else if (id === 'chick') {
+    const m = M(0xffd84a); sph(0.24, m, 0, 0.26, 0); sph(0.15, m, 0.12, 0.5, 0); eye(0.24, 0.55, 0.07); eye(0.24, 0.55, -0.07);
+    const beak = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.12, 6), M(0xff9a2a)); beak.rotation.z = -Math.PI / 2; beak.position.set(0.3, 0.5, 0); g.add(beak);
+    sph(0.1, m, -0.05, 0.3, 0.2, 1.4, 0.5, 0.5); sph(0.1, m, -0.05, 0.3, -0.2, 1.4, 0.5, 0.5);
+  } else if (id === 'hedgehog') {
+    const m = M(0x7a5a3a); sph(0.26, m, 0, 0.24, 0, 1.3, 0.9, 1); sph(0.12, M(0xd8b48a), 0.32, 0.18, 0); eye(0.42, 0.22, 0.06); eye(0.42, 0.22, -0.06);
+    const sp = M(0x3a2a1a);
+    for (let i = 0; i < 14; i++) { const a = (i / 14) * Math.PI * 1.4 - 0.7 + Math.PI, c = new THREE.Mesh(new THREE.ConeGeometry(0.04, 0.2, 5), sp); c.position.set(Math.cos(a) * 0.28, 0.3 + Math.sin(i * 1.7) * 0.06 + 0.14, Math.sin(a * 2.3) * 0.2); c.rotation.z = -Math.cos(a) * 0.9; g.add(c); }
+  } else {
+    const m = new THREE.MeshBasicMaterial({ color: 0xfff2a0 }); sph(0.1, m, 0, 0.9, 0);
+    const halo = new THREE.Mesh(new THREE.SphereGeometry(0.28, 12, 10), new THREE.MeshBasicMaterial({ color: 0xffe066, transparent: true, opacity: 0.25, depthWrite: false, blending: THREE.AdditiveBlending })); halo.position.y = 0.9; g.add(halo);
+    const halo2 = new THREE.Mesh(new THREE.SphereGeometry(0.55, 12, 10), new THREE.MeshBasicMaterial({ color: 0xffe066, transparent: true, opacity: 0.1, depthWrite: false, blending: THREE.AdditiveBlending })); halo2.position.y = 0.9; g.add(halo2);
+  }
+  g.userData.id = id; g.userData.fly = id === 'firefly'; g.userData.ph = Math.random() * 6;
+  return g;
+}
+
+function titleText(id) { const t = id && CONFIG.TITLES[id]; return t && typeof window !== 'undefined' && window.TN ? t.ico + ' ' + window.TN(t.n) : ''; }
+function makeActor({ nick, color, cls, level, evo, cosmetic, admin, king, lord, label, pet, title, patc, morph, colorIdx }) {
   const group = new THREE.Group();
-  const actor = { group, color: CONFIG.COLORS[color] != null ? CONFIG.COLORS[color] : color, cls, level, evo: evo || {}, cosmetic: cosmetic || '', dino: null, tag: null, king: king ? 1 : 0, lord: lord ? 1 : 0, admin: !!admin, nick, st: {} };
+  const actor = { title: title || '', patc: patc || '', morph: morph || '', group, color: CONFIG.COLORS[color] != null ? CONFIG.COLORS[color] : color, cls, level, evo: evo || {}, cosmetic: cosmetic || '', dino: null, tag: null, king: king ? 1 : 0, lord: lord ? 1 : 0, admin: !!admin, nick, st: {} };
   function rebuild() {
     if (actor.dino) group.remove(actor.dino);
-    actor.dino = buildDino({ cls, color: actor.color, level: actor.level, evo: actor.evo, cosmetic: actor.cosmetic });
+    actor.dino = buildDino({ cls, color: actor.color, level: actor.level, evo: actor.evo, cosmetic: actor.cosmetic, patc: actor.patc, morph: actor.morph });
     group.add(actor.dino); setCrown(actor.dino, actor.lord ? 2 : actor.king ? 1 : 0);
     if (actor.tag) group.remove(actor.tag);
-    actor.tag = makeNameTag(nick, { badge: actor.admin ? '★Admin' : '', color: actor.admin ? '#ffd35a' : actor.lord ? '#7af0ff' : '#ffffff', sub: label || '' });
+    actor.tag = makeNameTag(nick, { badge: actor.admin ? '★Admin' : '', color: actor.admin ? '#ffd35a' : actor.lord ? '#7af0ff' : '#ffffff', sub: label || titleText(actor.title) });
     group.add(actor.tag);
-    actor.tag.position.y = (cls === 'fly' ? 2.5 : 2.3) * Sim.scaleOf(actor.level) + 0.7;
+    actor.tag.position.y = (cls === 'fly' ? 2.5 : 2.3) * Sim.scaleOf(actor.level) + 0.7 + (['party', 'tophat', 'wizard', 'viking', 'flower', 'plume', 'skullhat'].indexOf(actor.cosmetic) >= 0 ? 0.45 : 0);
   }
   rebuild();
+  actor.petId = ''; actor.petM = null;
+  function setPet(id) {
+    if (actor.petM) { group.remove(actor.petM); actor.petM.traverse(o => { o.geometry && o.geometry.dispose(); }); actor.petM = null; }
+    actor.petId = id || '';
+    if (id) { actor.petM = buildPet(id); actor.petM.position.set(-2, 0, 1.2); group.add(actor.petM); }
+  }
+  setPet(pet);
   actor.set = (o) => {
+    if (o.pet != null && o.pet !== actor.petId) setPet(o.pet);
+    if (o.title != null && o.title !== actor.title) { actor.title = o.title; rebuild(); }
     let r = false;
+    if (o.patc != null && o.patc !== actor.patc) { actor.patc = o.patc; r = true; }
+    if (o.morph != null && o.morph !== actor.morph) { actor.morph = o.morph; r = true; }
+    if (o.color != null && CONFIG.COLORS[o.color] != null && CONFIG.COLORS[o.color] !== actor.color) { actor.color = CONFIG.COLORS[o.color]; r = true; }
     if (o.level != null && o.level !== actor.level) {
       // рост: новая модель плавно «дорастает» от прежнего размера до нового (при смене ступени — с лёгким рывком)
       const prevSc = Sim.scaleOf(actor.level); actor.grow = { t: 0, from: prevSc, stage: CONFIG.stageIndex(o.level) !== CONFIG.stageIndex(actor.level) };
@@ -1529,6 +1645,15 @@ function makeActor({ nick, color, cls, level, evo, cosmetic, admin, king, lord, 
       if (k >= 1) { actor.grow = null; actor.dino.scale.setScalar(to); }
     }
     animateDino(actor.dino, t, speed01, dt, st);
+    const pm = actor.petM;
+    if (pm) {
+      const sc = Sim.scaleOf(actor.level), d = 2.0 * sc + 0.6, tx = -Math.sin(face) * d + Math.cos(face) * 0.9, tz = -Math.cos(face) * d - Math.sin(face) * 0.9;
+      const dx = tx - pm.position.x, dz = tz - pm.position.z, dd = Math.hypot(dx, dz);
+      if (dd > 7) pm.position.set(tx, 0, tz); else { const k = 1 - Math.exp(-dt * 3.2); pm.position.x += dx * k; pm.position.z += dz * k; }
+      if (dd > 0.15) pm.rotation.y = Math.atan2(-dz, dx) * 1 + 0; 
+      const hop = pm.userData.fly ? 0.6 * sc + Math.sin(t * 2.4 + pm.userData.ph) * 0.25 : Math.max(0, Math.sin(t * 9 + pm.userData.ph)) * Math.min(0.25, dd * 0.3);
+      pm.position.y = hop; pm.scale.setScalar(Math.max(0.8, sc * 0.55));
+    }
   };
   actor.dispose = () => { group.parent && group.parent.remove(group); };
   return actor;
@@ -1822,24 +1947,90 @@ function animateBoss(g, t, speed, dt, o) {
 }
 
 // ---------- яйцо: гладкая скорлупа с нарисованными пятнами (ничего не торчит наружу) ----------
-function makeEggMesh(colorHex) {
+// рисует скорлупу 512×256 по «скину» (classic, speckle, stripe, gold, crystal, lava, galaxy, jungle, candy, opal)
+function eggCanvas(skin, colorHex) {
+  const c = document.createElement('canvas'); c.width = 512; c.height = 256; const g = c.getContext('2d');
+  const base = new THREE.Color(colorHex == null ? 0x6aa84f : colorHex);
+  let sd = 7; const R = () => ((sd = (sd * 9301 + 49297) % 233280) / 233280), W = 512, H = 256;
+  const hsl = (h, s, l, a) => `hsla(${h},${s}%,${l}%,${a == null ? 1 : a})`;
+  // мягкое пятнистое «облако»: маленький шум, растянутый со сглаживанием (по горизонтали замкнут)
+  const cloud = (cell, rgb, alpha, mode) => {
+    const w = Math.ceil(W / cell), h = Math.ceil(H / cell), n = document.createElement('canvas'); n.width = w; n.height = h; const ng = n.getContext('2d'), im = ng.createImageData(w, h);
+    const row = new Array(w); for (let y = 0; y < h; y++) { for (let x = 0; x < w; x++) { const v = R(); const i = (y * w + x) * 4; im.data[i] = rgb[0]; im.data[i + 1] = rgb[1]; im.data[i + 2] = rgb[2]; im.data[i + 3] = v * 255; } }
+    ng.putImageData(im, 0, 0); g.save(); g.globalAlpha = alpha; if (mode) g.globalCompositeOperation = mode; g.imageSmoothingEnabled = true; g.drawImage(n, 0, 0, W, H); g.restore();
+  };
+  const blot = (x, y, rx, ry, rot, col, a) => { for (const ox of [-W, 0, W]) { g.save(); g.translate(x + ox, y); g.rotate(rot); g.scale(1, ry / rx); const gr = g.createRadialGradient(0, 0, 0, 0, 0, rx); gr.addColorStop(0, col.replace('A', a)); gr.addColorStop(0.6, col.replace('A', a * 0.7)); gr.addColorStop(1, col.replace('A', 0)); g.fillStyle = gr; g.beginPath(); g.arc(0, 0, rx, 0, 6.3); g.fill(); g.restore(); } };
+  const vgrad = (stops) => { const gr = g.createLinearGradient(0, 0, 0, H); stops.forEach((s, i) => gr.addColorStop(i / (stops.length - 1), s)); g.fillStyle = gr; g.fillRect(0, 0, W, H); };
+  const pores = (n, a) => { for (let i = 0; i < n; i++) { g.fillStyle = `rgba(60,45,30,${R() * a})`; g.fillRect(R() * W, R() * H, 1 + R() * 1.6, 1 + R() * 1.6); } };
+  if (skin === 'speckle') {
+    // пёстрое яйцо птицы: тёплая кремовая скорлупа, подкожные сиреневые и верхние бурые пятна, гуще к тупому концу
+    g.fillStyle = '#e9dcbd'; g.fillRect(0, 0, W, H); cloud(14, [196, 170, 120], 0.35); cloud(5, [250, 244, 224], 0.25);
+    for (let i = 0; i < 220; i++) { const y = H * (0.2 + 0.8 * Math.sqrt(R())); blot(R() * W, y, 4 + R() * 9, 3 + R() * 6, R() * 3, 'rgba(120,110,150,A)', 0.14 + R() * 0.2); }
+    for (let i = 0; i < 520; i++) { const y = H * (0.15 + 0.85 * Math.pow(R(), 0.6)), r = 1 + R() * R() * 7; blot(R() * W, y, r * 1.5, r, R() * 3, `rgba(${70 + R() * 40 | 0},${42 + R() * 24 | 0},${24 + R() * 16 | 0},A)`, 0.55 + R() * 0.4); }
+    pores(1200, 0.12);
+  } else if (skin === 'stripe') {
+    // прожилки как у чибиса: оливково-серая скорлупа и тёмные петляющие «каракули»
+    g.fillStyle = '#b7ae8a'; g.fillRect(0, 0, W, H); cloud(16, [140, 140, 95], 0.4); cloud(6, [230, 222, 190], 0.25);
+    g.lineCap = 'round'; g.lineJoin = 'round';
+    for (let i = 0; i < 90; i++) { let x = R() * W, y = R() * H, a = R() * 6.3; g.beginPath(); g.moveTo(x, y); const L = 10 + R() * 22; for (let k = 0; k < L; k++) { a += (R() - 0.5) * 1.3; x += Math.cos(a) * 5; y += Math.sin(a) * 4; g.lineTo(x, y); } g.strokeStyle = `rgba(${40 + R() * 25 | 0},${30 + R() * 20 | 0},22,${0.55 + R() * 0.4})`; g.lineWidth = 1 + R() * 2.2; g.stroke(); }
+    for (let i = 0; i < 160; i++) blot(R() * W, R() * H, 3 + R() * 6, 3 + R() * 5, R() * 3, 'rgba(70,60,45,A)', 0.3);
+    pores(900, 0.1);
+  } else if (skin === 'gold') {
+    // кованое золото: тёплые переливы, мелкая «ковка» и лёгкая патина
+    vgrad(['#b98414', '#f3cf55', '#fff0a8', '#e4b230', '#a7730e']); cloud(10, [255, 235, 140], 0.35); cloud(4, [120, 78, 8], 0.22, 'multiply');
+    for (let i = 0; i < 700; i++) { const x = R() * W, y = R() * H, r = 3 + R() * 7; const gr = g.createRadialGradient(x - r * .3, y - r * .3, 0, x, y, r); gr.addColorStop(0, 'rgba(255,248,200,.22)'); gr.addColorStop(1, 'rgba(110,70,0,.2)'); g.fillStyle = gr; g.beginPath(); g.arc(x, y, r, 0, 6.3); g.fill(); }
+    for (let i = 0; i < 40; i++) blot(R() * W, R() * H, 10 + R() * 20, 6 + R() * 10, R() * 3, 'rgba(90,70,20,A)', 0.2);
+  } else if (skin === 'crystal') {
+    // кальцит / агат: молочно-голубые концентрические полосы с прозрачными прожилками
+    g.fillStyle = '#dbe9f1'; g.fillRect(0, 0, W, H);
+    for (let k = 0; k < 14; k++) { const y0 = k * 19 + R() * 6; g.beginPath(); g.moveTo(0, y0); for (let x = 0; x <= W; x += 16) g.lineTo(x, y0 + Math.sin(x / W * 12.56 + k) * 9 + Math.sin(x / 19 + k * 2) * 3); g.lineTo(W, y0 + 18); for (let x = W; x >= 0; x -= 16) g.lineTo(x, y0 + 18 + Math.sin(x / W * 12.56 + k) * 9); g.closePath(); g.fillStyle = hsl(195 + R() * 25, 35 + R() * 25, 62 + R() * 28, 0.55); g.fill(); }
+    cloud(12, [255, 255, 255], 0.35); cloud(5, [120, 170, 205], 0.15, 'multiply');
+    g.strokeStyle = 'rgba(255,255,255,.65)'; g.lineWidth = 1; for (let i = 0; i < 30; i++) { let x = R() * W, y = R() * H; g.beginPath(); g.moveTo(x, y); for (let k = 0; k < 6; k++) { x += (R() - 0.3) * 30; y += (R() - 0.5) * 14; g.lineTo(x, y); } g.stroke(); }
+  } else if (skin === 'lava') {
+    // вулканическое: шершавый базальт и тонкие тлеющие трещины
+    g.fillStyle = '#2b2522'; g.fillRect(0, 0, W, H); cloud(9, [75, 60, 52], 0.5); cloud(3, [15, 12, 12], 0.45, 'multiply'); pores(1500, 0.4);
+    for (let i = 0; i < 14; i++) { let x = R() * W, y = R() * H; const pts = [[x, y]]; for (let k = 0; k < 12; k++) { x += (R() - 0.5) * 44; y += (R() - 0.45) * 30; pts.push([x, y]); }
+      for (const [lw, st] of [[9, 'rgba(255,70,10,.18)'], [4, 'rgba(255,110,20,.55)'], [1.6, 'rgba(255,215,120,.95)']]) { g.beginPath(); pts.forEach((p, j) => j ? g.lineTo(p[0], p[1]) : g.moveTo(p[0], p[1])); g.strokeStyle = st; g.lineWidth = lw; g.lineJoin = 'round'; g.stroke(); } }
+  } else if (skin === 'galaxy') {
+    // чёрный опал: тёмная основа и вспышки зелёного, синего и пурпурного
+    g.fillStyle = '#0c0f1a'; g.fillRect(0, 0, W, H); cloud(20, [20, 25, 50], 0.6);
+    const hs = [150, 190, 270, 310, 40, 220]; for (let i = 0; i < 55; i++) { const h = hs[i % 6] + R() * 20; blot(R() * W, R() * H, 16 + R() * 40, 10 + R() * 22, R() * 3, `hsla(${h},95%,${50 + R() * 15 | 0}%,A)`, 0.35 + R() * 0.4); }
+    cloud(7, [255, 255, 255], 0.06, 'overlay'); for (let i = 0; i < 160; i++) { g.fillStyle = `rgba(210,235,255,${R() * 0.8})`; g.fillRect(R() * W, R() * H, 1, 1); }
+  } else if (skin === 'jungle') {
+    // как яйцо эму: тёмно-зелёная пористая скорлупа с пятнами светлее и тёмнее
+    g.fillStyle = '#37543a'; g.fillRect(0, 0, W, H); cloud(14, [90, 120, 70], 0.45); cloud(6, [20, 40, 28], 0.4, 'multiply');
+    for (let i = 0; i < 240; i++) blot(R() * W, R() * H, 4 + R() * 12, 3 + R() * 8, R() * 3, R() < 0.5 ? 'rgba(15,28,20,A)' : 'rgba(130,150,90,A)', 0.25 + R() * 0.3);
+    for (let i = 0; i < 2200; i++) { g.fillStyle = R() < 0.5 ? `rgba(10,20,14,${R() * 0.55})` : `rgba(170,190,130,${R() * 0.35})`; const r = 0.6 + R() * 1.6; g.beginPath(); g.arc(R() * W, R() * H, r, 0, 6.3); g.fill(); }
+  } else if (skin === 'candy') {
+    // яйцо малиновки: чистая голубая скорлупа, несколько редких веснушек
+    g.fillStyle = '#8fd0d6'; g.fillRect(0, 0, W, H); cloud(18, [140, 215, 215], 0.4); cloud(6, [80, 160, 175], 0.2, 'multiply'); cloud(5, [255, 255, 255], 0.12);
+    for (let i = 0; i < 40; i++) { const y = H * (0.3 + 0.7 * R()); blot(R() * W, y, 1.5 + R() * 3, 1.2 + R() * 2.4, R() * 3, 'rgba(150,80,60,A)', 0.45 + R() * 0.4); }
+    pores(700, 0.07);
+  } else if (skin === 'opal') {
+    // жемчуг: перламутровые переходы розового, мятного и золотистого
+    vgrad(['#f4e6ec', '#e3eef5', '#e8f4e8', '#f7efdc', '#f4e6ec']);
+    for (let i = 0; i < 40; i++) blot(R() * W, R() * H, 20 + R() * 60, 12 + R() * 28, R() * 3, `hsla(${[330, 190, 150, 45][i % 4]},65%,80%,A)`, 0.35 + R() * 0.3);
+    cloud(16, [255, 255, 255], 0.3); cloud(4, [150, 140, 150], 0.08, 'multiply');
+  } else {
+    // обычное яйцо: подкрашенная в цвет динозавра скорлупа с естественными крапинами
+    const pale = base.clone().lerp(new THREE.Color(0xf1e8d2), 0.62), dark = base.clone().multiplyScalar(0.45);
+    g.fillStyle = '#' + pale.getHexString(); g.fillRect(0, 0, W, H); cloud(14, [dark.r * 255, dark.g * 255, dark.b * 255].map(v => v | 0), 0.18); cloud(5, [255, 252, 240], 0.22);
+    const dc = `rgba(${dark.r * 255 | 0},${dark.g * 255 | 0},${dark.b * 255 | 0},A)`;
+    for (let i = 0; i < 70; i++) blot(R() * W, R() * H, 3 + R() * 8, 3 + R() * 6, R() * 3, `rgba(${base.r * 200 | 0},${base.g * 200 | 0},${base.b * 200 | 0},A)`, 0.12 + R() * 0.15);
+    for (let i = 0; i < 220; i++) { const r = 1 + R() * R() * 6; blot(R() * W, R() * H, r * 1.4, r, R() * 3, dc, 0.5 + R() * 0.4); }
+    pores(1200, 0.1);
+  }
+  return c;
+}
+function makeEggMesh(colorHex, skin) {
   const pts = [];
   for (let i = 0; i <= 24; i++) { const t = i / 24, a = t * PI, r = Math.sin(a) * (0.82 + 0.12 * Math.cos(a)), y = -Math.cos(a) * 1.18; pts.push(new THREE.Vector2(Math.max(0.0001, r), y)); }
-  const c = document.createElement('canvas'); c.width = 512; c.height = 256; const g = c.getContext('2d');
-  g.fillStyle = '#f3ead6'; g.fillRect(0, 0, 512, 256);
-  for (let i = 0; i < 2400; i++) { g.fillStyle = `rgba(120,100,70,${Math.random() * 0.12})`; g.fillRect(Math.random() * 512, Math.random() * 256, 1.5, 1.5); }
-  const col = '#' + new THREE.Color(colorHex).getHexString();
-  const rnd = (a) => { let s = a * 9301 + 49297; return () => ((s = (s * 9301 + 49297) % 233280) / 233280); };
-  const R = rnd(7);
-  for (let i = 0; i < 26; i++) {
-    const x = R() * 512, y = 30 + R() * 196, rr = 6 + R() * 16;
-    for (const ox of [-512, 0, 512]) { g.fillStyle = col; g.globalAlpha = 0.75 + R() * 0.2; g.beginPath(); g.ellipse(x + ox, y, rr * 1.3, rr, R() * 3, 0, PI * 2); g.fill(); }
-  }
-  g.globalAlpha = 1;
+  const c = eggCanvas(skin, colorHex);
   const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace; tex.wrapS = THREE.RepeatWrapping;
   const crack = document.createElement('canvas'); crack.width = 512; crack.height = 256; const cg = crack.getContext('2d'); cg.fillStyle = '#000'; cg.fillRect(0, 0, 512, 256);
   const ctex = new THREE.CanvasTexture(crack);
-  const mat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.55, metalness: 0, bumpMap: BUMP, bumpScale: 0.004, emissiveMap: ctex, emissive: new THREE.Color(0xfff2c0), emissiveIntensity: 0 });
+  const shiny = { gold: [0.3, 0.2], crystal: [0.22, 0.0], opal: [0.18, 0.0], lava: [0.85, 0.0], galaxy: [0.2, 0.0], candy: [0.45, 0.0], jungle: [0.8, 0.0] }[skin] || [0.5, 0];
+  const mat = new THREE.MeshStandardMaterial({ map: tex, roughness: shiny[0], metalness: shiny[1], bumpMap: BUMP, bumpScale: 0.004, emissiveMap: ctex, emissive: new THREE.Color(0xfff2c0), emissiveIntensity: 0 });
   const mk = (from, to) => {
     const p = pts.slice(from, to + 1); const geo = new THREE.LatheGeometry(p, 40);
     const uv = geo.attributes.uv; for (let i = 0; i < uv.count; i++) uv.setY(i, (from + uv.getY(i) * (to - from)) / 24);
@@ -1903,7 +2094,7 @@ function setOutline(root, on, color) {
   for (const m of ol) m.visible = !!on;
 }
 
-return {"SCALE_BUMP":SCALE_BUMP,"palette":palette,"qMul":qMul,"buildDino":buildDino,"setCosmetic":setCosmetic,"setCrown":setCrown,"biteCurve":biteCurve,"animateDino":animateDino,"makeNameTag":makeNameTag,"makeHpBar":makeHpBar,"makeActor":makeActor,"buildEnemy":buildEnemy,"animateEnemy":animateEnemy,"buildBoss":buildBoss,"animateBoss":animateBoss,"makeEggMesh":makeEggMesh,"setOutline":setOutline};
+return {"SCALE_BUMP":SCALE_BUMP,"palette":palette,"qMul":qMul,"buildDino":buildDino,"setCosmetic":setCosmetic,"buildCrownMesh":buildCrownMesh,"setCrown":setCrown,"biteCurve":biteCurve,"animateDino":animateDino,"makeNameTag":makeNameTag,"makeHpBar":makeHpBar,"buildPet":buildPet,"makeActor":makeActor,"buildEnemy":buildEnemy,"animateEnemy":animateEnemy,"buildBoss":buildBoss,"animateBoss":animateBoss,"eggCanvas":eggCanvas,"makeEggMesh":makeEggMesh,"setOutline":setOutline};
 })();
 __m["biomekit"]=(function(){
 var THREE=__m["three"];
@@ -2729,13 +2920,29 @@ def('sea', 'seagrass', 'Морская трава', 'Zostera marina', 0.35, r =>
   const B = new Builder(); tuft(B, r, { n: r.int(10, 16), h: r.range(0.8, 1.3), w: 0.04, bend: 0.5, base: C('#2a5a2a'), tip: C('#7aa850'), widthFn: W_STRAP, spread: 0.12, flutter: 1.0 }); return B.build(0.35, 1.5);
 }, { underwater: true });
 def('sea', 'branch_coral', 'Ветвистый коралл', 'Acropora', 0.0, r => {
-  const B = new Builder(), cols = [['#e8705a', '#ffc2a0'], ['#c85aa0', '#f2b2dc'], ['#e8a03a', '#ffe0a0']], [c0, c1] = r.pick(cols).map(C);
-  for (let k = 0; k < r.int(3, 5); k++) {
-    const a = r.range(0, 6.28);
-    branches(B, r, new V3(Math.cos(a) * 0.1, 0, Math.sin(a) * 0.1), new V3(Math.cos(a) * 0.5, 1, Math.sin(a) * 0.5), r.range(0.35, 0.5), 0.07, 0,
-      { depth: 3, kids: [3, 3, 2], start: [0.4, 0.4, 0.4], angle: [0.6, 0.55, 0.5], up: [0.4, 0.5, 0.5], ratio: [0.8, 0.75, 0.7], radRatio: 0.78, taper: 0.7, wob: 0.15, lift: 0.08, seg0: 8, segsPerUnit: 10,
-        colorFn: (c, lx, ly, lz) => mixC(c, c0, c1, ly / 1.2) },
-      (p, d) => B.add(sphereGeo(8, 6), { m: M(p, null, 0.035), color: c1 }));
+  // рогатый коралл: плотный куст тонких сужающихся веток от общего основания, светлые кончики
+  const B = new Builder(), cols = [['#c8705a', '#f6d8c0'], ['#b0609a', '#ecc8e0'], ['#d8a04a', '#fbeccb'], ['#9a8a72', '#e8e0cc']], [c0, c1] = r.pick(cols).map(C);
+  B.add(latheGeo([[0.34, 0], [0.32, 0.05], [0.2, 0.1], [0.08, 0.14], [0, 0.14]], 14), { color: c0.clone().multiplyScalar(0.7) });
+  for (let k = 0; k < r.int(6, 9); k++) {
+    const a = k * 2.4 + r.range(-0.3, 0.3), rr = r.range(0.04, 0.2);
+    branches(B, r, new V3(Math.cos(a) * rr, 0.05, Math.sin(a) * rr), new V3(Math.cos(a) * 0.55, 1, Math.sin(a) * 0.55), r.range(0.45, 0.7), 0.04, 0,
+      { depth: 3, kids: [3, 3, 2], start: [0.35, 0.35, 0.35], angle: [0.7, 0.6, 0.5], up: [0.5, 0.5, 0.5], ratio: [0.78, 0.72, 0.68], radRatio: 0.7, taper: 0.45, wob: 0.14, lift: 0.1, seg0: 7, segsPerUnit: 9,
+        colorFn: (c, lx, ly, lz) => mixC(c, c0, c1, Math.min(1, Math.max(0, ly / 1.1))) },
+      (p, d) => B.add(sphereGeo(6, 4), { m: M(p, null, 0.011), color: c1 }));
+  }
+  return B.build(0.0);
+}, { underwater: true });
+def('sea', 'table_coral', 'Столовый коралл', 'Acropora cytherea', 0.0, r => {
+  const B = new Builder(), [c0, c1] = r.pick([['#6a9a8a', '#c8e8d8'], ['#9a7ab8', '#e0d0f0'], ['#c88a5a', '#f4dcb8']]).map(C), R0 = r.range(0.45, 0.7);
+  B.add(latheGeo([[0.1, 0], [0.09, 0.12], [0.08, 0.2]], 8), { color: c0.clone().multiplyScalar(0.7) });
+  B.add(latheGeo([[0.0, 0.3], [R0 * 0.35, 0.31], [R0 * 0.8, 0.29], [R0, 0.24], [R0 * 0.97, 0.21], [R0 * 0.6, 0.2], [R0 * 0.2, 0.2], [0, 0.2]], 28, 22, 0.05), { colorFn: (c, lx, ly, lz) => mixC(c, c0, c1, Math.min(1, Math.hypot(lx, lz) / R0)) });
+  return B.build(0.0);
+}, { underwater: true });
+def('sea', 'tube_coral', 'Трубчатый коралл', 'Tubastraea', 0.0, r => {
+  const B = new Builder(), [c0, c1] = r.pick([['#d8a020', '#ffd860'], ['#c84a3a', '#ff9a78'], ['#4a7ab8', '#a0c8f0']]).map(C);
+  for (let k = 0; k < r.int(7, 12); k++) {
+    const a = r.range(0, 6.28), rr = r.range(0, 0.2), h = r.range(0.2, 0.5), t = r.range(0.05, 0.085), lean = r.range(0, 0.25), x = Math.cos(a) * rr, z = Math.sin(a) * rr;
+    B.add(latheGeo([[t * 1.1, 0], [t, h * 0.5], [t * 1.1, h], [t * 0.7, h + 0.01], [t * 0.5, h - 0.06]], 10), { m: M(new V3(x, 0, z), qE(Math.cos(a) * lean, 0, Math.sin(a) * lean), 1), colorFn: (c, lx, ly) => mixC(c, c0, c1, Math.min(1, ly / (h + 0.02))) });
   }
   return B.build(0.0);
 }, { underwater: true });
@@ -3794,6 +4001,7 @@ var Tree=__m["treekit"].Tree;
 
 
 BiomeKit.setLite(true);   // в игре без микродеталей (иголки 2 мм не видны), меньше полигонов
+if (typeof window !== "undefined") window.__BK = BiomeKit;   // для отладки
 const CONFIG = window.CONFIG, Sim = window.Sim;
 const TOUCH_DEV = matchMedia('(pointer:coarse)').matches || 'ontouchstart' in window;   // телефон/планшет: облегчённая сцена
 
@@ -3996,7 +4204,7 @@ const BLADES = {
   desert:  { pal: ['#b9a864', '#c9b873', '#a89a58', '#d6c78a'], mult: 0.32, h: 0.85 },
   volcano: { pal: ['#3a3a36', '#4a4640', '#2f2f2c', '#5a4a3a'], mult: 0.35, h: 0.8 }
 };
-const BLADE_Q = { high: { R: 30, n: 300 }, med: { R: 22, n: 220 }, low: { R: 15, n: 140 } };
+const BLADE_Q = { high: { R: 32, n: 560 }, med: { R: 23, n: 400 }, low: { R: 15, n: 230 } };
 // ---------- растения BiomeKit по биомам: [вид, вес, масштаб] ----------
 const KIT = {
   // лес: деревья, трава и кусты — из tree.js (дуб и берёза с корой и листьями, травинки, кусты); папоротник, цветы и грибы — BiomeKit
@@ -4005,14 +4213,14 @@ const KIT = {
   mountain: { blades: BLADES.mountain, trees: [['mountain_pine', 1, 2.1]], cover: [['alpine_grass', 60, 1.7], ['moss_campion', 12, 1.7], ['gentian', 10, 1.7], ['edelweiss', 6, 1.7], ['rhododendron', 4, 1.5]], under: [['seagrass', 1, 1.3]] },
   desert:   { blades: BLADES.desert, trees: [['cactus', 2, 1.6], ['prickly_pear', 1, 1.8]], cover: [['desert_grass', 60, 1.7], ['agave', 10, 1.5], ['barrel_cactus', 6, 1.6], ['tumbleweed', 6, 1.5]], water: [['water_lily', 1, 1.7]], under: [['seagrass', 1, 1.4]] },
   swamp:    { blades: BLADES.swamp, trees: [['mangrove', 3, 1.3], ['willow', 2, 1.55]], cover: [['sedge', 55, 1.7], ['cattail', 14, 1.5], ['hummock', 8, 1.6]], water: [['water_lily', 1, 1.9]],
-              under: [['kelp', 2, 0.9], ['seagrass', 5, 1.5], ['branch_coral', 1, 1.5], ['brain_coral', 1, 1.5], ['sea_fan', 1, 1.5], ['anemone', 1, 1.6], ['sea_lettuce', 2, 1.6]] },
+              under: [['kelp', 2, 0.9], ['seagrass', 5, 1.5], ['branch_coral', 2, 1.5], ['table_coral', 1, 1.6], ['tube_coral', 1, 1.5], ['brain_coral', 1, 1.5], ['sea_fan', 1, 1.5], ['anemone', 1, 1.6], ['sea_lettuce', 2, 1.6]] },
   volcano:  { blades: BLADES.volcano, trees: [['charred_tree', 3, 1.3], ['magma_crystal', 1, 2.0]], cover: [['ash_grass', 60, 1.7], ['ember_shrub', 10, 1.5], ['fire_lily', 8, 1.6]] },
   // океан: на островке — трава у гнезда; на дне — кораллы, водоросли, актинии (набор BiomeKit «Море»)
   reef:     { trees: [], cover: [['desert_grass', 30, 1.6], ['sedge', 8, 1.5]],
-              under: [['shells', 10, 1.2], ['urchin', 3, 1.4], ['starfish', 3, 1.5], ['branch_coral', 5, 1.7], ['brain_coral', 4, 1.9], ['sea_fan', 4, 1.9], ['anemone', 4, 2.2], ['seagrass', 14, 1.7], ['sea_lettuce', 8, 1.9], ['kelp', 5, 1.1]] },
-  kelp:     { trees: [], cover: [['sedge', 30, 1.6]], under: [['shells', 5, 1.2], ['urchin', 3, 1.4], ['starfish', 2, 1.5], ['kelp', 26, 1.1], ['seagrass', 14, 1.8], ['sea_lettuce', 9, 1.9], ['anemone', 2, 2.0], ['sea_fan', 1, 1.8]] },
-  arctic:   { trees: [], cover: [['lichen', 20, 1.6], ['dry_grass', 20, 1.6]], under: [['shells', 6, 1.2], ['urchin', 4, 1.4], ['starfish', 2, 1.5], ['seagrass', 9, 1.6], ['sea_lettuce', 6, 1.8], ['anemone', 3, 2.0], ['kelp', 8, 1.0], ['sea_fan', 1, 1.7]] },
-  vents:    { trees: [], cover: [['ash_grass', 20, 1.6]], under: [['shells', 4, 1.2], ['urchin', 3, 1.4], ['starfish', 3, 1.5], ['anemone', 5, 2.2], ['sea_fan', 3, 1.9], ['seagrass', 5, 1.5], ['sea_lettuce', 3, 1.6]] },
+              under: [['shells', 10, 1.2], ['urchin', 3, 1.4], ['starfish', 3, 1.5], ['branch_coral', 8, 1.7], ['table_coral', 4, 1.8], ['tube_coral', 4, 1.6], ['brain_coral', 5, 1.9], ['sea_fan', 4, 1.9], ['anemone', 4, 2.2], ['seagrass', 14, 1.7], ['sea_lettuce', 8, 1.9], ['kelp', 5, 1.1]] },
+  kelp:     { trees: [], cover: [['sedge', 30, 1.6]], under: [['shells', 5, 1.2], ['urchin', 3, 1.4], ['starfish', 3, 1.5], ['tube_coral', 2, 1.5], ['table_coral', 1, 1.6], ['kelp', 26, 1.1], ['seagrass', 14, 1.8], ['sea_lettuce', 9, 1.9], ['anemone', 2, 2.0], ['sea_fan', 1, 1.8]] },
+  arctic:   { trees: [], cover: [['lichen', 20, 1.6], ['dry_grass', 20, 1.6]], under: [['shells', 6, 1.2], ['urchin', 4, 1.4], ['starfish', 3, 1.5], ['tube_coral', 2, 1.5], ['seagrass', 9, 1.6], ['sea_lettuce', 6, 1.8], ['anemone', 3, 2.0], ['kelp', 8, 1.0], ['sea_fan', 1, 1.7]] },
+  vents:    { trees: [], cover: [['ash_grass', 20, 1.6]], under: [['shells', 4, 1.2], ['urchin', 3, 1.4], ['starfish', 3, 1.5], ['tube_coral', 3, 1.5], ['table_coral', 1, 1.6], ['anemone', 5, 2.2], ['sea_fan', 3, 1.9], ['seagrass', 5, 1.5], ['sea_lettuce', 3, 1.6]] },
   abyss:    { trees: [], cover: [['sedge', 20, 1.5]], under: [['shells', 3, 1.2], ['urchin', 2, 1.4], ['sea_fan', 3, 2.0], ['anemone', 3, 2.2], ['brain_coral', 1, 1.8]] }
 };
 // в каком наборе BiomeKit лежит растение (кувшинка — в «болоте», водоросли — в «море» и т.д.)
@@ -4125,7 +4333,13 @@ function buildWorld(scene, biomeId, opts) {
     const ha = W.heightAt(X0, Z0), hb = W.heightAt(X0, Z0 + st), hc = W.heightAt(X0 + st, Z0 + st), hd = W.heightAt(X0 + st, Z0);
     return u + v <= 1 ? ha + (hd - ha) * u + (hb - ha) * v : hc + (hb - hc) * (1 - u) + (hd - hc) * (1 - v);
   };
-  if (!isDuel) for (const list of [W.trees, W.rocks, W.stones]) for (const o of list || []) if (!o._mh) { o._mh = 1; if (o.y !== undefined) o.y += MH(o.x, o.z) - W.heightAt(o.x, o.z); }
+  // основание ставим по самой низкой точке земли под его площадью: на склонах нижний край не висит в воздухе, верхний чуть уходит в землю
+  const lowestUnder = (x, z, r, sink) => {
+    const rr = Math.min(3, Math.max(0.3, r)) * 0.85; let m = MH(x, z);
+    for (let k = 0; k < 8; k++) { const a = k * 0.7854; m = Math.min(m, MH(x + Math.cos(a) * rr, z + Math.sin(a) * rr)); }
+    return m - sink * Math.max(1, r);
+  };
+  if (!isDuel) for (const list of [W.trees, W.rocks, W.stones]) for (const o of list || []) if (!o._mh) { o._mh = 1; if (o.y !== undefined) o.y = lowestUnder(o.x, o.z, o.r || 1, o.kind === 'rock' ? 0.12 : 0.04); }
   // окраска поверхности — палитры и узоры BiomeKit, высоты нашего мира приведены к его масштабу
   const kitB = KIT_BIOME[W.biome], kitCol = !isDuel && kitB !== 'volcano' ? BiomeKit.surfaceColor(kitB, cfg.seed & 0xffff) : null;
   const yK = { mountain: h => (h - 2) * 0.2, swamp: h => h - W.waterY };
@@ -4381,7 +4595,7 @@ function buildWorld(scene, biomeId, opts) {
     const treePool = kit.tree ? null : kitPool(kit.trees, NV, 220, true), treeGrid = gridOf(trees);
     if (kit.tree) trees.tiers = [treePoolOf(kit.tree, NV, 0, 30, true), treePoolOf(kit.tree, NV, 1, 50, true), treePoolOf(kit.tree, NV, 2, 110, false)];
     // трава и кусты: точки по суше
-    const [gMax, gDens] = GRASS_FILTER[W.biome] || [14, 1], grng = Sim.mulberry32(W.biome.length * 977 + 4242), N = Math.round(30000 * gDens), items = [];
+    const [gMax, gDens] = GRASS_FILTER[W.biome] || [14, 1], grng = Sim.mulberry32(W.biome.length * 977 + 4242), N = Math.round(46000 * gDens), items = [];
     for (let i = 0; i < N; i++) {
       const x = (grng() * 2 - 1) * (HALF - 8), z = (grng() * 2 - 1) * (HALF - 8), h = MH(x, z);
       if (h < W.waterY + 0.45 || h > gMax + 20 || Math.hypot(x, z) < ARENA - 1 || W.slopeAt(x, z) > 0.75 || Math.hypot(x - W.nest.x, z - W.nest.z) < 9) continue;
@@ -4399,10 +4613,12 @@ function buildWorld(scene, biomeId, opts) {
     }
     if (kit.under && W.liquid !== 'lava') {
       const ur = Sim.mulberry32(W.biome.length * 57 + 91), ul = [];
-      const UMAX = W.ocean ? 12000 : (W.biome === 'swamp' ? 1400 : 300);
-      for (let i = 0; i < (W.ocean ? 120000 : 20000) && ul.length < UMAX; i++) {
+      const UMAX = W.ocean ? 26000 : (W.biome === 'swamp' ? 1400 : 300);
+      for (let i = 0; i < (W.ocean ? 260000 : 20000) && ul.length < UMAX; i++) {
         const x = (ur() * 2 - 1) * (HALF - 10), z = (ur() * 2 - 1) * (HALF - 10), h = MH(x, z), dep = W.waterY - h;
         if (dep <= 0.9) continue;
+        const slp = W.slopeAt(x, z);
+        if (slp > 0.85) continue;                                   // на отвесных стенах ничего не растёт — не висит сбоку
         if (W.ocean) {   // заросли пятнами: густо на грядах и у скал, пусто на песчаных полянах арены
           const dn = kfbm(x * 0.03, z * 0.03, 2, 61); if (ur() > Math.max(0.08, Math.min(1, (dn + 0.15) * 1.6))) continue;
           if (Math.hypot(x, z) < ARENA - 2) continue;
@@ -4410,13 +4626,15 @@ function buildWorld(scene, biomeId, opts) {
         const v = ur(); let si = pickW(kit.under, v), sp = kit.under[si][0];
         // ламинария дотягивается почти до поверхности: высота по глубине
         const sc = sp === 'kelp' ? (W.ocean ? Math.min(3.8, Math.max(0.6, dep / 9)) : dep < 3 ? 0.4 : 1) : 1;
-        ul.push({ x, y: h - 0.05, z, rot: ur() * 6.28, s: (0.7 + ur() * 0.6) * sc, ksi: si, kv: (ur() * 2) | 0 });
+        if (slp > 0.45 && sp !== 'kelp' && sp !== 'seagrass' && sp !== 'sea_lettuce') continue;   // твёрдые кораллы и ракушки — только на пологом дне
+        const us = (0.7 + ur() * 0.6) * sc;
+        ul.push({ x, y: lowestUnder(x, z, 0.4 * us, 0.04) , z, rot: ur() * 6.28, s: us, ksi: si, kv: (ur() * 2) | 0 });
       }
-      under = { pool: kitPool(kit.under, 2, W.ocean ? 700 : 500, false), grid: gridOf(ul) };
+      under = { pool: kitPool(kit.under, 2, W.ocean ? 1100 : 500, false), grid: gridOf(ul) };
     }
     trees.pool = treePool; trees.grid = treeGrid;
     if (kit.blades) {
-      const cap = 26000, im = new THREE.InstancedMesh(Tree.bladeGeo(), Tree.grassMaterial(), cap);
+      const cap = 52000, im = new THREE.InstancedMesh(Tree.bladeGeo(), Tree.grassMaterial(), cap);
       im.count = 0; im.frustumCulled = false; im.receiveShadow = true; im.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(cap * 3), 3); root.add(im);
       blades = { im, cells: new Map(), cap, q: '', mult: kit.blades.mult || 1, hmul: kit.blades.h || 1, pal: (kit.blades.pal || Tree.grassPalette).map(h => new THREE.Color(h)) };
     }
@@ -4441,7 +4659,7 @@ function buildWorld(scene, biomeId, opts) {
       if (Math.abs(x) > HALF - 6 || Math.abs(z) > HALF - 6) continue;
       const h = MH(x, z);
       if (h < W.waterY + 0.3 || Math.hypot(x, z) < ARENA - 1 || Math.hypot(x - W.nest.x, z - W.nest.z) < 8.5 || W.slopeAt(x, z) > 0.8) continue;
-      const patch = 0.55 + 0.45 * Tree.fbm2(x * 0.18 + 3, z * 0.18, 2, 11) * 1.6;
+      const patch = 0.82 + 0.45 * Tree.fbm2(x * 0.18 + 3, z * 0.18, 2, 11) * 1.6;
       if (pv > patch) continue;
       _bo.position.set(x, h - 0.02, z); _bo.rotation.set(-0.15 + a1 * 0.3, a2 * 6.2832, -0.15 + a3 * 0.3);
       _bo.scale.set((0.8 + s1 * 0.5) * 1.3, (0.25 + s2 * 0.45) * (0.7 + 0.5 * Math.min(1, patch)) * 1.5 * blades.hmul, 1); _bo.updateMatrix();
@@ -4832,7 +5050,7 @@ const AUTH_ERR = {
   bad_nick: { ru: 'Ник: 3–14 символов (буквы, цифры, _ и -)', en: 'Nickname: 3–14 chars (letters, digits, _ and -)' }, bad_password: { ru: 'Пароль: от 6 символов', en: 'Password: 6+ characters' },
   nick_taken: { ru: 'Этот ник уже занят', en: 'Nickname already taken' }, bad_credentials: { ru: 'Неверный ник или пароль', en: 'Wrong nickname or password' },
   rate_limited: { ru: 'Слишком много попыток, подождите минуту', en: 'Too many attempts, wait a minute' }, server_error: { ru: 'Ошибка сервера', en: 'Server error' },
-  in_game: { ru: 'Сначала выйдите из игры', en: 'Leave the game first' }, class_locked: { ru: 'Класс нельзя менять', en: 'Class is locked' }
+  in_game: { ru: 'Сначала выйдите из игры', en: 'Leave the game first' }, class_locked: { ru: 'Класс нельзя менять', en: 'Class is locked' }, type_locked: { ru: 'Этот вид откроется на 7 уровне любого типа', en: 'This type unlocks at level 7 of any type' }
 };
 const errText = e => { const m = AUTH_ERR[e && e.message]; return m ? m[window.I18N.lang] : (e && e.name === 'TypeError' ? T('server_off') : (e && e.message) || T('server_off')); };
 const inGame = () => !!(ctl.session && ctl.session.welcomed);
@@ -4849,7 +5067,26 @@ function openPanel(name, html, after) {
 function panelClose() { $('panel').classList.remove('on'); closePanelState(); if (!inGame()) showMenu(); else ctl.relock(); }
 function btnClick(root, sel, fn) { root.querySelectorAll(sel).forEach(b => b.addEventListener('click', e => { ctl.audio.init(); ctl.audio.sfx('click'); fn(b, e); })); }
 
+function questText(q) { const d = CONFIG.QUESTS[q.id]; return TN(d.t).replace('{n}', d.mins ? Math.round(q.n / 60) : q.n); }
+// окно «Задания»: серия входов и 3 задания дня
+function openQuests() {
+  const live = inGame(), real = live ? ctl.session.profile : activeProf();
+  if (!real || !real.hatched) { UI.toast(T('quest_need_dino')); return; }
+  const pr = JSON.parse(JSON.stringify(real)); Sim.dailyRoll(pr, Date.now());      // показываем уже с учётом новой даты
+  const d = pr.daily, doneN = d.q.filter(x => x.done).length;
+  const rows = d.q.map(x => { const def = CONFIG.QUESTS[x.id], pct = Math.round(100 * x.h / x.n), cur = def.mins ? Math.floor(x.h / 60) : x.h, need = def.mins ? Math.round(x.n / 60) : x.n;
+    return `<div class="a ${x.done ? 'on' : ''}"><i>${def.ico}</i><div style="flex:1"><b>${esc(questText(x))}</b><span>${cur}/${need} · +${def.coins} 🪙${x.done ? ' ✅' : ''}</span><div class="qbar"><i style="width:${pct}%"></i></div></div></div>`; }).join('');
+  const left = 7 - (d.streak % 7 || 7);
+  openPanel('quests', `<h2>📅 ${T('quests')} <small style="color:var(--mut)">${doneN}/${d.q.length}</small></h2>
+    <p class="sub">🔥 ${T('streak_n', { n: d.streak })} · ${T('streak_best', { n: d.best })}<br>${left ? T('streak_gift', { n: left }) : T('streak_gift_today')}</p>
+    <div class="ach qlist">${rows}</div>
+    <p class="sub">${T('quest_bonus', { c: CONFIG.QUEST_BONUS })}${d.bonus ? ' ✅' : ''}</p>
+    <p class="sub">${T('quest_new_day')}</p>
+    <button id="pn-x" style="margin-top:12px">${T('back')}</button>`, root => { $('pn-x').onclick = panelClose; });
+}
+
 const UI = {
+  questText,
   init(c) {
     ctl = c;
     $('a-close').onclick = () => { showMenu(); };
@@ -4867,7 +5104,7 @@ const UI = {
   toast(msg, ms) { const t = $('toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(toastT); toastT = setTimeout(() => { t.style.display = 'none'; }, ms || 2600); },
   banner(msg, ms) { const b = $('banner'); b.textContent = msg; b.classList.add('on'); clearTimeout(bannerT); bannerT = setTimeout(() => b.classList.remove('on'), ms || 2200); },
   note(msg) { const n = document.createElement('div'); n.textContent = msg; $('notes').appendChild(n); setTimeout(() => n.remove(), 4600); while ($('notes').children.length > 5) $('notes').firstChild.remove(); },
-  closeAll, showMenu, openAbout, openChange, openEvo, openAch, openLeaders, openSettings, openPause, openPlayers, duelRequest,
+  closeAll, showMenu, openAbout, openChange, openEvo, openShop, openAch, openLeaders, openSettings, openPause, openPlayers, duelRequest,
   refreshOpen() { if (openName && openRender) openRender(); }
 };
 
@@ -4887,16 +5124,18 @@ function showMenu() {
     <div class="grid2">
       <button data-go="leaders">${T('leaderboard')}</button><button data-go="evo">${T('evolution')}</button>
       <button data-go="ach">${T('achievements')}</button><button data-go="settings">${T('settings')}</button>
-    </div>`;
+    </div>
+    <div class="grid2"><button data-go="quests">📅 ${T('quests')}</button><button data-go="nest">🪺 ${T('nest')}</button></div>
+    <div class="grid2"><button data-go="duel">⚔ ${T('duel_menu')}</button><button data-go="shop">🛍 ${T('shop')}</button></div>`;
   const root = $('menu-card');
   $('m-acc').onclick = async () => { ctl.audio.init(); if (st.user) { await P.logout(); showMenu(); } else openAuth(() => showMenu()); };
   btnClick(root, '[data-go]', b => {
     const g = b.dataset.go;
     if (g === 'online' || g === 'code' || g === 'single') goPlay(g);
-    else if (g === 'leaders') openLeaders(); else if (g === 'evo') openEvo(); else if (g === 'ach') openAch(); else openSettings();
+    else if (g === 'leaders') openLeaders(); else if (g === 'quests') openQuests(); else if (g === 'evo') openEvo(); else if (g === 'ach') openAch(); else if (g === 'nest') openNest(); else if (g === 'duel') openDuelMenu(); else if (g === 'shop') openShop(); else openSettings();
   });
   show('menu');
-  if (prof && prof.hatched) ctl.menuSetDino({ cls: prof.cls, color: CONFIG.COLORS[prof.color], level: prof.level, evo: prof.evo, cosmetic: prof.cosmetic }); else ctl.menuShowEgg(0x6aa84f);
+  if (prof && prof.hatched) ctl.menuSetDino({ cls: prof.cls, color: CONFIG.COLORS[prof.color], level: prof.level, evo: prof.evo, cosmetic: prof.cosmetic, patc: prof.patc, morph: prof.morph }); else ctl.menuShowEgg(0x6aa84f);
   ctl.audio.setScene('menu');
 }
 
@@ -4941,6 +5180,8 @@ function openPlayPanel(online, codeFocus) {
   };
   const typeCard = (k) => {
     const I = CONFIG.CLS_INFO[k], lv = Sim.typeLevel(prof, k), st = lv ? T('level_short') + lv + ' · ' + T('stage_' + CONFIG.STAGES[CONFIG.stageIndex(lv)].id) : T('type_new');
+    const lockN = CONFIG.TYPE_MIN_LV[k] && !Sim.typeUnlocked(prof, k) ? CONFIG.TYPE_MIN_LV[k] : 0;
+    if (lockN) return `<div class="tp lock" data-lock="${lockN}" style="opacity:.45"><i>🔒</i><b>${esc(TN(I.n))}</b><small>${T('type_lock_n', { n: lockN })}</small></div>`;
     return `<div class="tp ${k === cls ? 'sel' : ''}" data-k="${k}"><i>${I.ico}</i><b>${esc(TN(I.n))}</b><small>${st}</small></div>`;
   };
   const render = () => {
@@ -4961,7 +5202,7 @@ function openPlayPanel(online, codeFocus) {
   };
   const bind = (root) => {
     btnClick(root, '.bm', b => { if (!b.classList.contains('lock')) { sel = b.dataset.b; draw(); } });
-    btnClick(root, '.tp', b => { cls = b.dataset.k; ctl.menuSetDino({ cls, color: CONFIG.COLORS[prof.color], level: Math.max(1, Sim.typeLevel(prof, cls)), evo: {} }); draw(); });
+    btnClick(root, '.tp', b => { if (b.dataset.lock) { UI.toast(T('type_lock_n', { n: b.dataset.lock })); return; } cls = b.dataset.k; ctl.menuSetDino({ cls, color: CONFIG.COLORS[prof.color], level: Math.max(1, Sim.typeLevel(prof, cls)), evo: {} }); draw(); });
     btnClick(root, '.wt', b => { const w = b.dataset.w; if (w !== world) { world = w; sel = firstOpen(w); cls = bestType(w); draw(); } });
     const go = (mode, code) => { closeAll(); ctl.start({ online, biome: sel, cls, mode, code }); };
     $('pp-back') && ($('pp-back').onclick = () => showMenu());
@@ -4982,7 +5223,7 @@ let createState = null;
 // значки способностей типа: Атака · E · Q · F
 function abilChips(k) {
   const A = CONFIG.ABILITIES[k], AI = CONFIG.ABIL_INFO, f = k === 'fly' ? 'fly' : k === 'herb' ? 'climb' : '';
-  return [['atk', 'LMB'], [A.e.id, 'E'], [A.q.id, 'Q'], f ? [f, 'F'] : null].filter(Boolean).map(([id, key]) => `<u>${key === 'LMB' ? CONFIG.CLS_INFO[k].atkIco : AI[id].ico} ${esc(TN(id === 'atk' ? CONFIG.CLS_INFO[k].atkN : AI[id].n))}</u>`).join('');
+  return [['atk', 'LMB'], [A.e.id, 'E'], [A.q.id, 'Q'], f ? [f, 'F'] : null, CONFIG.ULTS[k] ? [CONFIG.ULTS[k].id, 'X'] : null].filter(Boolean).map(([id, key]) => `<u>${key === 'LMB' ? CONFIG.CLS_INFO[k].atkIco : AI[id].ico} ${esc(TN(id === 'atk' ? CONFIG.CLS_INFO[k].atkN : AI[id].n))}</u>`).join('');
 }
 // краткие характеристики типа для выбора: здоровье, урон, скорость, выносливость и т.д. (на уровне lv, без эволюции)
 function statsGrid(k, lv) {
@@ -4999,7 +5240,7 @@ function abilList(k) {
   const row = (key, ico, nm, d) => `<li><b>${ico} ${esc(nm)}</b> <kbd>${key}</kbd><span>${esc(d)}</span></li>`;
   const cdf = (id, cd) => TN(AI[id].d).replace('{cd}', cd);
   return '<ul class="abl">' + row(IS_TOUCH_UI ? '⚔' : 'ЛКМ', CONFIG.CLS_INFO[k].atkIco, TN(CONFIG.CLS_INFO[k].atkN), TN(AI.atk.d)) + row('E', AI[A.e.id].ico, TN(AI[A.e.id].n), cdf(A.e.id, A.e.cd)) + row('Q', AI[A.q.id].ico, TN(AI[A.q.id].n), cdf(A.q.id, A.q.cd))
-    + (f ? row('F', AI[f].ico, TN(AI[f].n), cdf(f, 0)) : '') + '</ul>';
+    + (f ? row('F', AI[f].ico, TN(AI[f].n), cdf(f, 0)) : '') + (CONFIG.ULTS[k] ? row('X', AI[CONFIG.ULTS[k].id].ico, TN(AI[CONFIG.ULTS[k].id].n), cdf(CONFIG.ULTS[k].id, 0)) : '') + '</ul>';
 }
 const IS_TOUCH_UI = typeof matchMedia === 'function' && matchMedia('(pointer:coarse)').matches;
 function openCreate(online, done, newRun) {
@@ -5008,11 +5249,12 @@ function openCreate(online, done, newRun) {
   $('c-name').value = createState.name; $('c-err').textContent = '';
   $('c-colors').innerHTML = CONFIG.COLORS.map((c, i) => `<div class="sw ${i === createState.color ? 'sel' : ''}" data-c="${i}" style="background:#${c.toString(16).padStart(6, '0')}"></div>`).join('');
   const clsCard = k => { const I = CONFIG.CLS_INFO[k], A = CONFIG.ABILITIES[k];
-    return `<div class="cls ${k === createState.cls ? 'sel' : ''}" data-k="${k}"><b>${I.ico} ${esc(TN(I.n))}</b><span>${esc(TN(I.d))}</span><em>${abilChips(k)}</em>${statsGrid(k, 1)}</div>`; };
+    const lk = !!CONFIG.TYPE_MIN_LV[k];
+    return `<div class="cls ${lk ? 'lock' : ''} ${k === createState.cls ? 'sel' : ''}" data-k="${k}" ${lk ? 'style="opacity:.45"' : ''}><b>${lk ? '🔒 ' : ''}${I.ico} ${esc(TN(I.n))}${lk ? ' <small>' + T('type_lock_n', { n: CONFIG.TYPE_MIN_LV[k] }) + '</small>' : ''}</b><span>${esc(TN(I.d))}</span><em>${abilChips(k)}</em>${statsGrid(k, 1)}</div>`; };
   $('c-classes').innerHTML = ['land', 'sea'].map(w => `<div class="wh">${w === 'sea' ? '🌊 ' + T('world_sea') : '🌍 ' + T('world_land')}</div>` + CONFIG.TYPES[w].map(clsCard).join('')).join('');
   const preview = () => ctl.menuSetDino({ cls: createState.cls, color: CONFIG.COLORS[createState.color], level: 1, evo: {} });
   btnClick($('c-colors'), '.sw', b => { createState.color = +b.dataset.c; $('c-colors').querySelectorAll('.sw').forEach(x => x.classList.toggle('sel', x === b)); preview(); });
-  btnClick($('c-classes'), '.cls', b => { createState.cls = b.dataset.k; $('c-classes').querySelectorAll('.cls').forEach(x => x.classList.toggle('sel', x === b)); preview(); });
+  btnClick($('c-classes'), '.cls', b => { if (CONFIG.TYPE_MIN_LV[b.dataset.k]) { UI.toast(T('type_lock_n', { n: CONFIG.TYPE_MIN_LV[b.dataset.k] })); return; } createState.cls = b.dataset.k; $('c-classes').querySelectorAll('.cls').forEach(x => x.classList.toggle('sel', x === b)); preview(); });
   $('c-back').onclick = () => showMenu();
   $('c-go').onclick = async () => {
     const name = $('c-name').value.replace(/[<>]/g, '').trim();
@@ -5029,7 +5271,7 @@ function openCreate(online, done, newRun) {
     } catch (e) { $('c-err').textContent = errText(e); }
     $('c-go').disabled = false;
   };
-  UI.applyLang(); show('create'); ctl.menuShowEgg(CONFIG.COLORS[createState.color]);
+  UI.applyLang(); show('create'); ctl.menuShowEgg(CONFIG.COLORS[createState.color], (activeProf() || {}).eggskin);
   // на экране создания сразу показываем выбранного динозавра
   setTimeout(preview, 0);
 }
@@ -5043,8 +5285,7 @@ function openEvo(tab) {
   const render = () => {
     const live = inGame(), prof = live ? ctl.session.profile : activeProf();
     if (!prof || !prof.hatched) { openPanel('evo', `<h2>${T('evolution')}</h2><p class="sub">${T('no_character')}</p><button id="pn-x">${T('back')}</button>`, r => { $('pn-x').onclick = panelClose; }); return; }
-    const pts = CONFIG.evoPoints(prof.level, prof.evo), head = `<div class="row" style="margin-bottom:8px"><h2 style="margin:0;flex:2">${CLS_ICO[prof.cls]} ${esc(prof.name)} · ${T('level_short')}${prof.level}</h2><div class="pts" style="text-align:right">${T('evo_points', { n: pts })} · 🪙 ${prof.coins}</div></div>
-      <div class="tabs"><button data-tab="evo" class="${tab === 'evo' ? 'on' : ''}">${T('evolution')}</button><button data-tab="shop" class="${tab === 'shop' ? 'on' : ''}">${T('shop')}</button></div>`;
+    const pts = CONFIG.evoPoints(prof.level, prof.evo), head = `<div class="row" style="margin-bottom:8px"><h2 style="margin:0;flex:2">${CLS_ICO[prof.cls]} ${esc(prof.name)} · ${T('level_short')}${prof.level}</h2><div class="pts" style="text-align:right">${T('evo_points', { n: pts })} · 🪙 ${prof.coins}</div></div>`;
     let body = '';
     if (tab === 'evo') {
       // деревья эволюции: граф 2 → 4 → 8; выбранная ветка светится, соседняя развилка — тусклая
@@ -5078,22 +5319,13 @@ function openEvo(tab) {
       }
       body = `<div class="ttabs">${tabs2}</div><div class="etree"><svg viewBox="0 0 ${Wd} 330" preserveAspectRatio="none">${lines}</svg>${nodes}</div>${card}
         <div class="row" style="margin-top:10px"><button data-reset="1" class="red" ${live && CONFIG.evoSpent(prof.evo) > 0 ? '' : 'disabled'}>${T('evo_reset_free')}</button></div>${live ? '' : `<p class="sub">${T('offline_progress')}</p>`}`;
-    } else {
-      body = '<div class="shop">' + Object.keys(CONFIG.COSMETICS).map(id => {
-        const c = CONFIG.COSMETICS[id], own = prof.cosmetics.indexOf(id) >= 0, eq = prof.cosmetic === id;
-        const btn = own ? `<button data-eq="${eq ? '' : id}" ${live ? '' : 'disabled'}>${eq ? T('unequip') : T('equip')}</button>` : `<button data-shop="${id}" ${live && prof.coins >= c.price ? '' : 'disabled'}>${T('buy')} · 🪙 ${c.price}</button>`;
-        return `<div class="br"><h4>${esc(TN(c.n))}</h4><p>${own ? T('owned') : ''}</p>${btn}</div>`;
-      }).join('') + '</div>';
     }
     openPanel('evo', head + body + `<button id="pn-x" style="margin-top:12px">${T('back')}</button>`, root => {
-      btnClick(root, '[data-tab]', b => { tab = b.dataset.tab; render(); });
       btnClick(root, '[data-buy]', b => ctl.send({ t: 'evo', id: b.dataset.buy }));
       btnClick(root, '[data-sw]', b => ctl.send({ t: 'evosw', id: b.dataset.sw }));
       btnClick(root, '[data-tree]', b => { evoTree = b.dataset.tree; evoSel = ''; render(); });
       btnClick(root, '[data-node]', b => { evoSel = b.dataset.node; render(); });
       btnClick(root, '[data-reset]', () => ctl.send({ t: 'evoreset' }));
-      btnClick(root, '[data-shop]', b => ctl.send({ t: 'buy', id: b.dataset.shop }));
-      btnClick(root, '[data-eq]', b => ctl.send({ t: 'equip', id: b.dataset.eq }));
       $('pn-x').onclick = panelClose;
     });
     openRender = render;
@@ -5103,10 +5335,149 @@ function openEvo(tab) {
 
 // ---------------------------------------------------------------- достижения и рейтинг
 function openAch() {
-  const prof = inGame() ? ctl.session.profile : activeProf();
-  const list = CONFIG.ACH.map(a => { const ok = prof && prof.hatched ? !!a.t(prof) : false; return `<div class="a ${ok ? 'on' : ''}"><i>${a.ico}</i><div><b>${esc(TN(a.n))}</b><span>${esc(TN(a.d))}</span></div></div>`; });
-  const n = list.filter(x => x.includes('class="a on"')).length;
-  openPanel('ach', `<h2>🏆 ${T('ach_title')} <small style="color:var(--mut)">${n}/${CONFIG.ACH.length}</small></h2><div class="ach">${list.join('')}</div><button id="pn-x" style="margin-top:12px">${T('back')}</button>`, () => { $('pn-x').onclick = panelClose; });
+  const live = inGame(), prof = live ? ctl.session.profile : activeProf(), had = prof && prof.hatched;
+  const claimed = (prof && prof.claimed) || [], titles = (prof && prof.titles) || [];
+  let ready = 0;
+  const list = CONFIG.ACH.map(a => {
+    const ok = had ? !!a.t(prof) : false, r = CONFIG.ACH_REWARD[a.id] || {}, got = claimed.indexOf(a.id) >= 0;
+    const rw = [r.c ? '🪙 ' + r.c : '', r.title ? CONFIG.TITLES[r.title].ico + ' ' + TN(CONFIG.TITLES[r.title].n) : '', r.cos && CONFIG.COSMETICS[r.cos] ? '🎁 ' + TN(CONFIG.COSMETICS[r.cos].n) : ''].filter(Boolean).join(' · ');
+    let btn = '';
+    if (ok && !got) { ready++; btn = live ? `<button data-claim="${a.id}" class="claim">${T('claim')}</button>` : `<em>${T('claim_in_game')}</em>`; } else if (got) btn = `<em>✔ ${T('claimed')}</em>`;
+    return `<div class="a ${ok ? 'on' : ''}"><i>${a.ico}</i><div><b>${esc(TN(a.n))}</b><span>${esc(TN(a.d))}</span><span class="rw">${esc(rw)}</span>${btn}</div></div>`;
+  });
+  const n = CONFIG.ACH.filter(a => had && a.t(prof)).length;
+  const curT = prof && prof.title;
+  const tit = `<h3>${T('titles')}</h3><div class="titles"><button data-title="" class="${curT ? '' : 'sel'}">${T('no_title')}</button>` + titles.map(id => `<button data-title="${id}" class="${curT === id ? 'sel' : ''}" ${live ? '' : 'disabled'}>${CONFIG.TITLES[id].ico} ${esc(TN(CONFIG.TITLES[id].n))}</button>`).join('') + '</div>';
+  openPanel('ach', `<h2>🏆 ${T('ach_title')} <small style="color:var(--mut)">${n}/${CONFIG.ACH.length}</small></h2>${tit}${ready && live ? `<button id="ach-all" class="claim">${T('claim_all')} (${ready})</button>` : ''}<div class="ach">${list.join('')}</div><button id="pn-x" style="margin-top:12px">${T('back')}</button>`, root => {
+    const again = () => setTimeout(openAch, 450);
+    btnClick(root, '[data-claim]', b => { ctl.send({ t: 'claim', id: b.dataset.claim }); again(); });
+    btnClick(root, '[data-title]', b => { ctl.send({ t: 'settitle', id: b.dataset.title }); again(); });
+    const all = root.querySelector('#ach-all'); if (all) all.onclick = () => { root.querySelectorAll('[data-claim]').forEach(b => ctl.send({ t: 'claim', id: b.dataset.claim })); again(); };
+    $('pn-x').onclick = panelClose;
+  });
+}
+
+// ---------------------------------------------------------------- магазин (отдельное окно; в главном меню и в игре)
+let shopTab = 'color', shopOnline = null;
+function openShop(tab) {
+  if (tab) shopTab = tab;
+  const live = inGame(), hasOnline = !!(P.state.token && P.state.profile && P.state.profile.hatched), hasLocal = !!(P.state.local && P.state.local.hatched);
+  if (!live && shopOnline === null) shopOnline = hasOnline;
+  if (!live && shopOnline && !hasOnline) shopOnline = false;
+  const prof = live ? ctl.session.profile : (shopOnline ? P.state.profile : P.state.local);
+  if (!prof || !prof.hatched) { openPanel('shop', `<h2>🛍 ${T('shop')}</h2><p class="sub">${T('no_character')}</p><button id="pn-x">${T('back')}</button>`, () => { $('pn-x').onclick = panelClose; }); return; }
+  const mats = prof.mats || { bone: 0, hide: 0 };
+  const act = async (op, a) => {
+    try {
+      if (live) { ctl.send(Object.assign({ t: op }, a)); setTimeout(() => openShop(), 450); }
+      else { const r = await P.shopMenu(shopOnline, op, a); if (!r.ok) UI.toast(T(r.err === 'coins' ? 'err_coins' : 'err_mats')); if (!live) { const pf = shopOnline ? P.state.profile : P.state.local; ctl.menuSetDino && pf && ctl.menuSetDino({ cls: pf.cls, color: CONFIG.COLORS[pf.color], level: pf.level, evo: pf.evo, cosmetic: pf.cosmetic, patc: pf.patc, morph: pf.morph }); openShop(); } }
+    } catch (e) { UI.toast(T('server_off')); }
+  };
+  const priceBtn = (id, c, extra) => {
+    const own = prof.cosmetics.indexOf(id) >= 0, slot = CONFIG.cosSlot(id), f = CONFIG.SLOT_FIELD[slot], eq = prof[f] === id;
+    if (own) return `<button data-eq="${eq ? '' : id}" data-slot="${slot}">${eq ? T('unequip') : T('equip')}</button>`;
+    if (c.craft) { const okc = mats.bone >= (c.craft.bone | 0) && mats.hide >= (c.craft.hide | 0); return `<button data-craft="${id}" ${okc ? '' : 'disabled'}>🛠 ${T('craft')} · 🦴${c.craft.bone | 0} 🟫${c.craft.hide | 0}</button>`; }
+    return `<button data-buy="${id}" ${prof.coins >= c.price ? '' : 'disabled'}>${T('buy')} · 🪙 ${c.price}</button>`;
+  };
+  const hx6 = n => '#' + n.toString(16).padStart(6, '0');
+  const cosCard = id => {
+    const c = CONFIG.COSMETICS[id], own = prof.cosmetics.indexOf(id) >= 0; let pre = '';
+    if (c.m) { const base = c.m.c1 != null ? c.m.c1 : CONFIG.COLORS[prof.color]; pre = `<div class="mo"><i style="background:${hx6(base)}"></i><i style="background:${hx6(c.m.c2)}"></i>${c.m.c3 != null ? `<i style="background:${hx6(c.m.c3)}"></i>` : ''}<b>${c.m.c3 != null ? '3' : '2'}</b></div>`; }
+    else if (CONFIG.cosSlot(id) === 'egg') pre = `<img class="eggp" src="${ctl.eggThumb(id.slice(2), CONFIG.COLORS[prof.color])}">`;
+    else if (c.c != null) pre = `<i class="sw" style="background:${hx6(c.c)}"></i>`;
+    return `<div class="br">${pre}<h4>${esc(TN(c.n))}</h4><p>${own ? T('owned') : ''}</p>${priceBtn(id, c)}</div>`;
+  };
+  const bySlot = (slot, craft) => Object.keys(CONFIG.COSMETICS).filter(id => CONFIG.cosSlot(id) === slot && !!CONFIG.COSMETICS[id].craft === !!craft);
+  const grid = ids => '<div class="shop">' + ids.map(cosCard).join('') + '</div>';
+  let body = '';
+  if (shopTab === 'color') {
+    body = `<h4 class="sh">${T('shop_color')}</h4><p class="sub">${T('shop_color_hint')}</p><div class="swatches">` + CONFIG.COLORS.map((c, i) => `<button data-color="${i}" class="${prof.color === i ? 'sel' : ''}" style="background:${hx6(c)}"></button>`).join('') + '</div>'
+      + `<h4 class="sh">${T('shop_morphs')}</h4><p class="sub">${T('shop_morphs_hint')}</p><div class="row"><button data-eq="" data-slot="morph" ${prof.morph ? '' : 'class="sel"'}>${T('no_morph')}</button></div>` + grid(bySlot('morph', false));
+  } else if (shopTab === 'outfit') body = `<h4 class="sh">${T('shop_hats')}</h4>` + grid(bySlot('hat', false)) + `<h4 class="sh">${T('shop_pats')}</h4><p class="sub">${T('shop_pats_hint')}</p>` + grid(bySlot('pat', false));
+  else if (shopTab === 'pets') body = '<div class="shop">' + Object.keys(CONFIG.PETS).map(id => {
+    const c = CONFIG.PETS[id], own = prof.pets.indexOf(id) >= 0, eq = prof.pet === id;
+    const btn = own ? `<button data-pet="${eq ? '' : id}">${eq ? T('unequip') : T('equip')}</button>` : `<button data-buypet="${id}" ${prof.coins >= c.price ? '' : 'disabled'}>${T('buy')} · 🪙 ${c.price}</button>`;
+    return `<div class="br"><h4>${c.ico} ${esc(TN(c.n))}</h4><p>${esc(TN(c.d))} ${own ? '· ' + T('owned') : ''}</p>${btn}</div>`; }).join('') + '</div>';
+  else if (shopTab === 'fx') body = `<h4 class="sh">${T('shop_roars')}</h4>` + grid(bySlot('rfx', false));
+  else if (shopTab === 'egg') body = `<h4 class="sh">${T('shop_eggs')}</h4><p class="sub">${T('shop_eggs_hint')}</p><div class="row"><button data-eq="" data-slot="egg" ${prof.eggskin ? '' : 'class="sel"'}>${T('egg_classic')}</button></div>` + grid(bySlot('egg', false));
+  else if (shopTab === 'nest') {
+    const nest = prof.nest || { items: [], put: [] };
+    body = `<p class="sub">${T('nest_hint')}</p><div class="shop">` + Object.keys(CONFIG.NEST_ITEMS).filter(id => !CONFIG.NEST_ITEMS[id].craft).map(id => {
+      const it = CONFIG.NEST_ITEMS[id], own = nest.items.indexOf(id) >= 0;
+      return `<div class="br"><h4>${it.ico} ${esc(TN(it.n))}</h4><p>${own ? T('owned') : ''}</p>${own ? '' : `<button data-nbuy="${id}" ${prof.coins >= it.price ? '' : 'disabled'}>${T('buy')} · 🪙 ${it.price}</button>`}</div>`; }).join('') + `</div><button id="sh-nest" style="margin-top:8px">🪺 ${T('nest_open')}</button>`;
+  } else body = `<h4 class="sh">🛠 ${T('shop_craft')}</h4><p class="sub">${T('mats_hint')}</p>` + grid(Object.keys(CONFIG.COSMETICS).filter(id => CONFIG.COSMETICS[id].craft));
+  const tabs = [['color', '🎨', T('tab_color')], ['outfit', '👒', T('tab_outfit')], ['pets', '🐾', T('shop_pets')], ['fx', '✨', T('tab_fx')], ['egg', '🥚', T('tab_egg')], ['nest', '🪺', T('tab_nest')], ['craft', '🛠', T('tab_craft')]];
+  const srcSw = !live && hasOnline && hasLocal ? `<div class="tabs"><button data-src="1" class="${shopOnline ? 'on' : ''}">🌐 ${T('prof_online')}</button><button data-src="0" class="${shopOnline ? '' : 'on'}">👤 ${T('prof_local')}</button></div>` : '';
+  openPanel('shop', `<div class="row" style="margin-bottom:6px"><h2 style="margin:0;flex:2">🛍 ${T('shop')}</h2><div class="pts" style="text-align:right">🪙 ${prof.coins} · 🦴 ${mats.bone} · 🟫 ${mats.hide}</div></div>${srcSw}
+    <div class="row" style="margin:4px 0 8px"><input id="sh-code" maxlength="30" placeholder="🎟 ${T('promo')}" autocomplete="off" style="flex:2"><button id="sh-redeem" style="flex:1">${T('promo_go')}</button></div>
+    <div class="tabs shoptabs">${tabs.map(([k, i, n]) => `<button data-st="${k}" class="${shopTab === k ? 'on' : ''}">${i} ${n}</button>`).join('')}</div>${body}<button id="pn-x" style="margin-top:12px">${T('back')}</button>`, root => {
+    const rb = root.querySelector('#sh-redeem');
+    if (rb) rb.onclick = async () => {
+      const code = $('sh-code').value; if (!code.trim()) return;
+      if (live) { ctl.send({ t: 'redeem', code }); return; }
+      try { const r = await P.shopMenu(shopOnline, 'redeem', { code }); if (!r.ok) { UI.toast(T(r.err === 'used_code' ? 'promo_used' : 'promo_bad')); return; } UI.toast(T('promo_ok').replace('{c}', r.coins || 100000)); openShop(); }
+      catch (e) { UI.toast(T(e.message === 'used_code' ? 'promo_used' : e.message === 'rate_limited' ? 'promo_rate' : e.message === 'bad_code' ? 'promo_bad' : 'server_off')); }
+    };
+    btnClick(root, '[data-st]', b => { shopTab = b.dataset.st; openShop(); });
+    btnClick(root, '[data-src]', b => { shopOnline = b.dataset.src === '1'; openShop(); });
+    btnClick(root, '[data-buy]', b => act('buy', { id: b.dataset.buy }));
+    btnClick(root, '[data-craft]', b => act('craft', { id: b.dataset.craft }));
+    btnClick(root, '[data-eq]', b => act('equip', { id: b.dataset.eq, slot: b.dataset.slot }));
+    btnClick(root, '[data-buypet]', b => act('buypet', { id: b.dataset.buypet }));
+    btnClick(root, '[data-pet]', b => act('setpet', { id: b.dataset.pet }));
+    btnClick(root, '[data-color]', b => act('setcolor', { i: +b.dataset.color }));
+    btnClick(root, '[data-nbuy]', b => act('nestbuy', { id: b.dataset.nbuy }));
+    const nb = root.querySelector('#sh-nest'); if (nb) nb.onclick = openNest;
+    $('pn-x').onclick = panelClose;
+  });
+}
+
+// ---------------------------------------------------------------- гнездо: трофеи и яйца
+function openNest() {
+  const live = inGame(), prof = live ? ctl.session.profile : activeProf(); if (!prof || !prof.hatched) return;
+  const nest = prof.nest || { items: [], put: [] }, mats = prof.mats || { bone: 0, hide: 0 };
+  const owned = [], shop = [];
+  CONFIG.ALL_BIOMES.forEach(b => { if (CONFIG.nestOwned(prof, 'tr_' + b)) owned.push('tr_' + b); });
+  Object.keys(CONFIG.NEST_ITEMS).forEach(id => { (nest.items.indexOf(id) >= 0 ? owned : shop).push(id); });
+  const put = nest.put.slice();
+  const nm = id => { const it = CONFIG.nestItem(id); return id.indexOf('tr_') === 0 ? '💀 ' + T('trophy_of', { b: TN(CONFIG.BIOME[id.slice(3)].n) }) : it.ico + ' ' + TN(it.n); };
+  const ownedHtml = owned.map(id => { const on = put.indexOf(id) >= 0; return `<div class="br"><h4>${esc(nm(id))}</h4><button data-np="${id}" ${live ? '' : 'disabled'}>${on ? '✔ ' + T('nest_placed') : T('nest_place')}</button></div>`; }).join('');
+  const shopHtml = shop.map(id => { const it = CONFIG.NEST_ITEMS[id]; const okb = it.craft ? mats.bone >= (it.craft.bone | 0) && mats.hide >= (it.craft.hide | 0) : prof.coins >= it.price;
+    return `<div class="br"><h4>${esc(nm(id))}</h4><button data-nb="${id}" ${live && okb ? '' : 'disabled'}>${it.craft ? '🛠 ' + T('craft') + ' · ' + (it.craft.bone ? '🦴' + it.craft.bone : '🟫' + it.craft.hide) : T('buy') + ' · 🪙 ' + it.price}</button></div>`; }).join('');
+  openPanel('nest', `<h2>🪺 ${T('nest')} <small style="color:var(--mut)">${put.length}/${CONFIG.NEST_MAX}</small></h2><p class="sub">${T('nest_hint')}</p><p class="sub">🪙 ${prof.coins} · 🦴 ${mats.bone} · 🟫 ${mats.hide}</p>
+    <h4 class="sh">${T('nest_have')}</h4><div class="shop">${ownedHtml || `<p class="sub">${T('nest_none')}</p>`}</div>${shopHtml ? `<h4 class="sh">${T('nest_shop')}</h4><div class="shop">${shopHtml}</div>` : ''}<button id="pn-x" style="margin-top:12px">${T('back')}</button>`, root => {
+    const again = () => setTimeout(openNest, 450);
+    btnClick(root, '[data-np]', b => { const id = b.dataset.np, i = put.indexOf(id); if (i >= 0) put.splice(i, 1); else if (put.length < CONFIG.NEST_MAX) put.push(id); ctl.send({ t: 'nestput', put }); again(); });
+    btnClick(root, '[data-nb]', b => { ctl.send({ t: 'nestbuy', id: b.dataset.nb }); again(); });
+    $('pn-x').onclick = panelClose;
+  });
+}
+
+// ---------------------------------------------------------------- дуэль из главного меню
+function openDuelMenu() {
+  const prof = P.state.profile && P.state.token ? P.state.profile : null, up = P.state.serverUp;
+  const lg = CONFIG.leagueOf((prof && prof.elo) || 1000);
+  openPanel('duelm', `<h2>⚔ ${T('duel_menu')}</h2>${prof ? `<div class="ratehead"><b>${lg.ico} ${esc(TN(lg.n))} · ${prof.elo | 0}</b><span>${T('duels_wl', { w: prof.dw | 0, l: prof.dl | 0 })}</span></div>` : ''}
+    <p class="sub">${T('duel_menu_hint')}</p>
+    <button class="pri" id="dm-q" ${up ? '' : 'disabled'}>⚔ ${T('duel_find')}</button>
+    <button id="dm-t" ${up ? '' : 'disabled'}>🏆 ${T('tourney')}</button>
+    <button id="pn-x" style="margin-top:10px">${T('back')}</button>`, () => {
+    const go = (kind) => {
+      const online = true;
+      if (!P.state.token) { openAuth(() => go(kind)); return; }
+      const prof = online ? P.state.profile : P.state.local;
+      if (!prof || !prof.hatched) { openCreate(online, () => go(kind), false); return; }
+      panelClose();
+      ctl.start({ online, biome: Sim.homeBiome(prof), mode: online ? 'public' : 'solo', duelq: kind === 'q', tourneyJoin: kind === 't' });
+    };
+    $('dm-q').onclick = () => go('q'); $('dm-t').onclick = () => go('t'); $('pn-x').onclick = panelClose;
+  });
+}
+function ratingHead() {
+  const pr = inGame() ? ctl.session.profile : activeProf(); if (!pr) return '';
+  const elo = pr.elo | 0 || 1000, lg = CONFIG.leagueOf(elo), nx = CONFIG.LEAGUES.find(x => x.min > elo);
+  const rw = lg.reward, rewTxt = '🪙 ' + rw.c + (rw.title ? ' · ' + CONFIG.TITLES[rw.title].ico + ' ' + TN(CONFIG.TITLES[rw.title].n) : '') + (rw.cos ? ' · 🎁 ' + TN(CONFIG.COSMETICS[rw.cos].n) : '');
+  return `<div class="ratehead"><b>${lg.ico} ${esc(TN(lg.n))} · ${elo}</b><span>${T('duels_wl', { w: pr.dw | 0, l: pr.dl | 0 })}${nx ? ' · ' + T('to_next', { n: nx.min - elo, l: TN(nx.n) }) : ''}</span><span>${T('season_left', { d: CONFIG.seasonLeftDays(Date.now()) })} · ${T('season_reward')}: ${esc(rewTxt)}</span></div>`;
 }
 async function openLeaders(tab) {
   tab = tab || 'wins';
@@ -5116,12 +5487,12 @@ async function openLeaders(tab) {
   let table;
   if (!data) table = `<p class="sub">${T('server_off')}</p>`;
   else {
-    const rows = tab === 'wins' ? data.wins : data.kings;
-    table = rows.length ? `<table><tr><th>${T('lb_place')}</th><th>${T('lb_name')}</th><th>${tab === 'wins' ? T('lb_wins_n') : T('lb_kings_n')}</th><th>${T('level_short')}</th></tr>` + rows.map((r, i) =>
-      `<tr class="${r.nickKey === me ? 'me' : ''}"><td>${i + 1}</td><td>${r.cls ? CLS_ICO[r.cls] + ' ' : ''}${esc(r.nick)}${r.lord ? ' 🌟' : ''}</td><td>${tab === 'wins' ? r.wins : r.count + '/6'}</td><td>${r.level || ''}</td></tr>`).join('') + '</table>' : `<p class="sub">${T('lb_empty')}</p>`;
+    const rows = tab === 'wins' ? data.wins : tab === 'elo' ? (data.elo || []) : tab === 'coins' ? (data.coins || []) : data.kings;
+    table = rows.length ? `<table><tr><th>${T('lb_place')}</th><th>${T('lb_name')}</th><th>${tab === 'wins' ? T('lb_wins_n') : tab === 'elo' ? T('rating') : tab === 'coins' ? T('lb_coins_n') : T('lb_kings_n')}</th><th>${T('level_short')}</th></tr>` + rows.map((r, i) =>
+      `<tr class="${r.nickKey === me ? 'me' : ''}"><td>${i + 1}</td><td>${r.cls ? CLS_ICO[r.cls] + ' ' : ''}${esc(r.nick)}${r.lord ? ' 🌟' : ''}</td><td>${tab === 'wins' ? r.wins : tab === 'elo' ? CONFIG.leagueOf(r.elo).ico + ' ' + r.elo : tab === 'coins' ? '🪙 ' + r.coins : r.count + '/6'}</td><td>${r.level || ''}</td></tr>`).join('') + '</table>' : `<p class="sub">${T('lb_empty')}</p>`;
   }
   if (openName !== 'lb') return;
-  openPanel('lb', `<h2>🏆 ${T('lb_title')}</h2><div class="tabs"><button data-t="wins" class="${tab === 'wins' ? 'on' : ''}">${T('lb_wins')}</button><button data-t="kings" class="${tab === 'kings' ? 'on' : ''}">${T('lb_kings')}</button></div>${table}<button id="pn-x" style="margin-top:12px">${T('back')}</button>`, root => {
+  openPanel('lb', `<h2>🏆 ${T('lb_title')}</h2><div class="tabs"><button data-t="wins" class="${tab === 'wins' ? 'on' : ''}">${T('lb_wins')}</button><button data-t="kings" class="${tab === 'kings' ? 'on' : ''}">${T('lb_kings')}</button><button data-t="elo" class="${tab === 'elo' ? 'on' : ''}">${T('rating')}</button><button data-t="coins" class="${tab === 'coins' ? 'on' : ''}">🪙 ${T('lb_coins')}</button></div>${tab === 'elo' ? ratingHead() : ''}${table}<button id="pn-x" style="margin-top:12px">${T('back')}</button>`, root => {
     btnClick(root, '[data-t]', b => openLeaders(b.dataset.t)); $('pn-x').onclick = panelClose;
   });
 }
@@ -5162,9 +5533,10 @@ function openPause() {
   openPanel('pause', `<h2>${T('menu')} Dino Evolution</h2>${code ? `<p class="sub">${T('copy_code')}: <b style="color:var(--ac2);font-size:20px">${code}</b></p>` : ''}
     <button class="pri" id="ps-resume">${T('resume')}</button>
     <div class="grid2"><button id="ps-about">🦖 ${T('about_dino')}</button><button id="ps-chg" ${S.room.mode === 'duel' || S.room.mode === 'rush' ? 'disabled' : ''}>🔄 ${T('change_dino')}</button></div>
-    <div class="grid2"><button id="ps-evo">${T('evolution')}</button><button id="ps-pl">${T('players')}</button><button id="ps-ach">${T('achievements')}</button><button id="ps-set">${T('settings')}</button></div>
+    <div class="grid2"><button id="ps-evo">${T('evolution')}</button><button id="ps-pl">${T('players')}</button><button id="ps-ach">${T('achievements')}</button><button id="ps-set">${T('settings')}</button><button id="ps-nest">🪺 ${T('nest')}</button><button id="ps-shop">🛍 ${T('shop')}</button></div>
+    <button id="ps-q">📅 ${T('quests')}</button>
     <button class="red" id="ps-exit">${T('to_menu')}</button>`, root => {
-    $('ps-resume').onclick = panelClose; $('ps-about').onclick = openAbout; $('ps-chg').onclick = openChange; $('ps-evo').onclick = () => openEvo(); $('ps-pl').onclick = openPlayers; $('ps-ach').onclick = openAch; $('ps-set').onclick = openSettings;
+    $('ps-resume').onclick = panelClose; $('ps-about').onclick = openAbout; $('ps-chg').onclick = openChange; $('ps-evo').onclick = () => openEvo(); $('ps-pl').onclick = openPlayers; $('ps-ach').onclick = openAch; $('ps-nest').onclick = openNest; $('ps-shop').onclick = () => openShop(); $('ps-set').onclick = openSettings; $('ps-q').onclick = openQuests;
     $('ps-exit').onclick = () => { closePanelState(); $('panel').classList.remove('on'); ctl.leave(); };
   });
 }
@@ -5173,11 +5545,11 @@ function openChange() {
   if (!inGame()) return;
   const S = ctl.session, pr = S.profile, world = CONFIG.clsWorld(pr.cls);
   const card = k => {
-    const I = CONFIG.CLS_INFO[k], lv = Sim.typeLevel(pr, k), cur = k === pr.cls;
-    return `<div class="cls ${cur ? 'sel' : ''}" data-k="${k}"><b>${I.ico} ${esc(TN(I.n))} <small>${lv ? T('level_short') + lv + ' · ' + T('stage_' + CONFIG.STAGES[CONFIG.stageIndex(lv)].id) : T('type_new')}${cur ? ' · ' + T('now_playing') : ''}</small></b><span>${esc(TN(I.d))}</span><em>${abilChips(k)}</em>${statsGrid(k, Math.max(1, lv))}</div>`;
+    const I = CONFIG.CLS_INFO[k], lv = Sim.typeLevel(pr, k), cur = k === pr.cls, lk = !Sim.typeUnlocked(pr, k);
+    return `<div class="cls ${cur ? 'sel' : ''} ${lk ? 'lock' : ''}" data-k="${k}" ${lk ? 'data-lk="1" style="opacity:.45"' : ''}><b>${I.ico} ${esc(TN(I.n))} <small>${lv ? T('level_short') + lv + ' · ' + T('stage_' + CONFIG.STAGES[CONFIG.stageIndex(lv)].id) : T('type_new')}${cur ? ' · ' + T('now_playing') : ''}</small></b><span>${esc(TN(I.d))}</span><em>${abilChips(k)}</em>${statsGrid(k, Math.max(1, lv))}</div>`;
   };
   openPanel('change', `<h2>🔄 ${T('change_dino')}</h2><p class="sub">${T('change_dino_d')}</p>${CONFIG.TYPES[world].map(card).join('')}<button id="pn-x" style="margin-top:12px">${T('resume')}</button>`, root => {
-    btnClick(root, '.cls', b => { if (b.dataset.k === pr.cls) { panelClose(); return; } closePanelState(); $('panel').classList.remove('on'); ctl.switchType(b.dataset.k); });
+    btnClick(root, '.cls', b => { if (b.dataset.lk) { UI.toast(T('type_lock_n', { n: CONFIG.TYPE_MIN_LV[b.dataset.k] })); return; } if (b.dataset.k === pr.cls) { panelClose(); return; } closePanelState(); $('panel').classList.remove('on'); ctl.switchType(b.dataset.k); });
     $('pn-x').onclick = panelClose;
   });
 }
@@ -5258,7 +5630,7 @@ var Profile=__m["profile"];
 var Audio=__m["audio"];
 var buildWorld=__m["world"].buildWorld;
 var DinoNest=__m["dinonest"].DinoNest;
-var buildDino=__m["dinos"].buildDino,animateDino=__m["dinos"].animateDino,makeActor=__m["dinos"].makeActor,makeNameTag=__m["dinos"].makeNameTag,makeHpBar=__m["dinos"].makeHpBar,buildEnemy=__m["dinos"].buildEnemy,setOutline=__m["dinos"].setOutline,animateEnemy=__m["dinos"].animateEnemy,buildBoss=__m["dinos"].buildBoss,animateBoss=__m["dinos"].animateBoss,setCrown=__m["dinos"].setCrown,setCosmetic=__m["dinos"].setCosmetic,makeEggMesh=__m["dinos"].makeEggMesh;
+var eggCanvas=__m["dinos"].eggCanvas,buildCrownMesh=__m["dinos"].buildCrownMesh,buildDino=__m["dinos"].buildDino,animateDino=__m["dinos"].animateDino,makeActor=__m["dinos"].makeActor,makeNameTag=__m["dinos"].makeNameTag,makeHpBar=__m["dinos"].makeHpBar,buildEnemy=__m["dinos"].buildEnemy,setOutline=__m["dinos"].setOutline,animateEnemy=__m["dinos"].animateEnemy,buildBoss=__m["dinos"].buildBoss,animateBoss=__m["dinos"].animateBoss,setCrown=__m["dinos"].setCrown,setCosmetic=__m["dinos"].setCosmetic,makeEggMesh=__m["dinos"].makeEggMesh;
 var connectOnline=__m["net"].connectOnline,connectLocal=__m["net"].connectLocal;
 var UI=__m["ui"].UI;
 /* Dino Evolution — клиент: рендер, ввод, предсказание движения, снимки сервера, эффекты, HUD. */
@@ -5324,22 +5696,22 @@ function menuSetDino(o) {
   menu3d.group.add(menu3d.dino);
   if (menu3d.egg) { menu3d.group.remove(menu3d.egg); menu3d.egg = null; }
 }
-function makeEgg(colorHex) {
+function makeEgg(colorHex, skin) {
   // гладкая скорлупа: пятна нарисованы на текстуре, наружу ничего не выступает
-  const g = makeEggMesh(colorHex); g.position.y = 1.18;
+  const g = makeEggMesh(colorHex, skin); g.position.y = 1.18;
   const w = new THREE.Group(); w.add(g); w.userData = Object.assign({ shell: g }, g.userData); return w;
 }
 function menuSetDinoKeepEgg(o) {
   if (menu3d.dino) { menu3d.group.remove(menu3d.dino); menu3d.dino = null; }
   menu3d.dino = buildDino(o); menu3d.group.add(menu3d.dino);
 }
-function menuShowEgg(colorHex) {
+function menuShowEgg(colorHex, skin) {
   menuSetDino(null);
   if (menu3d.egg) { menu3d.group.remove(menu3d.egg); menu3d.egg = null; }
-  menu3d.egg = makeEgg(colorHex); menu3d.group.add(menu3d.egg);
+  menu3d.egg = makeEgg(colorHex, skin); menu3d.group.add(menu3d.egg);
 }
 function menuHatch(o, done) {
-  menuShowEgg(o.color); const eggTxt = $('eggtxt'); eggTxt.style.display = 'block'; eggTxt.textContent = T('hatching');
+  menuShowEgg(o.color, o.eggskin); const eggTxt = $('eggtxt'); eggTxt.style.display = 'block'; eggTxt.textContent = T('hatching');
   const t0 = performance.now();
   menu3d.hatch = { t0, o, done, burst: false, shards: [] };
 }
@@ -5410,7 +5782,7 @@ window.addEventListener('keydown', e => {
   keys.add(k);
   if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(k)) e.preventDefault();
   if (!S || !S.welcomed || panelOpen) return;
-  if (k === 'KeyE') act('e'); else if (k === 'KeyQ') act('q'); else if (k === 'KeyF') act('f');
+  if (k === 'KeyE') act('e'); else if (k === 'KeyQ') act('q'); else if (k === 'KeyF') act('f'); else if (k === 'KeyX') act('x');
   else if (k === 'KeyV') UI.openEvo(); else if (k === 'KeyM') UI.openPause();
   else if (k >= 'Digit1' && k <= 'Digit4') S.conn.send({ t: 'act', a: 'em', i: +k.slice(5) - 1 });
 });
@@ -5504,6 +5876,8 @@ function failSession(reason) {
 function endSession(silent) {
   if (!S) return;
   S.ending = true;
+  if (S.coro) { try { endCoro(true); } catch (e) { /* ignore */ } }
+  $('tut').classList.remove('on');
   if (S.hatch && S.hatch.grp) { S.hatch.grp.parent && S.hatch.grp.parent.remove(S.hatch.grp); }
   try { S.conn && S.conn.close(); } catch (e) { /* ignore */ }
   if (S.world) S.world.dispose();
@@ -5525,7 +5899,13 @@ function handleMsg(m) {
     case 'leave': removePlayer(m.id); break;
     case 'upd': { const p = S.players.get(m.p.id); if (p && p.actor) { p.info = Object.assign(p.info, m.p); p.actor.set(m.p); if (m.p.king || m.p.lord) p.actor.set({ king: p.info.king, lord: p.info.lord }); } else if (m.p.id === S.id && S.actor) { S.actor.set(m.p); } break; }
     case 'prof': onProfile(m.p); break;
-    case 'dead': S.deadBy = m.by; $('respawn').classList.add('on'); $('rs-s').textContent = m.by ? T('killed_by', { x: m.by }) : ''; break;
+    case 'loot': UI.banner('🦴 +' + m.bone + '  🟫 +' + m.hide + ' · ' + T('loot_t'), 3600); break;
+    case 'redeemed': { if (m.ok) { UI.banner('🎟 ' + T('promo_ok', { c: m.coins }), 3600); Audio.sfx('level'); setTimeout(() => UI.openShop && UI.openShop(), 400); } else UI.toast(T(m.err === 'used_code' ? 'promo_used' : 'promo_bad')); break; }
+    case 'crafted': { const c = CONFIG.COSMETICS[m.id]; if (c) { UI.banner('🛠 ' + TN(c.n), 3200); Audio.sfx('level'); } break; }
+    case 'elo': { const lg = CONFIG.leagueOf(m.elo); UI.banner(lg.ico + ' ' + (m.d > 0 ? '+' : '') + m.d + ' · ' + T('rating') + ' ' + m.elo + (m.up ? ' · ' + T('league_up', { n: TN(lg.n) }) : ''), 4200); if (m.d > 0) Audio.sfx('level'); break; }
+    case 'achok': { const a = CONFIG.achById(m.id), r = CONFIG.ACH_REWARD[m.id] || {}; if (a) { UI.banner('🎁 ' + TN(a.n) + (r.c ? ' · +' + r.c + ' 🪙' : '') + (r.title ? ' · ' + CONFIG.TITLES[r.title].ico + ' ' + TN(CONFIG.TITLES[r.title].n) : ''), 4200); Audio.sfx('coin'); } break; }
+    case 'login': showLogin(m.l); break;
+    case 'dead': S.deadBy = m.by; S.revWait = !!m.rv; $('respawn').classList.add('on'); $('rs-s').textContent = m.by ? T('killed_by', { x: m.by }) : ''; break;
     case 'duelreq': UI.duelRequest(m.from, m.nick); Audio.sfx('warn'); break;
     case 'tq': S.tq = m.n | 0; updateTq(m); break;
     case 'info': UI.toast(T(m.m)); if (m.m === 'duel_start') Audio.sfx('duelgo'); break;
@@ -5543,7 +5923,7 @@ function onErr(m) {
 }
 function updateTq(m) {
   const el = $('tq'); if (!m.n) { el.style.display = 'none'; return; }
-  el.style.display = 'block'; el.firstElementChild.textContent = T('tourney_wait', { n: m.n }) + (m.code ? ' · ' + m.code : ''); $('tq-x').textContent = T('tourney_cancel');
+  el.style.display = 'block'; el.firstElementChild.textContent = m.duel ? T('duel_search') : T('tourney_wait', { n: m.n }) + (m.code ? ' · ' + m.code : ''); $('tq-x').textContent = T('tourney_cancel');
 }
 $('tq-x').addEventListener('click', () => S && S.conn.send({ t: 'tourney_cancel' }));
 
@@ -5556,17 +5936,21 @@ function buildWorldFor(biome) {
 }
 function onWelcome(m) {
   if (m.proto !== CONFIG.PROTO) { failSession('server_off'); return; }
-  const first = !S.welcomed; S.welcomed = true; S.id = m.id; S.room = m.room;
+  const first = !S.welcomed; S.welcomed = true; S.id = m.id; S.room = m.room; S.host = m.host || 0;
+  if (first && S.o && (S.o.duelq || S.o.tourneyJoin)) { const kind = S.o.duelq ? 'duelq' : 'tourney'; S.o.duelq = S.o.tourneyJoin = false; setTimeout(() => S && S.conn && S.welcomed && S.conn.send({ t: kind }), 2200); }
   if (!S.world || S.biome !== m.room.biome) buildWorldFor(m.room.biome);
   for (const p of S.players.values()) p.actor && p.actor.dispose();
   for (const e of S.ents.values()) e.group && e.group.parent && e.group.parent.remove(e.group);
   S.players.clear(); S.ents.clear(); S.pending.length = 0; S.lastRs = null; S.off = { x: 0, y: 0, z: 0 }; S.drops = []; S.zones.forEach(z => z.mesh.parent && z.mesh.parent.remove(z.mesh)); S.zones = [];
-  S.bs = null; S.du = null; S.rush = null; S.pt = null; S.al = null;
+  S.nestGrp = null; S.nestKey = ''; S.bs = null; S.du = null; S.rush = null; S.pt = null; S.al = null; if (S.secM) { for (const m of S.secM.values()) scene.remove(m); S.secM.clear(); } prevNight = prevStorm = null;
   S.me = Sim.newPlayer(S.W, m.me.x, m.me.z); Sim.importState(S.me, m.me); S.lastPos = null;
   onProfile(m.prof, true);
+  if (m.login) setTimeout(() => showLogin(m.login), 1800);
+  if (m.season) setTimeout(() => { const se = m.season, lg = CONFIG.LEAGUES.find(x => x.id === se.league); UI.banner(lg.ico + ' ' + T('season_end', { n: TN(lg.n), c: se.coins }) + (se.title ? ' · ' + CONFIG.TITLES[se.title].ico + ' ' + TN(CONFIG.TITLES[se.title].n) : '') + (se.cos ? ' · 🎁 ' + TN(CONFIG.COSMETICS[se.cos].n) : ''), 7000); Audio.sfx('coin'); }, 6000);
+  setTimeout(() => { if (S && S.welcomed && !S.ending) tutStart(); }, 2500);
   S.actor && S.actor.dispose();
   const pr = S.profile;
-  S.actor = makeActor({ nick: pr.name, color: pr.color, cls: pr.cls, level: pr.level, evo: pr.evo, cosmetic: pr.cosmetic, admin: Profile.state.admin && S.o.online, king: pr.kings.indexOf(m.room.biome) >= 0, lord: Sim.isLord(pr) });
+  S.actor = makeActor({ nick: pr.name, color: pr.color, cls: pr.cls, level: pr.level, evo: pr.evo, cosmetic: pr.cosmetic, pet: pr.pet || '', title: pr.title || '', patc: pr.patc || '', morph: pr.morph || '', admin: Profile.state.admin && S.o.online, king: pr.kings.indexOf(m.room.biome) >= 0, lord: Sim.isLord(pr) });
   scene.add(S.actor.group);
   for (const p of m.players) addPlayer(p);
   S.tod = m.tod; input.yaw = S.me.face + Math.PI; input.pitch = 0.3; S.snapN = 0;
@@ -5581,6 +5965,10 @@ function onWelcome(m) {
   if (S.o.online) S.pingT = setInterval(() => { if (S && S.conn) S.conn.send({ t: 'ping', n: performance.now() }); }, 4000);
   $('respawn').classList.remove('on');
 }
+function showLogin(l) {   // награда за вход в новый день
+  if (!l) return;
+  UI.banner('🔥 ' + T('streak_n', { n: l.streak }) + ' · +' + l.coins + ' 🪙' + (l.cos ? ' · 🎁 ' + TN(CONFIG.COSMETICS[l.cos].n) : ''), 4600); Audio.sfx('coin');
+}
 function onProfile(p, silent) {
   const old = S.profile; S.profile = Sim.fixProfile(p);
   if (S.o.online) Profile.setServerProfile(p); else Profile.saveLocal(S.profile);
@@ -5589,7 +5977,7 @@ function onProfile(p, silent) {
   if (old && S.actor && old.cls === S.profile.cls && CONFIG.stageIndex(S.profile.level) > CONFIG.stageIndex(old.level) && !silent) {
     const sn = T('stage_' + CONFIG.STAGES[CONFIG.stageIndex(S.profile.level)].id); UI.banner('🦖 ' + T('grew', { s: sn }), 3200); Audio.sfx('coin');
   }
-  if (S.actor) S.actor.set({ level: S.profile.level, evo: S.profile.evo, cosmetic: S.profile.cosmetic || '', lord: Sim.isLord(S.profile), king: S.profile.kings.indexOf(S.biome) >= 0 });
+  if (S.actor) S.actor.set({ level: S.profile.level, evo: S.profile.evo, cosmetic: S.profile.cosmetic || '', pet: S.profile.pet || '', title: S.profile.title || '', patc: S.profile.patc || '', morph: S.profile.morph || '', color: S.profile.color, lord: Sim.isLord(S.profile), king: S.profile.kings.indexOf(S.biome) >= 0 });
   // новые достижения
   const done = {}; for (const a of CONFIG.ACH) done[a.id] = !!a.t(S.profile);
   if (S.ach && !silent) for (const a of CONFIG.ACH) if (done[a.id] && !S.ach[a.id]) { UI.note('🏆 ' + TN(a.n)); Audio.sfx('coin'); }
@@ -5599,7 +5987,7 @@ function onProfile(p, silent) {
 }
 function addPlayer(info) {
   if (info.id === S.id || S.players.has(info.id)) return;
-  const actor = makeActor({ nick: info.nick, color: info.color, cls: info.cls, level: info.level, evo: info.evo, cosmetic: info.cosmetic, admin: info.admin, king: info.king, lord: info.lord, label: info.bot ? '' : '' });
+  const actor = makeActor({ nick: info.nick, color: info.color, cls: info.cls, level: info.level, evo: info.evo, cosmetic: info.cosmetic, pet: info.pet || '', title: info.title || '', patc: info.patc || '', morph: info.morph || '', admin: info.admin, king: info.king, lord: info.lord, label: info.bot ? '' : '' });
   scene.add(actor.group);
   S.players.set(info.id, { info, actor, buf: [], hp: 100, flags: 0, shown: false, speed: 0 });
 }
@@ -5626,7 +6014,8 @@ function onSnapshot(m) {
   if (!S.alive && !$('respawn').classList.contains('on') && S.snapN > 2) $('respawn').classList.add('on');
   if (S.alive && $('respawn').classList.contains('on')) $('respawn').classList.remove('on');
   reconcile(m);
-  S.tod = m.tod; S.wx = m.wx;
+  S.tod = m.tod; S.wx = m.wx; weatherBanners();
+  if (m.sc) updateSecretMeshes(m.sc);
   for (const r of m.p) {
     let p = S.players.get(r[0]);
     if (!p) continue;            // информацию о новом игроке пришлёт 'join'
@@ -5829,23 +6218,32 @@ function onEvent(ev, now) {
       if (ev[3] === 3) { floatText(p.x, p.y + 2.4, p.z, T('dodge'), '#9be37a', 1); break; }
       if (ev[3] === 4) { const te = S.ents.get(ev[1]); if (te && now - (te.tsAt || 0) > 1.2) { te.tsAt = now; floatText(p.x, p.y + 2.6, p.z, T('too_strong'), '#ffb43a', 1.1); Audio.sfx('hit'); } break; }   // слишком сильный враг      // уворот
       const col = me ? '#ff6a5a' : ev[3] === 1 ? '#ffb43a' : ev[3] === 2 ? '#7ad8ff' : '#ffffff';
-      floatText(p.x, p.y + 2.2, p.z, (me ? '-' : '') + ev[2], col, ev[3] ? 1.3 : 1);
-      burst(p.x, p.y + 1.1, p.z, me ? 0xff3a2a : 0xffe08a, me ? 8 : 6, 3.5); Audio.sfx(me ? 'hurt' : 'hit');
-      if (me) S.camShake = Math.max(S.camShake, 0.25);
-      else { const te = S.ents.get(ev[1]); if (te) { te.olUntil = now + 0.7; te.olOn = true; setOutline(te.model, true, 0xff2418); } }   // красный контур укушенного врага
+      const heavy = ev[3] === 1 || ev[2] >= 30, crit = ev[3] === 1;
+      floatText(p.x, p.y + 2.2, p.z, (me ? '-' : '') + ev[2], col, heavy ? 1.6 : ev[3] ? 1.3 : 1);
+      burst(p.x, p.y + 1.1, p.z, me ? 0xff3a2a : 0xffe08a, me ? 8 : 6, 3.5);
+      if (heavy) { burst(p.x, p.y + 1.1, p.z, 0xc4180e, 14, 5.5, 3); burst(p.x, p.y + 1.3, p.z, 0xffffff, 8, 7, 1); ring(p.x, p.y, p.z, me ? 0xff3a2a : 0xffd35a, 2.6, 0.35); }   // удар посильнее: капли, искры и кольцо
+      Audio.sfx(me ? 'hurt' : crit ? 'crit' : 'hit'); if (heavy) Audio.sfx('thud');
+      if (me) { S.camShake = Math.max(S.camShake, heavy ? 0.55 : 0.25); const hf = $('hurtfx'); hf.classList.remove('go'); void hf.offsetWidth; hf.classList.add('go'); }
+      else { S.camShake = Math.max(S.camShake, heavy ? 0.2 : 0.07); const te = S.ents.get(ev[1]); if (te) { te.olUntil = now + 0.7; te.olOn = true; setOutline(te.model, true, 0xff2418); } }   // красный контур укушенного врага
       const pl = S.players.get(ev[1]); if (pl) pl.hurt = now;
       break;
     }
-    case 'k': { const e = S.ents.get(ev[1]); if (e) { burst(e.group.position.x, e.group.position.y + 1, e.group.position.z, 0xffd35a, 18, 5); e.group.parent && e.group.parent.remove(e.group); S.ents.delete(ev[1]); } break; }
+    case 'k': { const e = S.ents.get(ev[1]); if (e) { const bs = (e.arch && e.arch.size) || 1; burst(e.group.position.x, e.group.position.y + 1, e.group.position.z, 0xffd35a, 18, 5); burst(e.group.position.x, e.group.position.y + 1, e.group.position.z, 0xc4180e, Math.round(8 + 10 * bs), 4.5, 3); if (bs >= 1) { ring(e.group.position.x, e.group.position.y, e.group.position.z, 0xffd35a, 2.5 * bs, 0.5); Audio.sfx('thud'); } e.group.parent && e.group.parent.remove(e.group); S.ents.delete(ev[1]); } break; }
     case 'd': p = posOf(ev[1]); if (p) burst(p.x, p.y + 1, p.z, 0xcc3322, 22, 5); if (ev[1] === S.id) { Audio.sfx('die'); S.camShake = 0.6; } break;
     case 'lv': p = posOf(ev[1]); if (p) { ring(p.x, p.y, p.z, 0xffe066, 4, 0.9); burst(p.x, p.y + 1, p.z, 0xffe066, 24, 5); } if (ev[1] === S.id) { Audio.sfx('level'); UI.banner(T('lv_up', { n: ev[2] }), 2200); } break;
     case 'xp': if (ev[1] === S.id) { p = posOf(ev[1]); if (p) floatText(p.x, p.y + 3.0, p.z, '+' + ev[2] + ' XP', '#9be37a', 0.8); } break;
     case 'eat': p = posOf(ev[1]); if (p) burst(p.x, p.y + 1.4, p.z, ev[2] === 'plant' ? 0x6ccf4a : 0xd9534f, 8, 2.5); if (ev[1] === S.id) Audio.sfx('eat'); break;
     case 'b': { const pl = ev[1] === S.id ? S.actor : (S.players.get(ev[1]) || {}).actor; if (pl) pl.dino.userData.bite = 1; if (ev[1] === S.id) Audio.sfx('swing'); break; }
     case 'evo': p = posOf(ev[1]); if (p) { ring(p.x, p.y, p.z, 0x7af0ff, 5, 1.0); burst(p.x, p.y + 1, p.z, 0x7af0ff, 30, 6); } if (ev[1] === S.id) { Audio.sfx('evo'); UI.banner(T('evo_done'), 1600); } break;
+    case 'ult': { p = posOf(ev[1]); const id = ev[2], R = ev[3] || 8;
+      if (p) { const col = { rampage: 0xff5a2a, quake: 0xc9a86a, storm: 0xbfe6ff, whirl: 0x4aa8ff, tide: 0x6affc8, frenzy: 0xffe14a }[id] || 0xffffff;
+        ring(p.x, p.y, p.z, rfxBurst(ev[1], p) || col, R || 8, 1.1); ring(p.x, p.y + 0.3, p.z, 0xffffff, (R || 8) * 0.6, 0.8); burst(p.x, p.y + 1, p.z, col, 60, 9, 4); }
+      Audio.sfx(id === 'quake' ? 'boom' : 'roar'); if (ev[1] === S.id) { S.camShake = Math.max(S.camShake || 0, 0.5); UI.banner(CONFIG.ABIL_INFO[id].ico + ' ' + TN(CONFIG.ABIL_INFO[id].n), 2200); } break; }
+    case 'heal': p = posOf(ev[1]); if (p) { burst(p.x, p.y + 1.5, p.z, 0x6affc8, 18, 3, 3); } break;
+    case 'pet': { p = posOf(ev[1]); if (p) { if (ev[2] === 1) { burst(p.x, p.y + 1.2, p.z, 0xffd35a, 10, 3, 2); if (ev[1] === S.id) { floatText(p.x, p.y + 2.8, p.z, '+' + ev[3] + ' 🪙', '#ffd35a', 1); Audio.sfx('coin'); } } else if (ev[2] === 0) burst(p.x, p.y + 1.5, p.z, 0x6affc8, 8, 2, 2); else { const t = S.ents.get(ev[3]); if (t) burst(t.group.position.x, t.group.position.y + 1, t.group.position.z, 0x8a6a3a, 8, 3, 1); } } break; }
     case 'dash': p = posOf(ev[1]); if (p) burst(p.x, p.y + 0.5, p.z, 0xffffff, 10, 3, 0.5); Audio.sfx('dash'); break;
     case 'dive': p = posOf(ev[1]); if (p) { ring(p.x, p.y, p.z, 0xffffff, 3, 0.4); burst(p.x, p.y, p.z, 0xdddddd, 14, 4); } Audio.sfx('boom'); break;
-    case 'roar': p = posOf(ev[1]); if (p) ring(p.x, p.y, p.z, 0xff7a4a, ev[2] || 14, 0.8); Audio.sfx('roar'); if (ev[1] !== S.id) S.camShake = Math.max(S.camShake, 0.1); break;
+    case 'roar': p = posOf(ev[1]); if (p) ring(p.x, p.y, p.z, rfxBurst(ev[1], p) || 0xff7a4a, ev[2] || 14, 0.8); Audio.sfx('roar'); if (ev[1] !== S.id) S.camShake = Math.max(S.camShake, 0.1); break;
     case 'screech': p = posOf(ev[1]); if (p) ring(p.x, p.y, p.z, 0xffe14a, ev[2] || 10, 0.7); Audio.sfx('screech'); break;
     case 'herd': p = posOf(ev[1]); if (p) { ring(p.x, p.y, p.z, 0xc9a86a, ev[2] || 9, 0.6); burst(p.x, p.y + 0.3, p.z, 0xb59a6a, 26, 5); if (ev[1] === S.id) S.camShake = Math.max(S.camShake || 0, 0.35); } Audio.sfx('hit'); break;
     case 'grd': p = posOf(ev[1]); if (p) burst(p.x, p.y + 1.0, p.z, 0x9ad8ff, 10, 2.5); break;   // щит: светящийся пузырь вокруг динозавра (без плоского «круга-таблички»)
@@ -5864,9 +6262,15 @@ function onEvent(ev, now) {
     case 'burrow': { const e = S.ents.get(ev[1]); if (e) { e.burrowed = !!ev[2]; burst(e.group.position.x, e.group.position.y, e.group.position.z, 0xc9a25a, 24, 6); } Audio.sfx('boom'); break; }
     case 'king': {
       p = posOf(ev[1]); if (p) { ring(p.x, p.y, p.z, 0xffd35a, 8, 1.4); burst(p.x, p.y + 2, p.z, 0xffd35a, 40, 8); }
-      if (ev[1] === S.id) { UI.banner(ev[4] ? T('lord_new') : T('king_new', { b: TN(CONFIG.BIOME[ev[2]].n) }), 4200); Audio.sfx('king'); }
+      if (ev[1] === S.id) { if (ev[3] || ev[4]) startCoro({ biome: ev[2], lord: ev[4], xp: ev[5], coins: ev[6] }); else { UI.banner(T('king_new', { b: TN(CONFIG.BIOME[ev[2]].n) }), 4200); Audio.sfx('king'); } }
       break;
     }
+    case 'rev': { p = posOf(ev[1]); if (p) { ring(p.x, p.y, p.z, 0x6cff9a, 5, 1.0); burst(p.x, p.y + 1.2, p.z, 0x6cff9a, 28, 6, 4); floatText(p.x, p.y + 2.6, p.z, '❤', '#6cff9a', 1.6); } Audio.sfx('level'); if (ev[1] === S.id) UI.banner('❤ ' + T('rev_you'), 2600); break; }
+    case 'rare': if (ev[1] === S.id) { UI.banner('⛈ ' + T('rare_find', { c: ev[2] }), 3000); Audio.sfx('coin'); const q = posOf(S.id); if (q) burst(q.x, q.y + 2, q.z, 0xffe066, 20, 5, 3); } break;
+    case 'bolt': boltFx(ev[1], ev[2]); break;
+    case 'sec': { const q = posOf(ev[1]); if (q) { burst(q.x, q.y + 1.5, q.z, 0xffd35a, 36, 6, 4); ring(q.x, q.y, q.z, 0xffd35a, 4, 0.8); }
+      if (ev[1] === S.id) { UI.banner(ev[2] === 'chest' ? '📦 ' + T('sec_chest', { c: ev[3] }) : ev[2] === 'pearl' ? '🦪 ' + T('sec_pearl', { c: ev[3] }) : '✨ ' + T('sec_fruit', { b: T('buff_' + ev[4]) }), 3400); Audio.sfx(ev[2] === 'chest' ? 'coin' : 'level'); } break; }
+    case 'quest': if (ev[1] === S.id) { const q = (S.profile.daily && S.profile.daily.q || [])[ev[2]]; UI.banner('✅ ' + T('quest_done') + (q ? ': ' + UI.questText(q) : '') + ' · +' + ev[3] + ' 🪙' + (ev[4] ? ' · ' + T('quest_all') : ''), 3800); Audio.sfx('coin'); } break;
     case 'port': Audio.sfx('portal'); break;
     case 'rush': UI.banner(T('rush_wave', { n: ev[1] }), 2200); Audio.sfx('boss'); break;
     case 'rushwave': UI.banner(T('rush_clear', { c: ev[2] }), 2200); Audio.sfx('win'); break;
@@ -5891,9 +6295,10 @@ function buildAbilityBar() {
   const cls = S.profile.cls, A = CONFIG.ABILITIES[cls], bar = $('abil'); bar.innerHTML = '';
   const defs = [['atk', 'atk', 'LMB', null], ['e', A.e.id, 'E', A.e.cd], ['q', A.q.id, 'Q', A.q.cd]];
   if (cls === 'herb') defs.push(['f', 'climb', 'F', 0]); if (cls === 'fly') defs.push(['f', 'fly', 'F', 0]);
+  defs.push(['x', CONFIG.ULTS[cls].id, 'X', null]);
   S.abBtns = [];
   for (const [slot, id, key, cd] of defs) {
-    const b = document.createElement('button'); b.className = 'ab'; b.innerHTML = `<small>${key === 'LMB' ? (IS_TOUCH ? '' : '🖱') : key}</small><span>${(id === 'atk' ? CONFIG.CLS_INFO[cls].atkIco : ABIL[id].ico)}</span><div class="cd"></div><div class="nm">${TN(ABIL[id].n)}</div>`;
+    const b = document.createElement('button'); b.className = 'ab'; b.innerHTML = `<small>${key === 'LMB' ? (IS_TOUCH ? '' : '🖱') : key}</small><span>${(id === 'atk' ? CONFIG.CLS_INFO[cls].atkIco : (ABIL[id] || CONFIG.ABIL_INFO[id]).ico)}</span><div class="cd"></div><div class="nm">${TN((ABIL[id] || CONFIG.ABIL_INFO[id]).n)}</div>`;
     const down = e => { e.preventDefault(); Audio.init(); if (slot === 'atk') { input.atk = true; b.classList.add('held'); } else act(slot); };
     const up = () => { if (slot === 'atk') { input.atk = false; b.classList.remove('held'); } };
     b.addEventListener('touchstart', down, { passive: false }); b.addEventListener('touchend', up); b.addEventListener('mousedown', down); b.addEventListener('mouseup', up); b.addEventListener('mouseleave', up);
@@ -5931,7 +6336,9 @@ function beginHatch() {
   const ni = S.world.nestInfo, me = S.me, r = DinoNest.rngOf(((me.x * 13) | 0) + 77);
   const floorY = ni ? ni.y : me.y;
   const L = 1.15, Wd = 0.74, yb = L * 0.64, seed = (r() * 999) | 0;
-  const tex = DinoNest.shellTexture(ni ? ni.shell : 'sand', seed, false), pores = DinoNest.poreTexture(seed + 3);
+  const skin = S.profile && S.profile.eggskin && CONFIG.COSMETICS[S.profile.eggskin] ? S.profile.eggskin.slice(2) : '';
+  let tex; if (skin) { tex = new THREE.CanvasTexture(eggCanvas(skin, CONFIG.COLORS[S.profile.color])); tex.colorSpace = THREE.SRGBColorSpace; tex.wrapS = THREE.RepeatWrapping; } else tex = DinoNest.shellTexture(ni ? ni.shell : 'sand', seed, false);
+  const pores = DinoNest.poreTexture(seed + 3);
   const mat = new THREE.MeshStandardMaterial({ map: tex, bumpMap: pores, bumpScale: 0.004, roughness: 0.55, side: THREE.DoubleSide });
   const G = splitEggGeos(L, Wd, 0.08, yb, seed);
   const grp = new THREE.Group(); grp.position.set(me.x, floorY - 0.06, me.z); scene.add(grp);
@@ -6028,6 +6435,359 @@ function hatchCamera(dt) {
   return { pos: _tmpCam.position.clone(), q: _tmpCam.quaternion.clone() };
 }
 
+
+
+
+
+// ---------------------------------------------------------------- секреты (сундуки, золотые плоды), молнии, ночь и гроза
+function secretMesh(kind) {
+  const g = new THREE.Group();
+  if (kind === 0) {
+    const wood = new THREE.MeshStandardMaterial({ color: 0x7a4a22, roughness: 0.8 }), gold = new THREE.MeshStandardMaterial({ color: 0xffd35a, emissive: 0x6a4a00, roughness: 0.4, metalness: 0.5 });
+    const b = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.55, 0.65), wood); b.position.y = 0.3; g.add(b);
+    const lid = new THREE.Mesh(new THREE.CylinderGeometry(0.33, 0.33, 1.0, 12, 1, false, 0, Math.PI), wood); lid.rotation.z = Math.PI / 2; lid.position.y = 0.58; lid.rotation.y = 0; g.add(lid);
+    for (const x of [-0.32, 0.32]) { const band = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.62, 0.7), gold); band.position.set(x, 0.32, 0); g.add(band); }
+    const lock = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.18, 0.08), gold); lock.position.set(0, 0.5, 0.34); g.add(lock);
+  } else if (kind === 2) {          // жемчужина в гигантской раковине
+    const sh = new THREE.MeshStandardMaterial({ color: 0xe8d4c0, roughness: 0.45, side: THREE.DoubleSide }), ribs = (c) => { const geo = new THREE.SphereGeometry(0.62, 22, 10, 0, Math.PI * 2, 0, Math.PI / 2), p = geo.attributes.position; for (let i = 0; i < p.count; i++) { const a = Math.atan2(p.getZ(i), p.getX(i)), k = 1 + 0.05 * Math.cos(a * 12); p.setX(i, p.getX(i) * k); p.setZ(i, p.getZ(i) * k); } geo.computeVertexNormals(); return geo; };
+    const low = new THREE.Mesh(ribs(), sh); low.scale.set(1, 0.55, 0.85); low.position.y = 0.05; g.add(low);
+    const up = new THREE.Mesh(ribs(), sh); up.scale.set(1, 0.5, 0.85); up.rotation.x = Math.PI - 0.7; up.position.set(0, 0.42, -0.42); g.add(up);
+    const pearl = new THREE.Mesh(new THREE.SphereGeometry(0.2, 18, 14), new THREE.MeshStandardMaterial({ color: 0xfffaf0, emissive: 0xbfd8ff, emissiveIntensity: 0.55, roughness: 0.12, metalness: 0.2 })); pearl.position.y = 0.3; g.add(pearl);
+  } else {
+    const fruit = new THREE.Mesh(new THREE.SphereGeometry(0.4, 16, 12), new THREE.MeshStandardMaterial({ color: 0xffd35a, emissive: 0xc08a10, emissiveIntensity: 0.9, roughness: 0.3 })); fruit.position.y = 0.9; g.add(fruit);
+    const leaf = new THREE.Mesh(new THREE.ConeGeometry(0.12, 0.35, 6), new THREE.MeshStandardMaterial({ color: 0x4aa84a })); leaf.position.set(0, 1.35, 0); g.add(leaf);
+  }
+  const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.4, 9, 12, 1, true), new THREE.MeshBasicMaterial({ color: 0xffe08a, transparent: true, opacity: 0.18, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide })); beam.position.y = 4.5; g.add(beam);
+  g.userData.kind = kind; return g;
+}
+function updateSecretMeshes(list) {
+  if (!S.secM) S.secM = new Map();
+  const seen = new Set();
+  for (const r of list) {
+    seen.add(r[0]); let m = S.secM.get(r[0]);
+    if (!m) { m = secretMesh(r[1]); scene.add(m); S.secM.set(r[0], m); }
+    m.position.set(r[2], r[3], r[4]); m.userData.y0 = r[3];
+  }
+  for (const [id, m] of S.secM) if (!seen.has(id)) { scene.remove(m); m.traverse(o => { o.geometry && o.geometry.dispose(); o.material && o.material.dispose(); }); S.secM.delete(id); }
+}
+let secSpark = 0;
+function secretsFx(dt) {
+  if (!S.secM) return; secSpark -= dt;
+  for (const m of S.secM.values()) {
+    if (m.userData.kind === 1) { m.rotation.y += dt * 1.5; m.position.y = m.userData.y0 + Math.sin(clock * 2 + m.position.x) * 0.12; }
+    if (secSpark <= 0 && Math.hypot(m.position.x - S.px, m.position.z - S.pz) < 45) burst(m.position.x, m.position.y + 0.9, m.position.z, 0xffd35a, 2, 0.8, 2);
+  }
+  if (secSpark <= 0) secSpark = 0.35;
+}
+function boltFx(x, z) {
+  if (!S || !S.W) return;
+  const y0 = S.W.heightAt(x, z), pts = []; let px = x, pz = z;
+  for (let i = 0; i <= 12; i++) { const k = i / 12; pts.push(new THREE.Vector3(px, y0 + 70 * (1 - k), pz)); px += (Math.random() - 0.5) * 7 * (1 - k * 0.4); pz += (Math.random() - 0.5) * 7 * (1 - k * 0.4); }
+  pts[0].x = x; pts[0].z = z;
+  const ln = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: 0xcfe4ff, transparent: true, opacity: 1, blending: THREE.AdditiveBlending, depthWrite: false })); ln.frustumCulled = false;
+  scene.add(ln); setTimeout(() => { scene.remove(ln); ln.geometry.dispose(); ln.material.dispose(); }, 260);
+  burst(x, y0 + 0.5, z, 0xcfe4ff, 24, 7, 3);
+  const f = $('boltfx'); f.classList.remove('go'); void f.offsetWidth; f.classList.add('go');
+  const d = Math.hypot(x - S.px, z - S.pz); setTimeout(() => Audio.sfx('boom'), Math.min(2200, d / 340 * 1000));
+  if (d < 40) S.camShake = Math.max(S.camShake, 0.3);
+}
+
+// ---------------------------------------------------------------- следы и эффекты рёва из магазина
+function rfxOf(id) { const k = id === S.id ? S.profile.rfx : (S.players.get(id) && S.players.get(id).info.rfx); return k && CONFIG.COSMETICS[k] ? k : ''; }
+function rfxBurst(id, p) {
+  const k = rfxOf(id); if (!k) return 0;
+  const c = CONFIG.COSMETICS[k].c; burst(p.x, p.y + 1.2, p.z, c, k === 'r_skull' ? 30 : 40, k === 'r_toxic' ? 3 : 7, k === 'r_skull' ? 7 : 3); return c;
+}
+
+
+// ---------------------------------------------------------------- украшения гнезда (трофеи и яйца хозяина комнаты)
+function nestOwnerList() {
+  if (!S || !S.profile) return [];
+  const host = S.room && S.room.mode !== 'public' && S.host && S.host !== S.id ? S.players.get(S.host) : null;
+  return host && host.info ? (host.info.nest || []) : ((S.profile.nest && S.profile.nest.put) || []);
+}
+// ---- текстуры и заготовки для реалистичного декора гнезда (кэшируются)
+const _nt = {};
+function nestCanvasTex(key, w, h, draw) {
+  if (_nt[key]) return _nt[key];
+  const c = document.createElement('canvas'); c.width = w; c.height = h; draw(c.getContext('2d'), w, h);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4; return (_nt[key] = t);
+}
+function leafTex(c1, c2) {      // лист с прожилками и зубчатым краем
+  return nestCanvasTex('leaf' + c1 + c2, 128, 256, (g, w, h) => {
+    const sh = () => { g.beginPath(); g.moveTo(w / 2, h - 4); g.bezierCurveTo(w * 0.02, h * 0.72, w * 0.02, h * 0.28, w / 2, 4); g.bezierCurveTo(w * 0.98, h * 0.28, w * 0.98, h * 0.72, w / 2, h - 4); g.closePath(); };
+    const gr = g.createLinearGradient(0, h, 0, 0); gr.addColorStop(0, c2); gr.addColorStop(1, c1); sh(); g.fillStyle = gr; g.fill();
+    g.save(); sh(); g.clip(); g.strokeStyle = 'rgba(255,255,230,.38)'; g.lineWidth = 2.2; g.beginPath(); g.moveTo(w / 2, h - 2); g.lineTo(w / 2, 8); g.stroke(); g.lineWidth = 1.1;
+    for (let i = 0; i < 11; i++) { const y = h - 26 - i * 20; for (const s of [-1, 1]) { g.beginPath(); g.moveTo(w / 2, y); g.quadraticCurveTo(w / 2 + s * 24, y - 12, w / 2 + s * 52, y - 34); g.stroke(); } }
+    for (let i = 0; i < 260; i++) { g.fillStyle = `rgba(${Math.random() < 0.5 ? '0,30,0' : '255,255,200'},${Math.random() * 0.07})`; g.fillRect(Math.random() * w, Math.random() * h, 3, 3); }
+    g.restore();
+  });
+}
+function frondTex() {           // вайя папоротника с парными перышками
+  return nestCanvasTex('frond', 128, 256, (g, w, h) => {
+    g.strokeStyle = '#2c6a2a'; g.lineWidth = 3; g.beginPath(); g.moveTo(w / 2, h); g.lineTo(w / 2, 4); g.stroke();
+    for (let i = 0; i < 24; i++) { const y = h - 12 - i * 10, L = (w / 2 - 6) * Math.sin((1 - i / 25) * 2.9 + 0.2) * 0.95 + 5; for (const s of [-1, 1]) { g.fillStyle = `hsl(${105 + i * 1.2},50%,${26 + (i % 2) * 5}%)`; g.beginPath(); g.moveTo(w / 2, y); g.quadraticCurveTo(w / 2 + s * L * 0.5, y - 9, w / 2 + s * L, y - 4); g.quadraticCurveTo(w / 2 + s * L * 0.5, y + 1, w / 2, y + 3); g.fill(); } }
+  });
+}
+function featherTex(c1, c2) {   // перо с бородками
+  return nestCanvasTex('feather' + c1 + c2, 96, 256, (g, w, h) => {
+    const sh = () => { g.beginPath(); g.moveTo(w / 2, h - 2); g.bezierCurveTo(-8, h * 0.7, 4, h * 0.2, w / 2, 2); g.bezierCurveTo(w - 4, h * 0.2, w + 8, h * 0.7, w / 2, h - 2); g.closePath(); };
+    const gr = g.createLinearGradient(0, h, 0, 0); gr.addColorStop(0, c2); gr.addColorStop(1, c1); sh(); g.fillStyle = gr; g.fill(); g.save(); sh(); g.clip();
+    for (let i = 0; i < 70; i++) { const y = h - 20 - i * 3.2; for (const s of [-1, 1]) { g.strokeStyle = `rgba(255,255,255,${0.1 + Math.random() * 0.22})`; g.lineWidth = 0.8; g.beginPath(); g.moveTo(w / 2, y); g.lineTo(w / 2 + s * 46, y - 16 - Math.random() * 6); g.stroke(); } }
+    g.strokeStyle = 'rgba(245,235,215,.95)'; g.lineWidth = 2.4; g.beginPath(); g.moveTo(w / 2, h); g.lineTo(w / 2, 6); g.stroke(); g.restore();
+  });
+}
+function bentPlane(w, h, sx, sy, bend, twist) {  // изогнутая плоскость для листьев и перьев
+  const geo = new THREE.PlaneGeometry(w, h, sx, sy); geo.translate(0, h / 2, 0); const p = geo.attributes.position;
+  for (let i = 0; i < p.count; i++) { const t = p.getY(i) / h, x = p.getX(i); p.setZ(i, -t * t * bend + Math.abs(x) * (twist || 0.25) * w); }
+  geo.computeVertexNormals(); return geo;
+}
+function lumpGeo(r, det, rough, seed) {          // неровный камешек / кочка
+  const geo = new THREE.IcosahedronGeometry(r, det), p = geo.attributes.position; let s = seed || 3;
+  for (let i = 0; i < p.count; i++) { s = (s * 9301 + 49297) % 233280; const k = 1 + ((s / 233280) - 0.5) * rough; p.setXYZ(i, p.getX(i) * k, p.getY(i) * k, p.getZ(i) * k); }
+  geo.computeVertexNormals(); return geo;
+}
+function nestItemMesh(id) {
+  const it = CONFIG.nestItem(id), g = new THREE.Group(), col = it ? it.c : 0xffffff;
+  const mat = (c, e, o) => new THREE.MeshStandardMaterial(Object.assign({ color: c, roughness: 0.7, emissive: e || 0x000000 }, o || {}));
+  const add = (geo, m, x, y, z, rx, ry, rz, sx, sy, sz) => { const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); o.rotation.set(rx || 0, ry || 0, rz || 0); if (sx) o.scale.set(sx, sy, sz); o.castShadow = true; g.add(o); return o; };
+  const SG = (r, w, h) => new THREE.SphereGeometry(r, w || 12, h || 9), CG = (a, b, h, n) => new THREE.CylinderGeometry(a, b, h, n || 8), CO = (r, h, n) => new THREE.ConeGeometry(r, h, n || 8);
+  const eggLathe = () => { const pts = []; for (let i = 0; i <= 18; i++) { const a = i / 18 * Math.PI; pts.push(new THREE.Vector2(Math.max(0.0001, Math.sin(a) * (0.82 + 0.12 * Math.cos(a))), -Math.cos(a) * 1.18)); } return new THREE.LatheGeometry(pts, 28); };
+  const eggMesh = (skin, hex, sh, k) => { const tex = new THREE.CanvasTexture(eggCanvas(skin, hex)); tex.colorSpace = THREE.SRGBColorSpace; tex.wrapS = THREE.RepeatWrapping; const e = new THREE.Mesh(eggLathe(), new THREE.MeshStandardMaterial({ map: tex, roughness: sh[0], metalness: sh[1] })); e.scale.setScalar(0.4 * (k || 1)); e.castShadow = true; return e; };
+  const nestPad = (r) => add(CG(r, r * 1.15, 0.05, 14), mat(0x6e5a3a, 0, { roughness: 1 }), 0, 0.02, 0);
+  if (it && it.eggskin) {            // яйцо со скином из магазина на соломенной подстилке
+    const sk = it.eggskin.slice(2), sh = { gold: [0.3, 0.2], crystal: [0.22, 0], opal: [0.18, 0], lava: [0.85, 0], galaxy: [0.2, 0], candy: [0.45, 0], jungle: [0.8, 0] }[sk] || [0.5, 0];
+    nestPad(0.34); for (let i = 0; i < 14; i++) { const a = i * 2.4; add(CG(0.008, 0.008, 0.34, 4), mat(0xb89a52, 0, { roughness: 1 }), Math.cos(a) * 0.28, 0.07, Math.sin(a) * 0.28, 1.2, -a, 0); }
+    const e = eggMesh(sk, 0x6aa84f, sh); e.position.y = 0.47 + 0.04; g.add(e);
+    if (sk === 'galaxy' || sk === 'lava' || sk === 'gold') { const gl = new THREE.Mesh(SG(0.62, 12, 10), new THREE.MeshBasicMaterial({ color: sk === 'lava' ? 0xff6a1a : sk === 'gold' ? 0xffd35a : 0x8a6aff, transparent: true, opacity: 0.1, depthWrite: false, blending: THREE.AdditiveBlending })); gl.position.y = 0.5; g.add(gl); }
+  } else if (id.indexOf('egg_') === 0) {
+    const sk = { egg_blue: ['candy', [0.45, 0]], egg_spot: ['speckle', [0.5, 0]], egg_gold: ['gold', [0.3, 0.2]] }[id] || ['', [0.5, 0]];
+    nestPad(0.3); const e = eggMesh(sk[0], col, sk[1], 0.9); e.position.y = 0.46; g.add(e);
+  } else if (id === 'bones') {       // бедренные кости и рёбра
+    const bone = mat(col, 0, { roughness: 0.85 });
+    [[0, 0, 0.3], [0.1, 1.1, 0.55], [-0.1, 2.2, 0.9]].forEach(([y0, ry, off], i) => { const b = new THREE.Group(); const sh = new THREE.Mesh(CG(0.045, 0.058, 0.85, 8), bone); sh.rotation.z = Math.PI / 2; b.add(sh); for (const sx of [-1, 1]) { for (const dz of [-0.045, 0.045]) { const kn = new THREE.Mesh(SG(0.075, 10, 8), bone); kn.position.set(sx * 0.44, 0, dz); b.add(kn); } } b.position.set(0, 0.07 + i * 0.09, off * 0.0); b.rotation.y = ry; b.position.x = (i - 1) * 0.02; b.traverse(o => o.castShadow = true); g.add(b); });
+    for (let i = 0; i < 4; i++) add(new THREE.TorusGeometry(0.28 - i * 0.025, 0.018, 6, 14, Math.PI * 0.8), bone, 0.3 + i * 0.07, 0.04, -0.35, Math.PI / 2, 0, 0.6 + i * 0.25);
+  } else if (id === 'hide') {        // шкура, растянутая на рамке
+    const sh = new THREE.Shape(); sh.moveTo(0, 0.5); sh.bezierCurveTo(0.2, 0.52, 0.34, 0.6, 0.46, 0.5); sh.bezierCurveTo(0.58, 0.46, 0.62, 0.3, 0.52, 0.2); sh.bezierCurveTo(0.6, 0.08, 0.5, -0.06, 0.4, -0.04); sh.bezierCurveTo(0.3, -0.1, 0.22, -0.3, 0.1, -0.28); sh.bezierCurveTo(0.02, -0.3, -0.04, -0.12, -0.14, -0.04); sh.bezierCurveTo(-0.3, -0.06, -0.4, 0.1, -0.34, 0.22); sh.bezierCurveTo(-0.46, 0.34, -0.44, 0.5, -0.3, 0.5); sh.bezierCurveTo(-0.2, 0.6, -0.08, 0.5, 0, 0.5);
+    const geo = new THREE.ShapeGeometry(sh, 10), pp = geo.attributes.position, cs = new Float32Array(pp.count * 3), c0 = new THREE.Color(col), c1 = new THREE.Color(0x3e2814);
+    for (let i = 0; i < pp.count; i++) { const n = Math.sin(pp.getX(i) * 31) * Math.cos(pp.getY(i) * 27) * 0.5 + 0.5, k = 0.35 + 0.65 * n, c = c0.clone().lerp(c1, 1 - k); cs[i * 3] = c.r; cs[i * 3 + 1] = c.g; cs[i * 3 + 2] = c.b; pp.setZ(i, Math.sin(pp.getX(i) * 9) * 0.015); }
+    geo.setAttribute('color', new THREE.BufferAttribute(cs, 3)); geo.computeVertexNormals();
+    const m = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, side: THREE.DoubleSide })); m.position.set(0, 0.62, 0.04); m.scale.setScalar(1.15); m.castShadow = true; g.add(m);
+    const wood = mat(0x5a3a1c, 0, { roughness: 1 }); for (const sx of [-1, 1]) add(CG(0.025, 0.03, 1.4, 6), wood, sx * 0.5, 0.7, 0, 0, 0, sx * -0.08); add(CG(0.02, 0.02, 1.1, 6), wood, 0, 1.28, 0, 0, 0, Math.PI / 2); add(CG(0.02, 0.02, 1.0, 6), wood, 0, 0.05, 0, 0, 0, Math.PI / 2);
+  } else if (id.indexOf('leaves_') === 0) {             // веер больших листьев с прожилками
+    const pal = { leaves_green: [['#58b04a', '#2d7a30'], ['#6cc058', '#3a8a35']], leaves_red: [['#d9602a', '#8a2a14'], ['#c0401c', '#7a2210']], leaves_gold: [['#ffd24a', '#c88a10'], ['#f0b820', '#a87008']] }[id];
+    for (let i = 0; i < 9; i++) { const a = (i / 9) * Math.PI * 2, pr = pal[i % 2], m = new THREE.MeshStandardMaterial({ map: leafTex(pr[0], pr[1]), alphaTest: 0.5, side: THREE.DoubleSide, roughness: 0.65, emissive: id === 'leaves_gold' ? 0x3a2600 : 0 });
+      const L = new THREE.Mesh(bentPlane(0.36, 0.62, 3, 6, 0.28, 0.2), m); L.rotation.set(-1.15 + (i % 3) * 0.28, a, (i % 2 ? 0.2 : -0.2)); L.position.set(Math.cos(a) * 0.05, 0.05 + (i % 3) * 0.04, Math.sin(a) * 0.05); L.castShadow = true; g.add(L); }
+  } else if (id === 'fern') {        // кустик папоротника из дугой выгнутых вай
+    for (let i = 0; i < 9; i++) { const a = i / 9 * Math.PI * 2 + 0.3, m = new THREE.MeshStandardMaterial({ map: frondTex(), alphaTest: 0.45, side: THREE.DoubleSide, roughness: 0.7 });
+      const F = new THREE.Mesh(bentPlane(0.5, 1.0 - (i % 3) * 0.12, 2, 10, 0.55, 0), m); F.rotation.set(-0.55 - (i % 3) * 0.2, a, 0); F.position.set(0, 0.03, 0); F.castShadow = true; g.add(F); }
+  } else if (id === 'flowers') {     // ромашки, космеи и колокольчики на стебельках с листочками
+    const kinds = [{ pet: 0xffffff, mid: 0xf2c418, n: 12, len: 0.12, w: 0.035 }, { pet: 0xf06aa0, mid: 0xf2b418, n: 8, len: 0.13, w: 0.05 }, { pet: 0x8a6ae0, mid: 0xf8e060, n: 6, len: 0.11, w: 0.05 }];
+    for (let i = 0; i < 7; i++) { const k = kinds[i % 3], a = i * 0.9, r = 0.1 + (i % 4) * 0.1, x = Math.cos(a) * r, z = Math.sin(a) * r, h = 0.45 + (i % 3) * 0.14, lean = Math.cos(a * 2) * 0.1;
+      const st = add(CG(0.01, 0.014, h, 5), mat(0x3a7a32), x + lean * h / 2, h / 2, z, 0, 0, -lean); const lf = new THREE.Mesh(bentPlane(0.08, 0.2, 1, 3, 0.05, 0), new THREE.MeshStandardMaterial({ map: leafTex('#4aa040', '#2a6a28'), alphaTest: 0.5, side: THREE.DoubleSide })); lf.position.set(x, h * 0.3, z); lf.rotation.set(-1.0, a + 1.5, 0); g.add(lf);
+      const head = new THREE.Group(); head.position.set(x + lean * h, h, z); head.rotation.set(0.35, a, 0); g.add(head);
+      for (let p = 0; p < k.n; p++) { const pa = p / k.n * Math.PI * 2, pt = new THREE.Mesh(SG(1, 6, 4), mat(k.pet, 0, { roughness: 0.5, side: THREE.DoubleSide })); pt.scale.set(k.w, 0.012, k.len); pt.position.set(Math.cos(pa) * k.len * 0.9, 0, Math.sin(pa) * k.len * 0.9); pt.rotation.y = -pa + Math.PI / 2; pt.rotation.z = 0.0; pt.castShadow = true; head.add(pt); }
+      const mid = new THREE.Mesh(SG(0.045, 8, 6), mat(k.mid, 0.1, { roughness: 0.9 })); mid.scale.y = 0.6; mid.position.y = 0.012; head.add(mid); }
+  } else if (id === 'mushrooms') {   // мухомор, лисичка и белый гриб с настоящей формой шляпки
+    const species = [{ cap: 0xd2302a, stem: 0xf3ecd8, k: 1, spots: true, gills: 0xf0e0c0 }, { cap: 0xe0a02a, stem: 0xf0d890, k: 0.62, gills: 0xe8b860 }, { cap: 0x9a6a3e, stem: 0xe9dcc0, k: 0.8, gills: 0xefe2c4 }];
+    [[0, 0, 0], [0.34, 0.1, 1], [-0.26, 0.22, 2], [0.12, -0.3, 1], [-0.12, -0.2, 0]].forEach(([x, z, si], i) => { const sp = species[si], k = sp.k * (i > 2 ? 0.55 : 1);
+      const sp1 = []; for (let j = 0; j <= 8; j++) { const t = j / 8; sp1.push(new THREE.Vector2(0.05 + 0.03 * Math.pow(1 - t, 2) + 0.02 * Math.sin(t * 3), t * 0.4)); } const stem = new THREE.Mesh(new THREE.LatheGeometry(sp1, 12), mat(sp.stem, 0, { roughness: 0.85 })); stem.scale.setScalar(k); stem.position.set(x, 0, z); stem.castShadow = true; g.add(stem);
+      const cp = []; for (let j = 0; j <= 10; j++) { const t = j / 10, a = t * Math.PI / 2; cp.push(new THREE.Vector2(Math.sin(a) * 0.27 * (si === 1 ? 1.15 : 1), Math.cos(a) * 0.17 * (si === 1 ? 0.8 : 1))); } cp.push(new THREE.Vector2(0.0001, 0));
+      const cap = new THREE.Mesh(new THREE.LatheGeometry(cp, 16), mat(sp.cap, 0, { roughness: 0.55 })); cap.scale.setScalar(k); cap.position.set(x, 0.37 * k, z); cap.rotation.z = (i % 2 ? 0.06 : -0.05); cap.castShadow = true; g.add(cap);
+      const gl = new THREE.Mesh(new THREE.CircleGeometry(0.25 * k, 14), mat(sp.gills, 0, { side: THREE.DoubleSide })); gl.rotation.x = Math.PI / 2; gl.position.set(x, 0.372 * k, z); g.add(gl);
+      if (sp.spots) for (let s = 0; s < 9; s++) { const sa = s * 2.4, sr = 0.05 + (s % 3) * 0.07, h = Math.cos(Math.asin(Math.min(0.95, sr / 0.27))) * 0.17; const d = new THREE.Mesh(SG(0.022 + (s % 2) * 0.012, 6, 5), mat(0xfaf5e6, 0, { roughness: 0.8 })); d.scale.y = 0.4; d.position.set(x + Math.cos(sa) * sr * k, 0.37 * k + h * k, z + Math.sin(sa) * sr * k); g.add(d); } });
+  } else if (id === 'moss') {        // мягкие моховые подушки из множества бугорков
+    const pal = [0x3f8a34, 0x5aa244, 0x6fb24e, 0x2f7230];
+    [[0, 0, 0.5], [0.42, 0.12, 0.34], [-0.38, 0.2, 0.38], [0.1, -0.38, 0.3]].forEach(([x, z, r], i) => { for (let k = 0; k < 14; k++) { const a = k * 2.4 + i, d = Math.sqrt(k / 14) * r * 0.85, br = r * (0.28 + ((k * 7) % 5) * 0.045); add(lumpGeo(br, 1, 0.35, k + i * 9), mat(pal[(k + i) % 4], 0, { roughness: 1 }), x + Math.cos(a) * d, br * 0.35, z + Math.sin(a) * d, 0, 0, 0, 1, 0.62, 1); } });
+    for (let i = 0; i < 6; i++) { const a = i * 1.1, s = add(lumpGeo(0.06, 1, 0.4, i + 40), mat(0x8a8a82, 0, { roughness: 1 }), Math.cos(a) * 0.55, 0.03, Math.sin(a) * 0.5, 0, 0, 0, 1, 0.6, 1); }
+  } else if (id === 'shells') {      // гребешок с рёбрами и спиральная ракушка
+    const sc = (x, z, r, rot, c1, c2) => { const geo = new THREE.CircleGeometry(r, 28, Math.PI * 0.12, Math.PI * 0.76), p = geo.attributes.position, cs = new Float32Array(p.count * 3), A = new THREE.Color(c1), B = new THREE.Color(c2);
+      for (let i = 0; i < p.count; i++) { const px = p.getX(i), py = p.getY(i), rr = Math.hypot(px, py) / r, an = Math.atan2(py, px), rib = 0.5 + 0.5 * Math.cos(an * 16), c = A.clone().lerp(B, rr * 0.7 + rib * 0.3); cs[i * 3] = c.r; cs[i * 3 + 1] = c.g; cs[i * 3 + 2] = c.b; p.setZ(i, rr * rr * 0.12 * r / 0.2 + rib * 0.012); }
+      geo.setAttribute('color', new THREE.BufferAttribute(cs, 3)); geo.computeVertexNormals(); const m = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.3, side: THREE.DoubleSide })); m.rotation.set(-Math.PI / 2 + 0.35, 0, rot); m.position.set(x, 0.05, z); m.castShadow = true; g.add(m); const ear = add(CG(r * 0.3, r * 0.3, 0.02, 3), mat(c2, 0, { roughness: 0.3 }), x, 0.045, z); };
+    sc(0, 0, 0.3, 0.3, 0xfff0e0, 0xe8a890); sc(0.4, 0.2, 0.22, 2.2, 0xffe0d0, 0xd88a78); sc(-0.36, 0.26, 0.2, 4.2, 0xf6e8d8, 0xc89a78);
+    for (let i = 0; i < 9; i++) { const t = i / 8, r = 0.1 * (1 - t * 0.85); add(SG(r, 10, 8), mat(i % 2 ? 0xf0d0b8 : 0xe4b898, 0, { roughness: 0.3 }), -0.15 + t * 0.12, 0.08 + r * 0.6 + t * 0.12, -0.34 + Math.cos(t * 7) * 0.05, 0, 0, 0, 1, 1, 1); }
+    add(CG(0.0, 0.07, 0.2, 10), mat(0xe8c8a8, 0, { roughness: 0.3 }), 0.1, 0.1, -0.38, 0, 0, Math.PI / 2 - 0.25);
+  } else if (id === 'feathers') {    // веер длинных перьев с бородками, воткнутых в песок
+    const cs = [['#1aa0e8', '#0a4a8a'], ['#ff5a7a', '#a01a44'], ['#ffd23a', '#c8780a'], ['#4ad88a', '#0a7a4a'], ['#a06aff', '#4a1a9a'], ['#ff9a3a', '#a0420a'], ['#3ae8e8', '#0a6a7a']];
+    nestPad(0.22); for (let i = 0; i < 7; i++) { const a = (i - 3) * 0.26, m = new THREE.MeshStandardMaterial({ map: featherTex(cs[i][0], cs[i][1]), alphaTest: 0.45, side: THREE.DoubleSide, roughness: 0.5 });
+      const F = new THREE.Mesh(bentPlane(0.2, 0.95 - Math.abs(i - 3) * 0.05, 2, 8, 0.2, 0.1), m); F.position.set(a * 0.15, 0.03, 0); F.rotation.set(-0.1, 0, -a * 0.9); F.castShadow = true; g.add(F); }
+  } else if (id === 'crystals') {    // шестигранные кристаллы-друзы на породе
+    const rock = add(lumpGeo(0.4, 1, 0.5, 11), mat(0x4a4a56, 0, { roughness: 0.95 }), 0, 0.06, 0, 0, 0, 0, 1, 0.45, 1);
+    const cp = (h, w) => { const p = [new THREE.Vector2(0.0001, 0), new THREE.Vector2(w, 0), new THREE.Vector2(w, h * 0.72), new THREE.Vector2(0.0001, h)]; return new THREE.LatheGeometry(p, 6); };
+    const cols = [[0x9a6aff, 0x4a2a99], [0x6ad8ff, 0x2a7a99], [0xff6ad0, 0x992a80]];
+    [[0, 0, 1, 0, 0], [0.22, 0.08, 0.7, 0.35, 0.5], [-0.2, 0.1, 0.8, -0.4, 1.2], [0.08, -0.2, 0.55, 0.15, -0.6], [-0.05, 0.22, 0.45, -0.2, 2.1], [0.28, -0.12, 0.4, 0.5, 1.6]].forEach(([x, z, k, rz, ry], i) => { const c = cols[i % 3]; const m = new THREE.MeshStandardMaterial({ color: c[0], emissive: c[1], emissiveIntensity: 0.55, roughness: 0.12, metalness: 0.1, transparent: true, opacity: 0.9, flatShading: true }); add(cp(0.9 * k, 0.1 * k + 0.02), m, x, 0.1, z, 0.1, ry, rz); });
+    add(SG(0.45, 10, 8), new THREE.MeshBasicMaterial({ color: 0x9a7aff, transparent: true, opacity: 0.1, depthWrite: false, blending: THREE.AdditiveBlending }), 0, 0.4, 0);
+  } else if (id === 'lantern') {     // кованый фонарь на столбике
+    const iron = mat(0x2e2a28, 0, { roughness: 0.55, metalness: 0.6 }), wood = mat(0x5a3e24, 0, { roughness: 0.95 });
+    add(CG(0.05, 0.07, 1.15, 8), wood, 0, 0.58, 0); add(CG(0.16, 0.2, 0.06, 10), wood, 0, 0.03, 0); add(CG(0.025, 0.025, 0.34, 6), iron, 0.15, 1.12, 0, 0, 0, Math.PI / 2); add(new THREE.TorusGeometry(0.05, 0.012, 6, 10, Math.PI), iron, 0.3, 1.1, 0, 0, 0, 0);
+    const lx = 0.3, ly = 0.9; add(CG(0.12, 0.1, 0.05, 4), iron, lx, ly - 0.14, 0, 0, Math.PI / 4, 0);
+    for (const [dx, dz] of [[1, 1], [-1, 1], [1, -1], [-1, -1]]) add(CG(0.008, 0.008, 0.28, 4), iron, lx + dx * 0.075, ly, dz * 0.075);
+    add(new THREE.BoxGeometry(0.15, 0.24, 0.15), mat(0xffd98a, 0xffa828, { emissiveIntensity: 1.35, transparent: true, opacity: 0.85, roughness: 0.15 }), lx, ly, 0);
+    add(SG(0.04, 8, 6), mat(0xfff2b0, 0xffe080, { emissiveIntensity: 2 }), lx, ly - 0.04, 0);
+    add(CO(0.13, 0.12, 4), iron, lx, ly + 0.18, 0, 0, Math.PI / 4, 0); add(new THREE.TorusGeometry(0.03, 0.008, 6, 10), iron, lx, ly + 0.27, 0, Math.PI / 2, 0, 0);
+    add(SG(0.34, 10, 8), new THREE.MeshBasicMaterial({ color: 0xffb040, transparent: true, opacity: 0.14, depthWrite: false, blending: THREE.AdditiveBlending }), lx, ly, 0);
+  } else {       // трофей босса: череп хищника на деревянной подставке
+    const bone = mat(0xe8e0c8, 0, { roughness: 0.8 }), dark = mat(0x151210, 0, { roughness: 1 }), wood = mat(0x5a3e24, 0, { roughness: 1 });
+    add(CG(0.38, 0.44, 0.2, 12), wood, 0, 0.1, 0); add(new THREE.TorusGeometry(0.4, 0.035, 6, 20), mat(col, 0x222200, { roughness: 0.4, metalness: 0.3 }), 0, 0.21, 0, Math.PI / 2, 0, 0);
+    const sk = new THREE.Group(); sk.position.set(0, 0.55, -0.05); sk.rotation.x = -0.12; g.add(sk);
+    const cr = new THREE.Mesh(SG(0.26, 14, 10), bone); cr.scale.set(0.9, 0.85, 1.1); cr.position.set(0, 0.1, -0.05); sk.add(cr);
+    const sn = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.16, 0.5), bone); sn.position.set(0, 0.03, 0.32); sk.add(sn);
+    const snT = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.1, 0.18), bone); snT.position.set(0, 0.05, 0.58); sk.add(snT);
+    const jw = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.07, 0.5), bone); jw.position.set(0, -0.12, 0.28); jw.rotation.x = 0.1; sk.add(jw);
+    for (let i = 0; i < 7; i++) for (const sx of [-1, 1]) { const th = new THREE.Mesh(CO(0.022, 0.07, 5), mat(0xf6f0dc)); th.position.set(sx * 0.1, -0.05 - (i % 2) * 0.005, 0.14 + i * 0.07); th.rotation.x = Math.PI; sk.add(th); const tb = new THREE.Mesh(CO(0.02, 0.06, 5), mat(0xf6f0dc)); tb.position.set(sx * 0.085, -0.06, 0.12 + i * 0.07); tb.scale.y = 0.8; sk.add(tb); }
+    for (const sx of [-1, 1]) { const eye = new THREE.Mesh(SG(0.075, 10, 8), dark); eye.scale.set(1, 1.1, 0.7); eye.position.set(sx * 0.17, 0.12, 0.14); sk.add(eye); const nos = new THREE.Mesh(SG(0.03, 6, 5), dark); nos.position.set(sx * 0.06, 0.1, 0.6); sk.add(nos); const hn = new THREE.Mesh(CO(0.05, 0.3, 7), bone); hn.position.set(sx * 0.2, 0.3, -0.05); hn.rotation.z = -sx * 0.45; sk.add(hn); }
+    sk.traverse(o => o.castShadow = true);
+  }
+  return g;
+}
+function updateNestDeco() {
+  if (!S || !S.world || !S.W) return;
+  const list = nestOwnerList(), key = S.biome + '|' + list.join(',');
+  if (S.nestKey === key) return; S.nestKey = key;
+  if (S.nestGrp) { scene.remove(S.nestGrp); S.nestGrp.traverse(o => { o.geometry && o.geometry.dispose(); o.material && o.material.dispose(); }); S.nestGrp = null; }
+  if (!list.length) return;
+  const g = new THREE.Group(), n = S.W.nest, R = 4.4;
+  list.forEach((id, i) => {
+    if (!CONFIG.nestItem(id)) return; const m = nestItemMesh(id), a = 0.5 + i / list.length * Math.PI * 2, x = n.x + Math.cos(a) * R, z = n.z + Math.sin(a) * R;
+    const gh = S.world && S.world.meshH ? S.world.meshH : S.W.heightAt; let gy = gh(x, z);
+    for (let q = 0; q < 8; q++) { const qa = q * 0.7854; gy = Math.min(gy, gh(x + Math.cos(qa) * 0.9, z + Math.sin(qa) * 0.9)); }
+    m.position.set(x, gy - 0.03, z); m.rotation.y = -a + Math.PI / 2; m.scale.setScalar(2.0); g.add(m);
+  });
+  scene.add(g); S.nestGrp = g;
+}
+
+let prevNight = null, prevStorm = null;
+function weatherBanners() {
+  const night = S.tod < 0.22 || S.tod > 0.78, storm = S.wx > 0.6;
+  if (prevNight !== null) { if (night && !prevNight) UI.banner('🌙 ' + T('night_on'), 3600); if (storm && !prevStorm) UI.banner('⛈ ' + T('storm_on'), 3600); }
+  prevNight = night; prevStorm = storm;
+}
+
+// ---------------------------------------------------------------- спасение друзей и наблюдение
+let revHold = 0, revTarget = null;
+function nearestFallen() {
+  let best = null, bd = 8;
+  for (const [id, p] of S.players) { if (!(p.flags & F.DEAD) || (p.info && p.info.bot) || !p.actor) continue; const q = p.actor.group.position, d = Math.hypot(q.x - S.px, q.z - S.pz); if (d < bd) { bd = d; best = { id, p, d }; } }
+  return best;
+}
+function spectateTarget() {
+  let best = null, bd = 1e9;
+  for (const [id, p] of S.players) { if ((p.flags & F.DEAD) || (p.info && p.info.bot) || !p.actor) continue; const q = p.actor.group.position, d = Math.hypot(q.x - S.px, q.z - S.pz); if (d < bd) { bd = d; best = q; } }
+  return best;
+}
+function updateRevive(dt) {
+  const b = $('revbtn'); if (!S.alive || S.coro) { b.classList.remove('on'); revHold = 0; return; }
+  const f = nearestFallen(); revTarget = f ? f.id : null;
+  if (!f) { b.classList.remove('on'); revHold = 0; return; }
+  b.classList.add('on'); $('revbtn-t').textContent = T('rev_btn', { n: (f.p.info && f.p.info.nick) || '?' });
+  if (revHold > 0) { revHold += dt; $('revbtn-f').style.width = Math.min(100, revHold / 2 * 100) + '%'; if (revHold >= 2) { revHold = 0; S.conn && S.conn.send({ t: 'revive', id: revTarget }); $('revbtn-f').style.width = '0%'; } } else $('revbtn-f').style.width = '0%';
+}
+{
+  const b = $('revbtn'), on = e => { e.preventDefault(); e.stopPropagation(); if (revTarget) revHold = 0.001; }, off = () => { revHold = 0; };
+  b.addEventListener('touchstart', on, { passive: false }); b.addEventListener('touchend', off); b.addEventListener('touchcancel', off); b.addEventListener('mousedown', on); b.addEventListener('mouseup', off); b.addEventListener('mouseleave', off);
+  window.addEventListener('keydown', e => { if (e.code === 'KeyR' && revTarget && !e.repeat && S && S.alive) revHold = 0.001; }); window.addEventListener('keyup', e => { if (e.code === 'KeyR') revHold = 0; });
+}
+
+// ---------------------------------------------------------------- короткое обучение для новичка (шаги отмечаются сами)
+const TUT_STEPS = [
+  { k: 'move', t: 'tut_move', ok: () => Math.hypot(S.px - S.tut.x0, S.pz - S.tut.z0) > 12 },
+  { k: 'look', t: 'tut_look', ok: () => Math.abs(input.yaw - S.tut.yaw0) > 1.0 },
+  { k: 'sprint', t: 'tut_sprint', ok: () => !!input.sprint },
+  { k: 'atk', t: 'tut_atk', ok: () => !!input.atk },
+  { k: 'eat', t: 'tut_eat', ok: () => (S.profile.stats.eaten | 0) > S.tut.eat0 },
+  { k: 'kill', t: 'tut_kill', ok: () => (S.profile.stats.kills | 0) > S.tut.kill0 }
+];
+function tutStart() {
+  const pr = S.profile; if (pr.tut || !pr.hatched || (pr.stats.kills | 0) > 3 || pr.level > 3) { S.tut = null; $('tut').classList.remove('on'); return; }
+  try { if (localStorage.getItem('dino_tut_' + pr.name) === '1') { S.tut = null; return; } } catch (e) { /* ignore */ }
+  S.tut = { i: 0, x0: S.px, z0: S.pz, yaw0: input.yaw, eat0: pr.stats.eaten | 0, kill0: pr.stats.kills | 0, t0: clock };
+  $('tut').classList.add('on'); tutShow();
+}
+function tutShow() { const t = S.tut; if (!t) return; $('tut-t').textContent = T(TUT_STEPS[t.i].t); $('tut-n').textContent = (t.i + 1) + '/' + TUT_STEPS.length; }
+function tutDone(skip) {
+  const t = S.tut; if (!t) return; S.tut = null; $('tut').classList.remove('on');
+  try { localStorage.setItem('dino_tut_' + S.profile.name, '1'); } catch (e) { /* ignore */ }
+  if (!skip) { S.conn && S.conn.send({ t: 'tut' }); UI.banner('🎓 ' + T('tut_done'), 3800); Audio.sfx('win'); }
+}
+function tutUpdate() {
+  const t = S.tut; if (!t || S.coro || S.hatch) return;
+  if (clock - t.t0 < 3) return;
+  if (TUT_STEPS[t.i].ok()) { t.i++; Audio.sfx('coin'); if (t.i >= TUT_STEPS.length) { tutDone(false); return; } tutShow(); }
+}
+$('tut-x').addEventListener('click', () => tutDone(true));
+
+// ---------------------------------------------------------------- коронация после победы над боссом (ролик ~8 с)
+const CORO_LAND = 3.4, CORO_DUR = 8.2;
+function startCoro(o) {
+  if (!S || !S.actor || S.coro || S.hatch) return;
+  const c = S.coro = { t0: clock, lord: !!o.lord, biome: o.biome, xp: o.xp | 0, coins: o.coins | 0, landed: false, end: false, blend: 0, lastT: 0, sparkT: 0, freezeT: null, grp: new THREE.Group(), pose: null };
+  // колонна света: мягкие края (ярче в центре) и растворяется кверху
+  const mat = new THREE.ShaderMaterial({ transparent: true, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, uniforms: { uOp: { value: 0 }, uCol: { value: new THREE.Color(0xffc44a) } },
+    vertexShader: 'varying vec3 vN; varying vec3 vP; varying float vH; void main(){ vec4 mv = modelViewMatrix * vec4(position,1.0); vN = normalize(normalMatrix * normal); vP = mv.xyz; vH = uv.y; gl_Position = projectionMatrix * mv; }',
+    fragmentShader: 'uniform float uOp; uniform vec3 uCol; varying vec3 vN; varying vec3 vP; varying float vH; void main(){ float d = abs(dot(normalize(vN), normalize(-vP))); float a = pow(d, 1.8) * (1.0 - smoothstep(0.35, 1.0, vH)) * uOp; gl_FragColor = vec4(uCol * (0.7 + 0.6 * d), a); }' });
+  c.pillar = new THREE.Mesh(new THREE.CylinderGeometry(1.2, 2.1, 70, 32, 1, true), mat); c.pillar.position.y = 34; c.grp.add(c.pillar);
+  c.crown = buildCrownMesh(c.lord ? 2 : 1); c.glow = new THREE.Mesh(new THREE.SphereGeometry(0.3, 16, 12), new THREE.MeshBasicMaterial({ color: 0xffe08a, transparent: true, opacity: 0.22, depthWrite: false, blending: THREE.AdditiveBlending }));
+  c.crown.add(c.glow); c.crown.visible = false; c.grp.add(c.crown);
+  scene.add(c.grp);
+  document.body.classList.add('cine'); const el = $('coro'); el.classList.add('on'); el.classList.remove('landed', 'sub');
+  $('coro-t1').textContent = c.lord ? T('coro_lord') : T('coro_king', { b: TN(CONFIG.BIOME[o.biome].n).toUpperCase() });
+  $('coro-t2').textContent = T('coro_sub'); $('coro-t3').textContent = '+' + c.xp + ' XP · +' + c.coins + ' 🪙';
+  Audio.sfx('boss');
+  c.skipOk = clock + 1.4;
+}
+function endCoro(now) {
+  const c = S && S.coro; if (!c) return;
+  c.grp.parent && c.grp.parent.remove(c.grp); c.grp.traverse(o => { o.geometry && o.geometry.dispose(); o.material && o.material.dispose && o.material.dispose(); });
+  document.body.classList.remove('cine'); $('coro').classList.remove('on', 'landed', 'sub');
+  const P = S.actor && S.actor.dino && S.actor.dino.userData.parts; if (P && P.crown) P.crown.visible = true;
+  S.coroBlend = now ? null : { t: 0, pos: c.pose ? c.pose.pos : null, q: c.pose ? c.pose.q : null };
+  S.coro = null;
+}
+const _ccv = new THREE.Vector3();
+function updateCoro(dt) {
+  const c = S.coro; if (!c) return false;
+  const t = c.freezeT != null ? c.freezeT : clock - c.t0, a = S.actor, sc = Sim.scaleOf(S.profile.level), gp = a.group.position, u = Math.min(1, t / CORO_DUR);
+  const P = a.dino.userData.parts, head = (P && P.anch && P.anch.head) ? P.anch.head.getWorldPosition(_ccv).clone() : new THREE.Vector3(gp.x, gp.y + 1.8 * sc, gp.z);
+  head.y += 0.22 * sc;
+  if (t >= CORO_DUR || c.end) { c.endT = c.endT || clock; }
+  // колонна света, корона и эффекты
+  c.grp.position.set(gp.x, gp.y, gp.z);
+  const pf = Math.min(1, Math.max(0, (t - 0.2) / 0.9)) * (1 - Math.min(1, Math.max(0, (t - 5.6) / 1.2)));
+  c.pillar.material.uniforms.uOp.value = 0.5 * pf;
+  const kS = Math.max(1, sc * 1.6);
+  if (t >= 1.0 && t < CORO_LAND) {
+    const k = (t - 1.0) / (CORO_LAND - 1.0), e = k * k * (3 - 2 * k), y0 = head.y - gp.y + 8 + sc * 2;
+    c.crown.visible = true; c.crown.scale.setScalar(kS * (4.2 - 3.2 * e)); c.crown.position.set(head.x - gp.x, y0 + (head.y - gp.y - y0) * e, head.z - gp.z); c.crown.rotation.y = t * 7 * (1 - 0.8 * e); c.glow.scale.setScalar(1.5 + 0.4 * Math.sin(t * 9));
+  } else if (t < 1.0) c.crown.visible = false;
+  if (t >= CORO_LAND && !c.landed) {
+    c.landed = true; c.crown.visible = false;
+    burst(head.x, head.y, head.z, 0xffd35a, 90, 9, 4); burst(head.x, head.y, head.z, 0xffffff, 40, 6, 3); ring(gp.x, gp.y, gp.z, 0xffd35a, 9 * sc, 1.2); ring(gp.x, gp.y, gp.z, 0xffffff, 5 * sc, 0.8);
+    S.camShake = 0.5; Audio.sfx('boom'); setTimeout(() => Audio.sfx('king'), 120);
+    const f = $('coro-flash'); f.classList.remove('go'); void f.offsetWidth; f.classList.add('go'); $('coro').classList.add('landed'); setTimeout(() => { if (S && S.coro === c) $('coro').classList.add('sub'); }, 900);
+  }
+  if (t < CORO_LAND || t > 0) { if (t >= CORO_LAND && P && P.crown) P.crown.visible = true; else if (P && P.crown) P.crown.visible = false; }
+  if (t > 0.8 && t < 6.2 && clock - c.sparkT > 0.07 && c.freezeT == null) { c.sparkT = clock; const r = (0.5 + Math.random()) * sc * 1.6, an = Math.random() * 6.283; burst(gp.x + Math.cos(an) * r, gp.y + 0.2, gp.z + Math.sin(an) * r, 0xffd35a, 3, 1.5, 4); }
+  // камера: облёт от низкого ракурса спереди вокруг динозавра
+  const ang = input.yaw + Math.PI * (0.9 + 1.15 * u * u * (3 - 2 * u)), R0 = (3.4 + sc * 2.4) * (0.85 + 0.3 * u), cy = gp.y + (0.5 + 0.9 * u) * sc + 0.4;
+  let R = R0;   // если на пути дерево или камень — подъезжаем ближе к динозавру
+  for (let k = 0; k < 8; k++) {
+    const cx = gp.x + Math.sin(ang) * R, cz = gp.z + Math.cos(ang) * R; let blocked = false;
+    const near = Sim.obstaclesNear(S.W, cx, cz, 6); for (let i = 0; i < near.length; i++) { const o = near[i]; if ((o.kind === 'tree' || o.kind === 'rock' || o.kind === 'stone') && Math.hypot(o.x - cx, o.z - cz) < o.r + (o.kind === 'tree' ? 3.2 : 1.2)) { blocked = true; break; } }
+    if (!blocked) break; R *= 0.82;
+  }
+  _tmpCam.position.set(gp.x + Math.sin(ang) * R, cy, gp.z + Math.cos(ang) * R);
+  const gy = S.W.heightAt(_tmpCam.position.x, _tmpCam.position.z) + 0.6; if (_tmpCam.position.y < gy) _tmpCam.position.y = gy;
+  const sm2 = (a0, a1, x) => { const q = Math.min(1, Math.max(0, (x - a0) / (a1 - a0))); return q * q * (3 - 2 * q); };
+  const lookY = gp.y + (1.3 + 0.3 * u) * sc + 0.2, bump = sm2(1.0, 2.3, t) * (1 - sm2(3.6, 4.8, t));   // пока падает корона — смотрим выше, на неё и голову
+  _tmpCam.lookAt(gp.x, lookY + (head.y + 1.3 - lookY) * 0.55 * bump - 0.9 * sc * sm2(3.6, 5, t), gp.z);
+  camera.position.copy(_tmpCam.position); camera.quaternion.copy(_tmpCam.quaternion); camera.fov = 56 - 8 * u; camera.updateProjectionMatrix();
+  c.pose = { pos: _tmpCam.position.clone(), q: _tmpCam.quaternion.clone() };
+  if (c.freezeT == null && (t >= CORO_DUR || c.end)) endCoro(false);
+  return true;
+}
+function skipCoro() { const c = S && S.coro; if (c && clock >= c.skipOk) c.end = true; }
+window.addEventListener('pointerdown', skipCoro); window.addEventListener('keydown', e => { if (S && S.coro && (e.code === 'Space' || e.code === 'Escape' || e.code === 'Enter')) skipCoro(); });
+
 // ---------------------------------------------------------------- камера
 let camDist = 8, camShakeT = 0;
 function placeCamera(dt, px, py, pz, now) {
@@ -6052,7 +6812,7 @@ function placeCamera(dt, px, py, pz, now) {
 // ---------------------------------------------------------------- фиксированный шаг (25 Гц): ввод → предсказание → сервер
 function fixedStep() {
   if (!S.alive) return;
-  const du = S.du, frozen = (du && du.st !== 'fight') || (S.hatch && !S.hatch.done);
+  const du = S.du, frozen = (du && du.st !== 'fight') || (S.hatch && !S.hatch.done) || !!S.coro;
   const raw = readInput(), c = frozen ? { f: 0, s: 0, yaw: raw.yaw, pitch: raw.pitch, jump: false, down: false, sprint: false } : raw;
   S.seq++; c.q = S.seq;
   S.prev = { x: S.me.x, y: S.me.y, z: S.me.z };
@@ -6222,24 +6982,25 @@ function drawMinimap() {
 // ---------------------------------------------------------------- большая карта (Tab; на телефоне — нажать на мини-карту)
 let mapOpen = false;
 const bigCv = $('bigmap-cv'), bigCtx = bigCv.getContext('2d');
+let mapShutAt = 0;   // когда карту закрыли: сразу после закрытия касание «просачивается» на мини-карту под крестиком и открывало её снова
 function toggleMap(on) {
-  mapOpen = on === undefined ? !mapOpen : !!on;
+  const was = mapOpen; mapOpen = on === undefined ? !mapOpen : !!on;
+  if (was && !mapOpen) mapShutAt = performance.now();
   $('bigmap').classList.toggle('on', mapOpen);
   if (mapOpen) { if (document.pointerLockElement) document.exitPointerLock(); drawBigMap(); }
 }
 // на телефоне — касание мини-карты открывает карту, касание карты закрывает (preventDefault: без «призрачного» клика)
-$('mini').addEventListener('touchend', e => { e.preventDefault(); if (S && S.welcomed) toggleMap(true); }, { passive: false });
-$('mini').addEventListener('click', () => { if (S && S.welcomed) toggleMap(true); });
+$('mini').addEventListener('touchend', e => { e.preventDefault(); if (S && S.welcomed && performance.now() - mapShutAt > 800) toggleMap(true); }, { passive: false });
+$('mini').addEventListener('click', () => { if (S && S.welcomed && performance.now() - mapShutAt > 800) toggleMap(true); });
 $('bigmap').addEventListener('touchend', e => { e.preventDefault(); toggleMap(false); }, { passive: false });
 $('bigmap').addEventListener('click', () => toggleMap(false));
-// крестик и кнопка «Закрыть»: закрывают карту сразу при касании (touchstart/pointerdown), не полагаясь на всплытие до фона
-['bigmap-x', 'bigmap-close'].forEach(id => {
-  const b = $(id); if (!b) return;
-  const close = e => { e.preventDefault(); e.stopPropagation(); toggleMap(false); };
+// единственный крестик: закрывает карту сразу при касании (и не даёт касанию пройти на мини-карту)
+{
+  const b = $('bigmap-x'), close = e => { e.preventDefault(); e.stopPropagation(); toggleMap(false); };
   b.addEventListener('touchstart', close, { passive: false });
   b.addEventListener('pointerdown', close);
   b.addEventListener('click', close);
-});
+}
 function drawBigMap() {
   if (!mapOpen || !S || !S.world) return;
   const g = bigCtx, N = bigCv.width, w = S.world, W = S.W, size = w.mapSize, k = N / size, P = (x) => (x + size / 2) * k;
@@ -6271,6 +7032,8 @@ function updateHud(now, dt) {
   const mp = S.mp; if (!mp) return;
   const pr = S.profile, st = S.stats, setW = (id, v) => { $(id).firstElementChild.style.width = clamp(v * 100, 0, 100) + '%'; };
   const setT = (id, txt) => { const el = $(id).lastElementChild; if (el._t !== txt) { el._t = txt; el.textContent = txt; } };
+  { const bf = $('buff'), on = !!mp.bf && mp.bt > 0; if (on) { const txt = T('buff_' + mp.bf) + ' · ' + Math.floor(mp.bt / 60) + ':' + String(mp.bt % 60).padStart(2, '0'); if (bf._t !== txt) { bf._t = txt; bf.textContent = '✨ ' + txt; } } bf.style.display = on ? 'block' : 'none'; }
+  { const bf = $('buff'), on = !!mp.bf && mp.bt > 0; if (on) { const txt = T('buff_' + mp.bf) + ' · ' + Math.floor(mp.bt / 60) + ':' + String(mp.bt % 60).padStart(2, '0'); if (bf._t !== txt) { bf._t = txt; bf.textContent = '✨ ' + txt; } } bf.style.display = on ? 'block' : 'none'; }
   setW('b-hp', mp.hp / mp.mh); setW('b-st', S.me.stam / CONFIG.STAM_MAX); setW('b-fd', mp.fd / CONFIG.FOOD_MAX);
   const need = pr.level >= CONFIG.MAX_LEVEL ? 1 : CONFIG.xpForLevel(pr.level); setW('b-xp', pr.level >= CONFIG.MAX_LEVEL ? 1 : mp.xp / need);
   const aq = CONFIG.isAqua(pr.cls); $('b-br').style.display = aq ? '' : 'none'; if (aq) { setW('b-br', mp.br / mp.bm); setT('b-br', `${T('breath')} ${Math.ceil(mp.br)}/${Math.round(mp.bm)}`); }
@@ -6286,7 +7049,7 @@ function updateHud(now, dt) {
   const hz = $('hz'); if (S.hz && now / 1000 - S.hz.t < 1.2) { hz.className = ''; hz.style.display = 'block'; hz.textContent = '⚠ ' + T('hz_' + S.hz.k); } else if (S.lowBr !== now) hz.style.display = 'none';
   // ячейки способностей
   if (S.abBtns) for (const a of S.abBtns) {
-    let frac = 0; if (a.slot === 'e') frac = mp.cd[1] / (a.cd || 1); else if (a.slot === 'q') frac = mp.cd[2] / (a.cd || 1); else if (a.slot === 'atk') frac = mp.cd[0] / (CONFIG.CLASSES[pr.cls].atkCd || 0.5);
+    let frac = 0; if (a.slot === 'e') frac = mp.cd[1] / (a.cd || 1); else if (a.slot === 'q') frac = mp.cd[2] / (a.cd || 1); else if (a.slot === 'x') { frac = 1 - mp.ul / 100; const rdy = mp.ul >= 100; a.b.classList.toggle('ult-ready', rdy); a.b.classList.toggle('ult-on', mp.ut > 0); } else if (a.slot === 'atk') frac = mp.cd[0] / (CONFIG.CLASSES[pr.cls].atkCd || 0.5);
     a.el.style.height = clamp(frac, 0, 1) * 100 + '%';
   }
   // босс
@@ -6301,7 +7064,7 @@ function updateHud(now, dt) {
     if (du.st === 'count' && Math.ceil(du.l) !== S.lastCount) { S.lastCount = Math.ceil(du.l); Audio.sfx('count'); }
   } else db.style.display = 'none';
   // возрождение
-  if (!S.alive) { $('rs-t').textContent = mp.rt > 0 ? T('respawn_in', { n: Math.ceil(mp.rt) }) : T('you_died'); }
+  if (!S.alive) { $('rs-t').textContent = mp.rt > 0 ? T('respawn_in', { n: Math.ceil(mp.rt) }) : T('you_died'); if (S.revWait && mp.rt > 0) $('rs-s').textContent = T('rev_wait'); }
   // подсказки у порталов
   const ph = $('portalhint'), W = S.W; ph.style.display = 'none';
   if (S.pt && !W.duel && S.alive) {
@@ -6359,15 +7122,18 @@ function frame(nowMs) {
   safe(updateEnts, dt, clock, now);
   safe(updateFx, dt);
   if (S.hatch) updateHatch(dt);
-  const hc = S.hatch ? hatchCamera(dt) : false;
+  updateRevive(dt); secretsFx(dt); updateNestDeco();
+  const cc = S.coro ? updateCoro(dt) : false;
+  const hc = cc ? true : S.hatch ? hatchCamera(dt) : false;
   if (hc !== true) {
-    placeCamera(dt, S.px, S.py, S.pz, now);
+    { const sp = !S.alive ? spectateTarget() : null; if (sp) placeCamera(dt, sp.x, sp.y, sp.z, now); else placeCamera(dt, S.px, S.py, S.pz, now); }
     if (hc && hc.pos) { const e = S.hatch.blend * S.hatch.blend * (3 - 2 * S.hatch.blend); _cp.copy(camera.position); _cq.copy(camera.quaternion); camera.position.lerpVectors(hc.pos, _cp, e); camera.quaternion.slerpQuaternions(hc.q, _cq, e); }
   }
+  if (S.coroBlend && S.coroBlend.pos) { const cb = S.coroBlend; cb.t += dt; const e = Math.min(1, cb.t / 0.8), k = e * e * (3 - 2 * e); _cp.copy(camera.position); _cq.copy(camera.quaternion); camera.position.lerpVectors(cb.pos, _cp, k); camera.quaternion.slerpQuaternions(cb.q, _cq, k); if (e >= 1) S.coroBlend = null; }
   flushTramplers();
   S.world.update(camera.position, { x: S.px, y: S.py, z: S.pz }, clock, dt, S.tod, S.wx);
   if (S.foodMeshes) for (const f of S.foodMeshes) { f.rotation.y += dt * 1.2; const fx = f.userData.fx; if (fx) { const q = Math.sin(clock * 3 + f.position.x), r = 1 + 0.18 * q; if (!fx.rg) { fx.glow.material.opacity = 0.3 + 0.15 * q; continue; } fx.rg.scale.set(r, r, 1); fx.glow.material.opacity = 0.45 + 0.2 * q; fx.spark.position.y = 1.5 + 0.2 * Math.sin(clock * 2.2 + f.position.z); fx.spark.material.opacity = 0.6 + 0.3 * q; } }
-  if (now - lastHud > 0.1) { lastHud = now; updateHud(nowMs, dt); drawMinimap(); drawBigMap(); }
+  if (now - lastHud > 0.1) { lastHud = now; tutUpdate(); updateHud(nowMs, dt); drawMinimap(); drawBigMap(); }
   renderer.render(scene, camera);
 }
 
@@ -6382,7 +7148,14 @@ const ctl = {
   leave() { endSession(false); UI.showMenu(); },
   send(o) { if (S && S.conn) S.conn.send(o); },
   get session() { return S; },
-  activeProfile, menuSetDino, menuShowEgg, menuHatch, fade, pendingHatch: null,
+  eggThumb: (skin, colorHex) => {
+    const c = eggCanvas(skin, colorHex), t = document.createElement('canvas'); t.width = 120; t.height = 150; const g = t.getContext('2d');
+    g.save(); g.beginPath(); g.moveTo(60, 6); g.bezierCurveTo(100, 6, 114, 70, 108, 96); g.bezierCurveTo(102, 128, 84, 146, 60, 146); g.bezierCurveTo(36, 146, 18, 128, 12, 96); g.bezierCurveTo(6, 70, 20, 6, 60, 6); g.closePath(); g.clip();
+    g.drawImage(c, 100, 0, 312, 256, 0, 0, 120, 150);
+    const sh = g.createRadialGradient(42, 44, 4, 60, 84, 84); sh.addColorStop(0, 'rgba(255,255,255,.55)'); sh.addColorStop(0.25, 'rgba(255,255,255,0)'); sh.addColorStop(0.7, 'rgba(0,0,0,0)'); sh.addColorStop(1, 'rgba(0,0,0,.5)');
+    g.fillStyle = sh; g.fillRect(0, 0, 120, 150); g.restore();
+    g.strokeStyle = 'rgba(0,0,0,.35)'; g.lineWidth = 1.5; g.beginPath(); g.moveTo(60, 6); g.bezierCurveTo(100, 6, 114, 70, 108, 96); g.bezierCurveTo(102, 128, 84, 146, 60, 146); g.bezierCurveTo(36, 146, 18, 128, 12, 96); g.bezierCurveTo(6, 70, 20, 6, 60, 6); g.stroke();
+    return t.toDataURL(); }, activeProfile, menuSetDino, menuShowEgg, menuHatch, fade, pendingHatch: null,
   setPanelOpen(v) { panelOpen = v; if (S && S.conn && !S.o.online) S.conn.paused = !!v;   // одиночная игра на паузе, пока открыто меню
     if (document.pointerLockElement) { if (v) document.exitPointerLock(); } resetInput(); },
   relock() { if (!IS_TOUCH && S && S.welcomed) { try { canvas.requestPointerLock(); } catch (e) { /* ignore */ } } },
@@ -6408,7 +7181,7 @@ $('menubtn').addEventListener('touchstart', e => { e.stopPropagation(); }, { pas
   $('loading').style.display = 'none';
   requestAnimationFrame(frame);
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => { /* офлайн-кэш необязателен */ });
-  window.__dino = { buildEnemy, animateEnemy, get S() { return S; }, get clock() { return clock; }, ctl, THREE, foodMesh, scene, renderer, Profile, input, camera, menu3d, menuSetDino };      // для отладки и автотестов
+  window.__dino = { startCoro, get coro() { return S && S.coro; }, buildEnemy, animateEnemy, get S() { return S; }, get clock() { return clock; }, ctl, THREE, foodMesh, scene, renderer, Profile, input, camera, menu3d, menuSetDino };      // для отладки и автотестов
 })();
 
 return {};

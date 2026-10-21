@@ -19,6 +19,8 @@
   };
   RP.makeEnt = function (arch, x, z, lv, o) {
     o = o || {};
+    // потолок уровня врагов на локации — уровень её босса (в первой локации не выше 10)
+    var cap = CF.BOSS_LEVEL && CF.BOSS_LEVEL[this.biome]; if (cap && !o.owner) lv = Math.min(lv, cap);
     var W = this.W, sc = Sim.enemyScale(lv), y;
     var water = !!arch.water, swimY;
     // в океане водные плавают на разной глубине (своя «полка»), в озёрах суши — у поверхности, как раньше
@@ -44,6 +46,31 @@
     }
     return this.makeEnt(arch, p.x, p.z, this.lvAt(arch, p.x, p.z));
   };
+  // «бывалые»: на карте всегда есть динозавры минимум 7 уровня — двое сразу, а с ростом уровня игроков их становится больше
+  RP.eliteWant = function (topL) { return 2 + Math.floor(Math.max(0, topL - 1) / 6); };
+  RP.spawnElite = function (topL, near) {
+    var W = this.W, table = W.cfg.spawn, cands = [], all = [], id, a, k, p;
+    var hi = (CF.BOSS_LEVEL && CF.BOSS_LEVEL[this.biome]) || CF.MAX_LEVEL, lo = Math.max(1, hi - 3);   // бывалые: от (уровень босса − 3) до уровня босса
+    for (id in table) { a = ARCH[id]; if (!a || a.tiny || (a.role !== 'hostile' && a.role !== 'herd') || !a.lv || !!a.water !== !!W.ocean) continue; all.push(a); if (a.lv[1] >= lo) cands.push(a); }
+    if (!cands.length) cands = all;
+    if (!cands.length) return null;
+    var arch = cands[(this.rng() * cands.length) | 0], n = W.nest;
+    for (k = 0; k < 24; k++) {
+      p = arch.water ? W.randomWater(this.rng) : W.randomLand(this.rng, 45); if (!p) continue;
+      if (Math.hypot(p.x - n.x, p.z - n.z) < 110) continue;
+      if (near && Math.hypot(p.x - near.x, p.z - near.z) < 60) continue;
+      var lv = clamp(topL + [-1, 0, 0, 1][(this.rng() * 4) | 0], lo, hi);
+      var e = this.makeEnt(arch, p.x, p.z, lv); e.elite = true; return e;
+    }
+    return null;
+  };
+  RP.eliteFill = function (humans) {
+    if (this.mode === 'rush' || this.W.duel) return;
+    var topL = 1, cnt = 0, i, self = this;
+    for (i = 0; i < humans.length; i++) if (humans[i].alive && !humans[i].gone) topL = Math.max(topL, humans[i].profile.level | 0);
+    this.ents.forEach(function (e) { if (e.elite && !e.dead) cnt++; });
+    if (cnt < this.eliteWant(topL)) this.spawnElite(topL, humans[0] && humans[0].st);
+  };
   RP.initSpawns = function () {
     var table = this.W.cfg.spawn;
     for (var id in table) {
@@ -52,6 +79,7 @@
       if (ARCH[id].water && !this.W.randomWater(this.rng)) continue;            // в этом биоме нет глубокой воды
       for (var i = 0; i < n; i++) this.spawnEnemy(id);
     }
+    if (this.mode !== 'rush' && !this.W.duel) for (var j = 0; j < this.eliteWant(1); j++) this.spawnElite(1);
   };
   // защищает от падения при отсутствии воды: если воды нет — рыбу не создаём
   RP.queueRespawn = function (archId) { this.respawnQ.push({ t: this.t + (CF.RESPAWN_MIN || 22) + this.rng() * (CF.RESPAWN_RND || 22), id: archId }); };
@@ -72,10 +100,12 @@
         if (this.t - e.hitBy[pid] > 20) continue;
         var p = this.players.get(+pid);
         if (!p || p.bot) continue;
-        var xp = Sim.xpReward(arch, e.lv, p.profile.level);
+        var xp = Sim.xpReward(arch, e.lv, p.profile.level) * (arch.role === 'hostile' && this.isNight() ? 1.2 : 1);   // ночью за хищников на 20% больше опыта
         this.gainXp(p, xp);
         this.gainCoins(p, 1 + Math.floor(e.lv / 5) + (arch.role === 'hostile' ? 1 : 0));
         p.profile.stats.kills = (p.profile.stats.kills | 0) + 1;
+        this.rareFind(p);
+        if (arch.role !== 'bug' && arch.role !== 'fish') { this.questProgress(p, 'kill', 1); if (arch.role === 'hostile') this.questProgress(p, 'killh', 1); }
         if (!p.profile.seen) p.profile.seen = [];
         if (p.profile.seen.indexOf(arch.id) < 0 && arch.role !== 'bug') { p.profile.seen.push(arch.id); this.sendTo(p, { t: 'seen', id: arch.id }); }
         this.markDirty(p);
@@ -397,14 +427,17 @@
     b.q.push({ q: a.q, f: f, s: 0, yaw: yaw, jump: false, down: false, sprint: sp });
     if (b.q.length > 2) b.q.shift();
   };
-  RP.slowFor = function (p) { return p.slowT > this.t ? 0.65 : 1; };
+  RP.slowFor = function (p) { return (p.slowT > this.t ? 0.65 : 1) * (p.buffK === 'speed' && p.buffT > this.t ? 1.2 : 1) * (p.ultT > this.t ? p.ultSpd : 1); };
 
   // ---------------------------------------------------------------- такт сущностей
 
   // «подпитка» прокачки: рядом с каждым игроком всегда должно быть достаточно врагов, которых он может победить (уровень L-2…L+1).
   // Если их мало — рядом появляются существа местных видов нужного уровня; убитые не возрождаются, далёкие со временем убираются.
+  RP.isNight = function () { return this.tod < 0.22 || this.tod > 0.78; };
+  RP.isStorm = function () { return this.wx > 0.6; };
   RP.levelFill = function (humans) {
     if (this.mode === 'rush' || this.W.duel) return;
+    this.eliteFill(humans);
     var W = this.W, self = this, table = W.cfg.spawn, ids = [];
     for (var id in table) if (ARCH[id] && ARCH[id].role !== 'bug') ids.push(id);
     if (!ids.length) return;
@@ -425,6 +458,7 @@
       // чем выше уровень, тем больше врагов: на 1–3 уровне поменьше нападающих (спокойный старт), к 7+ — полный набор
       var KS = L <= 3 ? 0 : L <= 6 ? 1 : 2, fH = [3, 5, CF.FILL_HOST || 7][KS], fO = [6, 8, CF.FILL_OTHER || 9][KS],
           fXH = [2, 3, CF.FILL_XHOST || 4][KS], fXO = [4, 5, CF.FILL_XOTHER || 6][KS];
+      if (this.isNight()) { fH += 2; fXH += 1; }   // ночью хищников больше
       // слишком много нападающих вашего уровня (природные + подпитка): лишних, что далеко и не гонятся, тихо убираем — баланс по таблице
       if (hostN > fH + 1) {
         hostList = hostList.filter(function (e) { return !e.target && Math.hypot(e.st.x - p.st.x, e.st.z - p.st.z) > 45; })
@@ -463,6 +497,76 @@
       for (var j = 0; j < fills.length - cap; j++) { fills[j].dead = true; this.ents.delete(fills[j].id); }
     }
   };
+
+  // ---------------------------------------------------------------- гроза и секреты
+  // в грозу шанс редкой находки (монеты) при победе и еде
+  RP.petAct = function (p) {
+    var pt = p.profile.pet, s = p.st, self = this;
+    if (pt === 'chick' && p.hp < p.stats.hp && this.t - (p.lastHurt || 0) > 4) { p.hp = Math.min(p.stats.hp, p.hp + p.stats.hp * 0.04); this.events.push(['pet', p.id, 0]); }
+    else if (pt === 'lizard' && this.rng() < 0.3) { var c = 3 + ((this.rng() * 6) | 0) + Math.floor(p.profile.level / 4); this.gainCoins(p, c); this.events.push(['pet', p.id, 1, c]); }
+    else if (pt === 'hedgehog') {
+      var best = null, bd = 8;
+      this.ents.forEach(function (e) {
+        if (!(e.hp > 0) || e.dead || e.team === p.team || e.kind === 'b' || e.role === 'bug' || e.kind !== 'e' || e.role === 'herd' || e.role === 'prey') return;
+        var d = dist(e.st, s); if (d < bd) { bd = d; best = e; }
+      });
+      if (best) { this.damage(p, best, p.stats.dmg * 0.35, { noThorns: true, noUlt: true }); this.events.push(['pet', p.id, 2, best.id]); }
+    }
+  };
+  RP.rareFind = function (p) {
+    if (!this.isStorm() || p.bot || this.rng() > 0.12) return;
+    var c = 12 + ((this.rng() * 28) | 0); this.gainCoins(p, c); this.events.push(['rare', p.id, c]);
+  };
+  RP.updateStorm = function () {
+    if (!this.isStorm() || this.W.duel || this.mode === 'rush' || this.t < (this.boltT || 0)) return;
+    this.boltT = this.t + 5 + this.rng() * 8;
+    var hs = []; this.players.forEach(function (q) { if (!q.bot && q.alive && !q.gone) hs.push(q); });
+    if (!hs.length) return;
+    var q = hs[(this.rng() * hs.length) | 0];
+    this.events.push(['bolt', r1(q.st.x + (this.rng() - 0.5) * 110), r1(q.st.z + (this.rng() - 0.5) * 110)]);
+  };
+  // секреты: сундуки (монеты) и золотые плоды (усиление на время). Показываются только вблизи, после сбора возрождаются в другом месте
+  var BUFFS = ['speed', 'dmg', 'regen'];
+  RP.secretPos = function (kind) {
+    var W = this.W, st = this.W.nest;
+    for (var k = 0; k < 40; k++) {
+      var x, z, y;
+      if (W.features && W.features.caves && W.features.caves.length && kind === 'chest' && k < 14) { var c = W.features.caves[(this.rng() * W.features.caves.length) | 0]; x = c.x + (this.rng() - 0.5) * c.L * 0.5 * Math.cos(c.a); z = c.z + (this.rng() - 0.5) * c.L * 0.5 * Math.sin(c.a); y = c.f + 0.6; }
+      else { x = (this.rng() - 0.5) * (W.half - 40) * 2; z = (this.rng() - 0.5) * (W.half - 40) * 2; y = W.heightAt(x, z); }
+      if (Math.hypot(x, z) < CF.ARENA_R + 12 || Math.hypot(x - st.x, z - st.z) < 45) continue;
+      if (W.ocean ? !W.isDeep(x, z) : (y < W.waterY + 0.8 || W.isLava(x, z) || W.slopeAt(x, z) > 0.6)) continue;
+      return { x: r1(x), y: r1(y), z: r1(z) };
+    }
+    return null;
+  };
+  RP.updateSecrets = function (humans) {
+    if (this.W.duel || this.mode === 'rush') return;
+    if (!this.secrets) {
+      this.secrets = [];
+      // в океане сокровищ больше: 10 сундуков, 3 золотых плода и 4 жемчужины в гигантских раковинах
+      var NS = this.W.ocean ? 17 : 7, nChest = this.W.ocean ? 10 : 4, nFruit = this.W.ocean ? 3 : 3;
+      for (var i = 0; i < NS; i++) { var kind = i < nChest ? 'chest' : i < nChest + nFruit ? 'fruit' : 'pearl', pos = this.secretPos(kind); if (pos) this.secrets.push({ id: newId(), k: kind, x: pos.x, y: pos.y, z: pos.z, ready: 0 }); }
+    }
+    for (var j = 0; j < this.secrets.length; j++) {
+      var sc = this.secrets[j]; if (sc.ready > this.t) continue;
+      for (var h = 0; h < humans.length; h++) {
+        var p = humans[h]; if (!p.alive || p.gone) continue;
+        if (Math.hypot(p.st.x - sc.x, p.st.z - sc.z) > 3.2 || Math.abs(p.st.y - sc.y) > 7) continue;
+        this.collectSecret(p, sc); break;
+      }
+    }
+  };
+  RP.collectSecret = function (p, sc) {
+    var lv = p.profile.level, coins = 0, buff = '';
+    if (sc.k === 'pearl') { coins = 90 + lv * 6 + ((this.rng() * 80) | 0); this.gainCoins(p, coins); this.gainXp(p, 30 + lv * 6); }
+    else if (sc.k === 'chest') { coins = 35 + lv * 3 + ((this.rng() * 40) | 0); this.gainCoins(p, coins); this.gainXp(p, 20 + lv * 4); }
+    else { buff = BUFFS[(this.rng() * BUFFS.length) | 0]; p.buffK = buff; p.buffT = this.t + 90; this.gainXp(p, 12 + lv * 2); }
+    this.events.push(['sec', p.id, sc.k, coins, buff]);
+    this.markDirty(p);
+    var pos = this.secretPos(sc.k); if (pos) { sc.x = pos.x; sc.y = pos.y; sc.z = pos.z; }
+    sc.ready = this.t + 240;
+  };
+
   RP.updateEnts = function () {
     var t = this.t, self = this, humans = [];
     this.players.forEach(function (p) { if (!p.bot && !p.gone) humans.push(p); });
@@ -476,6 +580,11 @@
       self.enemyThink(e);
     });
     if (this.tick % 30 === 7) this.levelFill(humans);
+    if (this.tick % 25 === 11) this.updateStorm();
+    if (this.tick % 5 === 2) this.updateSecrets(humans);
+    if (this.tick % 75 === 9) humans.forEach(function (p) { if (p.alive && !p.gone && p.profile.pet) self.petAct(p); });
+    if (this.tick % 25 === 5) humans.forEach(function (p) { if (p.alive && p.buffK === 'regen' && p.buffT > self.t) p.hp = Math.min(p.stats.hp, p.hp + p.stats.hp * 0.03); });
+    if (this.tick % 30 === 3) humans.forEach(function (p) { if (p.alive && !p.gone) { p.profile.playTime = (p.profile.playTime | 0) + 1; self.questProgress(p, 'play', 1); } });
     // союзники-короли
     if (this.tick % 25 === 0) this.players.forEach(function (p) { if (!p.bot && p.alive) self.ensureKingAllies(p); });
     // возрождение мира

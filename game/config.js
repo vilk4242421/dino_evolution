@@ -9,7 +9,7 @@
     // Адрес сервера. Пусто = тот же адрес, с которого открыта страница.
     // Для APK / открытия как файл укажите, например: 'https://dino-evolution.onrender.com'
     SERVER_URL: '',
-    VERSION: '1.7.20',
+    VERSION: '1.13.1',
     PROTO: 7,                 // увеличивайте при несовместимых изменениях сети
 
     // --- сеть ---
@@ -72,6 +72,8 @@
       ichth: { aqua: true, hp: 80,  speed: 66, dmg: 10, hpPerLevel: 0.05, dmgPerLevel: 0.05, atkCd: 0.42, reach: 2.7, diet: ['fish'], waterSpeed: 310, dodge: 8 }
     },
     // типы динозавров в каждом мире: у каждого типа свой уровень, опыт и эволюция
+    // (не используется) типы, которые можно закрыть до уровня N любого из типов
+    TYPE_MIN_LV: {},
     TYPES: { land: ['carn', 'herb', 'fly'], sea: ['mosa', 'plio', 'ichth'] },
     // способности: Атака (ЛКМ), Рывок (Shift), E, Q, F (лазание/взлёт). cd — секунды
     ABILITIES: {
@@ -82,6 +84,16 @@
       plio:  { e: { id: 'guard', cd: 1 },   q: { id: 'sonic', cd: 16 } },
       ichth: { e: { id: 'torpedo', cd: 4 }, q: { id: 'sonic', cd: 14 } }
     },
+    // ульта: копится от ударов (и чуть от полученного урона), включается клавишей X / кнопкой
+    ULTS: {
+      carn:  { id: 'rampage', sec: 10, dmg: 1.6, spd: 1.25, heal: 0.3 },
+      herb:  { id: 'quake',   r: 16, dmg: 2.2, stun: 2.2, shield: 6 },
+      fly:   { id: 'storm',   r: 18, dmg: 1.3, stun: 2, sec: 8, spd: 1.3 },
+      mosa:  { id: 'whirl',   r: 15, dmg: 1.9, stun: 2, heal: 0.2 },
+      plio:  { id: 'tide',    r: 22, heal: 0.6, allyHeal: 0.4, shield: 4 },
+      ichth: { id: 'frenzy',  sec: 9, dmg: 1.5, spd: 1.4 }
+    },
+    ULT_HIT: 4, ULT_HURT: 1.5, ULT_MAX: 100,
     RAGE_HITS: 3, RAGE_MULT: 2, FINISH_HP: 0.2, FINISH_MULT: 1.5,
     GUARD_BLOCK: 0.5, HERD_SEC: 20, HERD_COUNT: 3,
     DUEL_SEC: 90, DUEL_COUNTDOWN: 3, DUEL_R: 24,
@@ -91,13 +103,71 @@
     EVO_TIER_LV: [2, 8, 16],        // с какого уровня открывается 1-я, 2-я и 3-я развилка
     EVO_RESET_COST: 0,              // переключение и сброс бесплатные
 
+    // --- питомцы (монеты): один активный, даёт небольшую пользу ---
+    PETS: {
+      lizard:   { price: 350, ico: '🦎', n: { ru: 'Ящерка-кладоискатель', en: 'Treasure lizard' }, d: { ru: 'Время от времени находит и приносит монеты.', en: 'Now and then finds and brings coins.' } },
+      chick:    { price: 450, ico: '🐤', n: { ru: 'Целитель-птенец', en: 'Healer chick' }, d: { ru: 'Вне боя медленно лечит вас.', en: 'Slowly heals you out of combat.' } },
+      hedgehog: { price: 600, ico: '🦔', n: { ru: 'Колючий ёжик', en: 'Spiky hedgehog' }, d: { ru: 'Колет ближайшего врага рядом (35 % вашего урона).', en: 'Pokes the nearest enemy (35% of your damage).' } },
+      firefly:  { price: 700, ico: '✨', n: { ru: 'Светлячок', en: 'Firefly' }, d: { ru: 'Освещает ночью и даёт +10 % опыта.', en: 'Lights the night and gives +10% XP.' } }
+    },
     // --- косметика (монеты) ---
+    // slot: hat (поле cosmetic), trail (след), pat (цвет узора, поле patc), rfx (эффект рёва); price: null — только крафт (craft: кости/шкуры)
     COSMETICS: {
       scarf:  { price: 120, n: { ru: 'Красный шарф', en: 'Red scarf' } },
       aura:   { price: 300, n: { ru: 'Золотая аура', en: 'Golden aura' } },
       party:  { price: 180, n: { ru: 'Праздничный колпак', en: 'Party hat' } },
-      glasses:{ price: 240, n: { ru: 'Очки', en: 'Sunglasses' } }
+      glasses:{ price: 240, n: { ru: 'Очки', en: 'Sunglasses' } },
+      tophat: { price: 260, n: { ru: 'Цилиндр', en: 'Top hat' } },
+      wizard: { price: 320, n: { ru: 'Колпак мага', en: 'Wizard hat' } },
+      viking: { price: 380, n: { ru: 'Шлем викинга', en: 'Viking helmet' } },
+      flower: { price: 200, n: { ru: 'Цветочный венок', en: 'Flower wreath' } },
+      plume:  { price: 280, n: { ru: 'Перья (особенно круто у летающих)', en: 'Plume (great on flyers)' } },
+      skullhat: { price: null, craft: { bone: 6, hide: 1 }, n: { ru: 'Череп-шлем', en: 'Skull helm' } },
+      // морфы — окраска тела: c1 — основной цвет (если нет — цвет динозавра), c2 — спина, c3 — брюхо, pc — цвет узора
+      m_dusk:   { slot: 'morph', price: 300, ico: '🌆', m: { c2: 0x30266b, pat: { type: 'none' } }, n: { ru: 'Сумерки (2 цвета)', en: 'Dusk (2-tone)' } },
+      m_frost:  { slot: 'morph', price: 300, ico: '❄', m: { c2: 0xf2f9ff, pc: 0x8ec9ff, pat: { type: 'spots', amt: 0.8, freq: 3.6 } }, n: { ru: 'Иней (2 цвета)', en: 'Frost (2-tone)' } },
+      m_ember:  { slot: 'morph', price: 350, ico: '🔥', m: { c2: 0x17171c, pc: 0xff7a1a, pat: { type: 'ombre', amt: 0.9 } }, n: { ru: 'Уголь (2 цвета)', en: 'Ember (2-tone)' } },
+      m_moss:   { slot: 'morph', price: 350, ico: '🍃', m: { c2: 0x6a4a2a, pc: 0x2f5a2a, pat: { type: 'camo', amt: 0.85 } }, n: { ru: 'Мшистый (2 цвета)', en: 'Mossy (2-tone)' } },
+      m_sun:    { slot: 'morph', price: 600, ico: '🌅', m: { c2: 0xff5a2a, c3: 0xfff0b0, pc: 0x7a1e10, pat: { type: 'stripes', amt: 0.9, freq: 7 } }, n: { ru: 'Закат (3 цвета, полосы)', en: 'Sunset (3-tone, stripes)' } },
+      m_tropic: { slot: 'morph', price: 600, ico: '🌴', m: { c2: 0x20c0b0, c3: 0xffe36a, pc: 0xff5aa0, pat: { type: 'bands', amt: 0.9, freq: 6 } }, n: { ru: 'Тропик (3 цвета, кольца)', en: 'Tropic (3-tone, rings)' } },
+      m_royal:  { slot: 'morph', price: 700, ico: '👑', m: { c2: 0x5a2aa8, c3: 0xf8f0d8, pc: 0xf2c230, pat: { type: 'chevron', amt: 0.9, freq: 6 } }, n: { ru: 'Королевский (3 цвета, ёлочка)', en: 'Royal (3-tone, chevron)' } },
+      m_toxic:  { slot: 'morph', price: 700, ico: '☣', m: { c2: 0x1a1a1a, c3: 0xb7ff3a, pc: 0xb7ff3a, pat: { type: 'stripes', amt: 0.85, freq: 9 } }, n: { ru: 'Токсик (3 цвета, полосы)', en: 'Toxic (3-tone, stripes)' } },
+      m_tiger:  { slot: 'morph', price: 900, ico: '🐯', m: { c1: 0xe8862a, c2: 0xc2611a, c3: 0xf8efe0, pc: 0x1a1008, pat: { type: 'stripes', amt: 0.95, freq: 8 } }, n: { ru: 'Тигровый (свои 3 цвета)', en: 'Tiger (own 3 colors)' } },
+      m_leopard:{ slot: 'morph', price: 900, ico: '🐆', m: { c1: 0xd9a441, c2: 0xb9822a, c3: 0xf4e6c0, pc: 0x3a2410, pat: { type: 'rosette', amt: 0.95, freq: 3.4 } }, n: { ru: 'Леопардовый (розетки)', en: 'Leopard (rosettes)' } },
+      // скины яйца: видны на экране вылупления и как украшение гнезда (бесплатно появляются в «Гнезде»)
+      e_speckle:{ slot: 'egg', price: 150, ico: '🥚', n: { ru: 'Яйцо: крапчатое', en: 'Egg: speckled' } },
+      e_stripe: { slot: 'egg', price: 200, ico: '🥚', n: { ru: 'Яйцо: прожилки', en: 'Egg: scrawled' } },
+      e_jungle: { slot: 'egg', price: 250, ico: '🥚', n: { ru: 'Яйцо: эму', en: 'Egg: emu' } },
+      e_candy:  { slot: 'egg', price: 250, ico: '🥚', n: { ru: 'Яйцо: малиновка', en: 'Egg: robin' } },
+      e_gold:   { slot: 'egg', price: 400, ico: '🥚', n: { ru: 'Яйцо: золотое', en: 'Egg: golden' } },
+      e_crystal:{ slot: 'egg', price: 400, ico: '🥚', n: { ru: 'Яйцо: кальцит', en: 'Egg: calcite' } },
+      e_lava:   { slot: 'egg', price: 450, ico: '🥚', n: { ru: 'Яйцо: вулканическое', en: 'Egg: volcanic' } },
+      e_galaxy: { slot: 'egg', price: 500, ico: '🥚', n: { ru: 'Яйцо: чёрный опал', en: 'Egg: black opal' } },
+      e_opal:   { slot: 'egg', price: 600, ico: '🥚', n: { ru: 'Яйцо: жемчуг', en: 'Egg: pearl' } },
+      p_red:    { slot: 'pat', price: 160, c: 0xe0342a, n: { ru: 'Узор: алый', en: 'Pattern: scarlet' } },
+      p_blue:   { slot: 'pat', price: 160, c: 0x2a6ae0, n: { ru: 'Узор: синий', en: 'Pattern: blue' } },
+      p_gold:   { slot: 'pat', price: 260, c: 0xf2c230, n: { ru: 'Узор: золотой', en: 'Pattern: gold' } },
+      p_neon:   { slot: 'pat', price: 260, c: 0x3dffb0, n: { ru: 'Узор: неон', en: 'Pattern: neon' } },
+      p_bone:   { slot: 'pat', price: null, c: 0xf2efe0, craft: { bone: 5, hide: 2 }, n: { ru: 'Узор: костяной', en: 'Pattern: bone' } },
+      r_fire:   { slot: 'rfx', price: 220, c: 0xff6a2a, n: { ru: 'Рёв: огонь', en: 'Roar: fire' } },
+      r_ice:    { slot: 'rfx', price: 220, c: 0x7ad8ff, n: { ru: 'Рёв: лёд', en: 'Roar: ice' } },
+      r_toxic:  { slot: 'rfx', price: 300, c: 0x9aff3a, n: { ru: 'Рёв: яд', en: 'Roar: toxic' } },
+      r_skull:  { slot: 'rfx', price: null, c: 0xf2efe0, craft: { bone: 8, hide: 4 }, n: { ru: 'Рёв: призраки', en: 'Roar: ghosts' } }
     },
+
+
+    // --- ежедневные задания и серия входов (1.8.0) ---
+    // n(lv) — сколько нужно (play — секунд), coins — награда; текст t подставляет {n}; boss доступен с 10 уровня
+    QUESTS: {
+      kill:  { n: function (lv) { return 5 + Math.floor(lv / 4); }, coins: 40,  ico: '⚔️', t: { ru: 'Победи врагов: {n}', en: 'Defeat {n} enemies' } },
+      killh: { n: function (lv) { return 3 + Math.floor(lv / 6); }, coins: 60,  ico: '🦖', t: { ru: 'Победи хищников: {n}', en: 'Defeat {n} predators' } },
+      eat:   { n: function (lv) { return 8 + Math.floor(lv / 2); }, coins: 40,  ico: '🍖', t: { ru: 'Поешь {n} раз', en: 'Eat {n} times' } },
+      play:  { n: function () { return 360; },                       coins: 40,  ico: '⏱️', t: { ru: 'Играй {n} мин', en: 'Play for {n} min' }, mins: true },
+      boss:  { n: function () { return 1; },                         coins: 120, ico: '👑', t: { ru: 'Победи босса', en: 'Defeat a boss' }, minLv: 10 }
+    },
+    REVIVE_SEC: 14,            // сколько друг может поднять упавшего, прежде чем тот сам возродится у гнезда
+    QUEST_BONUS: 80,           // за все задания дня
+    STREAK_COINS: 25,          // за вход: 25 × серия (до 7 дней)
 
     BIOMES: ['forest', 'snow', 'mountain', 'desert', 'swamp', 'volcano'],        // мир «Суша»
     OCEANS: ['reef', 'kelp', 'arctic', 'vents', 'abyss'],                        // мир «Океан» (только морской динозавр)
@@ -264,35 +334,35 @@
     reef: {
       ocean: true, water: 0x2aa6c4, deep: 0x1f8aa6, vis: 95, seed: 8111, ground: [0xe8d6a4, 0xd8c08a, 0xc8ac78], edge: 0xf0e2b8, rock: 0xc8a888, hill: 0xe8d6a4,
       sky: [0x4aa8e8, 0xcdeaf4], sun: 0xfff6dc, hemi: [0xe8f8ff, 0x6a9aa8], fog: 1.0, liquid: 'water', weather: 'marine',
-      trees: 0, rocks: 160, treeStyle: 'none', music: 'reef',
+      trees: 0, rocks: 520, treeStyle: 'none', music: 'reef',
       spawn: { reeffish: 95, barracuda: 24, ammonite: 30, hybodus: 16, archelon: 10, puffer: 10, notosaur: 5 }, hazard: null,
       n: { ru: 'Коралловый риф', en: 'Coral Reef' }, boss: 'megalodon'
     },
     kelp: {
       ocean: true, water: 0x2a8a8a, deep: 0x1d6a6a, vis: 70, seed: 8233, ground: [0x8a8a5a, 0x6f7a4a, 0x5a663e], edge: 0xc8c090, rock: 0x6a7068, hill: 0x8a8a5a,
       sky: [0x5a96c8, 0xc8dce0], sun: 0xf6f2dc, hemi: [0xd8f0e8, 0x3a5a4a], fog: 0.85, liquid: 'water', weather: 'marine',
-      trees: 0, rocks: 320, treeStyle: 'none', music: 'kelp',
+      trees: 0, rocks: 620, treeStyle: 'none', music: 'kelp',
       spawn: { kelpfish: 85, pikefish: 22, nautilus: 26, ichthyo: 16, plesio: 10, cuttle: 10, seaturtle: 5 }, hazard: null,
       n: { ru: 'Ламинариевый лес', en: 'Kelp Forest' }, boss: 'plesioqueen'
     },
     arctic: {
       ocean: true, water: 0x5a9ab8, deep: 0x3a6f8a, vis: 75, seed: 8377, ground: [0x9aa8b4, 0x86929c, 0x707c86], edge: 0xe8f2f8, rock: 0x8a98a8, hill: 0xf4f9fc,
       sky: [0x8fb3d4, 0xe3eef6], sun: 0xf0f6ff, hemi: [0xe8f4ff, 0x6a8aa0], fog: 0.85, liquid: 'water', weather: 'marine',
-      trees: 0, rocks: 260, treeStyle: 'none', music: 'arctic',
+      trees: 0, rocks: 540, treeStyle: 'none', music: 'arctic',
       spawn: { icefish: 80, icebiter: 20, iceammon: 26, frostshark: 18, elasmo: 10, icesquid: 10, iceturtle: 5 }, hazard: 'cold',
       n: { ru: 'Ледяной океан', en: 'Frozen Sea' }, boss: 'kronos'
     },
     vents: {
       ocean: true, water: 0x2a5a6a, deep: 0x16323c, vis: 55, seed: 8521, ground: [0x3a3634, 0x2e2a29, 0x24201f], edge: 0x6a5a4a, rock: 0x2a2626, hill: 0x4a4240,
       sky: [0x4a7090, 0xb8c8d0], sun: 0xffe8d0, hemi: [0xd0e0e8, 0x3a2a24], fog: 0.7, liquid: 'water', weather: 'vent',
-      trees: 0, rocks: 520, treeStyle: 'none', music: 'vents',
+      trees: 0, rocks: 820, treeStyle: 'none', music: 'vents',
       spawn: { ventfish: 70, ventbiter: 18, ventammon: 24, dunkle: 16, magmaeel: 10, henodus: 8, ventsquid: 10, ventnotho: 5 }, hazard: 'vent',
       n: { ru: 'Чёрные курильщики', en: 'Hydrothermal Vents' }, boss: 'dunkleo'
     },
     abyss: {
       ocean: true, water: 0x1a3a5a, deep: 0x0c1c34, vis: 50, seed: 8663, ground: [0x2a2e3a, 0x22252f, 0x1a1c24], edge: 0x5a5a6a, rock: 0x22242c, hill: 0x2a2e3a,
       sky: [0x2a4a6a, 0x8aa0b8], sun: 0xc8d8f0, hemi: [0xa0b8d8, 0x101420], fog: 0.6, liquid: 'water', weather: 'glow',
-      trees: 0, rocks: 300, treeStyle: 'none', music: 'abyss',
+      trees: 0, rocks: 600, treeStyle: 'none', music: 'abyss',
       spawn: { lanternfish: 70, gulper: 18, abyssammon: 24, angler: 16, abyssmosa: 10, glowsquid: 10, deepplesio: 6 }, hazard: null,
       n: { ru: 'Бездна', en: 'The Abyss' }, boss: 'tylo'
     }
@@ -432,13 +502,100 @@
     { id: 'tourney', ico: '🥇', n: { ru: 'Победитель турнира', en: 'Tournament winner' }, d: { ru: 'Выиграть турнир дуэлей', en: 'Win a duel tournament' }, t: function (p) { return p.stats.tourney >= 1; } },
     { id: 'rush5', ico: '🔥', n: { ru: 'Босс-раш', en: 'Boss rush' }, d: { ru: 'Дойти до 5 волны босс-раша', en: 'Reach wave 5 of the boss rush' }, t: function (p) { return p.stats.rush >= 5; } },
     { id: 'rich', ico: '🪙', n: { ru: 'Копилка', en: 'Piggy bank' }, d: { ru: 'Накопить 1000 монет', en: 'Hold 1000 coins' }, t: function (p) { return p.coins >= 1000 || (p.stats.coinsEarned || 0) >= 1000; } },
+    { id: 'forestking', ico: '🌲', n: { ru: 'Король леса', en: 'King of the forest' }, d: { ru: 'Победить босса леса', en: 'Defeat the forest boss' }, t: function (p) { return p.kings.indexOf('forest') >= 0; } },
+    { id: 'boss5', ico: '☠', n: { ru: 'Охотник на боссов', en: 'Boss hunter' }, d: { ru: 'Победить боссов 5 раз', en: 'Defeat bosses 5 times' }, t: function (p) { return p.stats.bosses >= 5; } },
+    { id: 'streak7', ico: '📅', n: { ru: 'Неделя подряд', en: 'A week in a row' }, d: { ru: 'Серия входа 7 дней', en: '7-day login streak' }, t: function (p) { return (p.daily && p.daily.best | 0) >= 7; } },
+    { id: 'streak30', ico: '🔥', n: { ru: 'Верный 30 дней', en: 'Loyal 30 days' }, d: { ru: 'Серия входа 30 дней', en: '30-day login streak' }, t: function (p) { return (p.daily && p.daily.best | 0) >= 30; } },
+    { id: 'ult10', ico: '💥', n: { ru: 'Мастер ульты', en: 'Ultimate master' }, d: { ru: 'Использовать ульту 10 раз', en: 'Use your ultimate 10 times' }, t: function (p) { return (p.stats.ults | 0) >= 10; } },
+    { id: 'pet1', ico: '🐾', n: { ru: 'Друг зверей', en: 'Animal friend' }, d: { ru: 'Завести питомца', en: 'Get a pet' }, t: function (p) { return (p.pets || []).length >= 1; } },
+    { id: 'kill500', ico: '🗡', n: { ru: 'Гроза саванн', en: 'Terror of the plains' }, d: { ru: 'Победить 500 врагов', en: 'Defeat 500 enemies' }, t: function (p) { return p.stats.kills >= 500; } },
+    { id: 'quest30', ico: '📜', n: { ru: 'Исполнитель', en: 'Taskmaster' }, d: { ru: 'Выполнить 30 ежедневных заданий', en: 'Complete 30 daily quests' }, t: function (p) { return (p.stats.quests | 0) >= 30; } },
+    { id: 'nest3', ico: '🪺', n: { ru: 'Домовитый', en: 'Homemaker' }, d: { ru: 'Поставить 3 предмета в гнездо', en: 'Place 3 items in your nest' }, t: function (p) { return (p.nest && p.nest.put || []).length >= 3; } },
+    { id: 'craft1', ico: '🛠', n: { ru: 'Мастер', en: 'Crafter' }, d: { ru: 'Создать предмет в мастерской', en: 'Craft an item in the workshop' }, t: function (p) { return (p.stats.crafted | 0) >= 1; } },
     { id: 'tough', ico: '💀', n: { ru: 'Не сдаваться', en: 'Never give up' }, d: { ru: 'Погибнуть 10 раз и продолжить', en: 'Die 10 times and keep going' }, t: function (p) { return p.stats.deaths >= 10; } }
   ];
+
+  // награды за достижения: c — монеты, title — титул, cos — наряд (забираются кнопкой, один раз)
+  C.TITLES = {
+    hunter: { ico: '🏹', n: { ru: 'Охотник', en: 'Hunter' } }, ancient: { ico: '🐉', n: { ru: 'Древний', en: 'Ancient' } },
+    king: { ico: '👑', n: { ru: 'Король биома', en: 'Biome king' } }, forestking: { ico: '🌲', n: { ru: 'Король леса', en: 'King of the forest' } },
+    bosshunter: { ico: '☠', n: { ru: 'Охотник на боссов', en: 'Boss hunter' } }, oceanlord: { ico: '🔱', n: { ru: 'Повелитель океана', en: 'Lord of the Ocean' } },
+    lord: { ico: '🌟', n: { ru: 'Владыка эпох', en: 'Lord of the Ages' } }, champion: { ico: '🏆', n: { ru: 'Чемпион арены', en: 'Arena champion' } },
+    tourney: { ico: '🥇', n: { ru: 'Победитель турнира', en: 'Tournament winner' } }, streak30: { ico: '🔥', n: { ru: 'Верный 30 дней', en: 'Loyal 30 days' } },
+    tough: { ico: '💀', n: { ru: 'Несгибаемый', en: 'Unbreakable' } }, friend: { ico: '🐾', n: { ru: 'Друг зверей', en: 'Animal friend' } },
+    ult: { ico: '💥', n: { ru: 'Мастер ульты', en: 'Ultimate master' } }
+  };
+  C.ACH_REWARD = {
+    first: { c: 30 }, hunter: { c: 100, title: 'hunter' }, glutton: { c: 80 }, lv10: { c: 100 }, lv20: { c: 250 }, lv30: { c: 500, title: 'ancient' }, evo: { c: 100 },
+    king1: { c: 150, title: 'king' }, forestking: { c: 100, title: 'forestking' }, boss5: { c: 300, title: 'bosshunter' }, sea1: { c: 150 }, sea5: { c: 500, title: 'oceanlord' },
+    king3: { c: 300 }, lord: { c: 800, title: 'lord', cos: 'aura' }, duel1: { c: 100 }, duel10: { c: 300, title: 'champion' }, tourney: { c: 300, title: 'tourney' },
+    rush5: { c: 200 }, nest3: { c: 150 }, craft1: { c: 120 }, rich: { c: 100 }, tough: { c: 100, title: 'tough' }, streak7: { c: 150 }, streak30: { c: 500, title: 'streak30', cos: 'party' },
+    ult10: { c: 120, title: 'ult' }, pet1: { c: 80, title: 'friend' }, kill500: { c: 250 }, quest30: { c: 200 }
+  };
+
+  // ---------- рейтинг дуэлей, лиги и сезоны (1.10.2) ----------
+  C.ELO_START = 1000; C.ELO_K = 32;
+  C.LEAGUES = [
+    { id: 'bronze', min: 0, ico: '🥉', n: { ru: 'Бронза', en: 'Bronze' }, reward: { c: 100 } },
+    { id: 'silver', min: 1100, ico: '🥈', n: { ru: 'Серебро', en: 'Silver' }, reward: { c: 250, title: 's_silver' } },
+    { id: 'gold', min: 1300, ico: '🥇', n: { ru: 'Золото', en: 'Gold' }, reward: { c: 500, title: 's_gold', cos: 'tophat' } },
+    { id: 'plat', min: 1500, ico: '💎', n: { ru: 'Платина', en: 'Platinum' }, reward: { c: 900, title: 's_plat', cos: 'viking' } }
+  ];
+  C.TITLES.s_silver = { ico: '🥈', n: { ru: 'Серебряная лига', en: 'Silver league' } };
+  C.TITLES.s_gold = { ico: '🥇', n: { ru: 'Золотая лига', en: 'Gold league' } };
+  C.TITLES.s_plat = { ico: '💎', n: { ru: 'Платиновая лига', en: 'Platinum league' } };
+  C.leagueOf = function (elo) { var r = C.LEAGUES[0]; for (var i = 0; i < C.LEAGUES.length; i++) if (elo >= C.LEAGUES[i].min) r = C.LEAGUES[i]; return r; };
+  // сезон — календарный месяц (UTC): '2026-10'
+  C.seasonId = function (now) { var d = new Date(now); return d.getUTCFullYear() + '-' + (d.getUTCMonth() < 9 ? '0' : '') + (d.getUTCMonth() + 1); };
+  C.seasonLeftDays = function (now) { var d = new Date(now); return Math.max(1, Math.ceil((Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1) - now) / 86400000)); };
+
+  // ---------- гнездо: трофеи и яйца вокруг мирового гнезда (1.10.3) ----------
+  C.NEST_MAX = 12;
+  C.NEST_ITEMS = {
+    egg_blue: { ico: '🥚', price: 150, c: 0x6ac8ff, n: { ru: 'Голубое яйцо', en: 'Blue egg' } },
+    egg_spot: { ico: '🥚', price: 200, c: 0xe8dcc0, n: { ru: 'Пятнистое яйцо', en: 'Speckled egg' } },
+    egg_gold: { ico: '🥚', price: 500, c: 0xffd35a, n: { ru: 'Золотое яйцо', en: 'Golden egg' } },
+    leaves_green: { ico: '🍃', price: 40, c: 0x4aa84a, n: { ru: 'Зелёные листья', en: 'Green leaves' } },
+    leaves_red:   { ico: '🍂', price: 40, c: 0xc2501e, n: { ru: 'Осенние листья', en: 'Autumn leaves' } },
+    leaves_gold:  { ico: '🍁', price: 90, c: 0xf0b820, n: { ru: 'Золотые листья', en: 'Golden leaves' } },
+    fern:     { ico: '🌿', price: 60, c: 0x2f8a3a, n: { ru: 'Папоротник', en: 'Fern' } },
+    flowers:  { ico: '🌸', price: 80, c: 0xff7ab0, n: { ru: 'Полевые цветы', en: 'Wildflowers' } },
+    mushrooms:{ ico: '🍄', price: 100, c: 0xd9302a, n: { ru: 'Грибы', en: 'Mushrooms' } },
+    moss:     { ico: '🟩', price: 60, c: 0x5aa04a, n: { ru: 'Моховые кочки', en: 'Moss mounds' } },
+    shells:   { ico: '🐚', price: 90, c: 0xf4d8d0, n: { ru: 'Ракушки', en: 'Seashells' } },
+    feathers: { ico: '🪶', price: 120, c: 0x3ac8ff, n: { ru: 'Яркие перья', en: 'Bright feathers' } },
+    crystals: { ico: '💎', price: 220, c: 0x9a6aff, n: { ru: 'Светящиеся кристаллы', en: 'Glowing crystals' } },
+    lantern:  { ico: '🏮', price: 250, c: 0xffb040, n: { ru: 'Фонарь', en: 'Lantern' } },
+    bones:    { ico: '🦴', craft: { bone: 3, hide: 0 }, c: 0xf2efe0, n: { ru: 'Кости на память', en: 'Keepsake bones' } },
+    hide:     { ico: '🟫', craft: { bone: 0, hide: 3 }, c: 0x8a5a32, n: { ru: 'Шкура-трофей', en: 'Trophy hide' } }
+  };
+  // трофеи боссов появляются сами, когда победил босса биома: tr_forest, tr_snow, ...
+  C.nestItem = function (id) {
+    if (C.NEST_ITEMS[id]) return C.NEST_ITEMS[id];
+    if (id.indexOf('es_') === 0 && C.COSMETICS['e_' + id.slice(3)]) return { ico: '🥚', eggskin: 'e_' + id.slice(3), c: 0xffffff, n: C.COSMETICS['e_' + id.slice(3)].n };
+    if (id.indexOf('tr_') === 0 && C.ALL_BIOMES.indexOf(id.slice(3)) >= 0) return { ico: '💀', trophy: id.slice(3), c: 0xf2efe0, n: { ru: 'Трофей: ' + id.slice(3), en: 'Trophy: ' + id.slice(3) } };
+    return null;
+  };
+  C.nestOwned = function (pr, id) {
+    var it = C.nestItem(id); if (!it) return false;
+    if (it.eggskin) return pr.cosmetics.indexOf(it.eggskin) >= 0;
+    if (it.trophy) return (pr.trophies && pr.trophies[it.trophy] | 0) > 0;
+    return (pr.nest && pr.nest.items || []).indexOf(id) >= 0;
+  };
+  C.SLOT_FIELD = { hat: 'cosmetic', pat: 'patc', rfx: 'rfx', morph: 'morph', egg: 'eggskin' };
+  C.cosSlot = function (id) { var c = C.COSMETICS[id]; return c ? c.slot || 'hat' : null; };
+  C.achById = function (id) { for (var i = 0; i < C.ACH.length; i++) if (C.ACH[i].id === id) return C.ACH[i]; return null; };
 
   // ---------- описания типов и способностей (одни и те же для меню, паузы и панели способностей) ----------
   C.ABIL_INFO = {
     atk:     { ico: '🦷', n: { ru: 'Атака', en: 'Attack' }, d: { ru: 'Обычный удар по цели впереди. Три удара подряд без промаха — «ярость»: следующий удар ×2. Добивание цели с малым здоровьем бьёт на 50 % сильнее.', en: 'A basic hit on the target ahead. Three hits in a row trigger rage: the next hit is ×2. Finishing a weak target hits 50% harder.' } },
     pounce:  { ico: '⚡', n: { ru: 'Рывок', en: 'Pounce' }, d: { ru: 'Прыжок вперёд на ~8 м и мощный удар ×1.6 по первой цели на пути. Перезарядка {cd} с.', en: 'Leap ~8 m forward and strike the first target for ×1.6 damage. Cooldown {cd}s.' } },
+    rampage: { ico: '🔥', n: { ru: 'Ярость зверя', en: 'Beast fury' }, d: { ru: 'УЛЬТА: 10 с урон ×1.6, скорость +25 %, сразу лечит 30 % здоровья.', en: 'ULT: 10s damage x1.6, speed +25%, heals 30% HP at once.' } },
+    quake:   { ico: '🌋', n: { ru: 'Землетрясение', en: 'Quake' }, d: { ru: 'УЛЬТА: мощная волна на 16 м — урон ×2.2, оглушение 2 с, вы под щитом 6 с.', en: 'ULT: huge 16 m shockwave — damage x2.2, 2s stun, you get a 6s shield.' } },
+    storm:   { ico: '🌪', n: { ru: 'Ураган', en: 'Storm' }, d: { ru: 'УЛЬТА: буря на 18 м оглушает и ранит врагов, 8 с скорость +30 %.', en: 'ULT: 18 m storm stuns and hurts enemies, 8s speed +30%.' } },
+    whirl:   { ico: '🌀', n: { ru: 'Водоворот', en: 'Whirlpool' }, d: { ru: 'УЛЬТА: водоворот на 15 м — урон ×1.9, оглушение 2 с, лечит 20 %.', en: 'ULT: 15 m whirlpool — damage x1.9, 2s stun, heals 20%.' } },
+    tide:    { ico: '🌊', n: { ru: 'Целебный прилив', en: 'Healing tide' }, d: { ru: 'УЛЬТА: лечит 60 % здоровья вам и 40 % союзникам рядом, щит 4 с.', en: 'ULT: heals you 60% and nearby allies 40%, 4s shield.' } },
+    frenzy:  { ico: '⚡', n: { ru: 'Бешенство', en: 'Frenzy' }, d: { ru: 'УЛЬТА: 9 с урон ×1.5 и скорость +40 %.', en: 'ULT: 9s damage x1.5 and speed +40%.' } },
     roar:    { ico: '📣', n: { ru: 'Рёв', en: 'Roar' }, d: { ru: 'Враги вокруг (до 14 м) пугаются, убегают и замедляются на 3.5 с. Перезарядка {cd} с.', en: 'Enemies within 14 m panic, flee and are slowed for 3.5s. Cooldown {cd}s.' } },
     guard:   { ico: '🛡', n: { ru: 'Щит', en: 'Guard' }, d: { ru: 'Стойка: входящий урон −50 %, но двигаться нельзя. Включается и выключается нажатием.', en: 'Stance: incoming damage −50%, but you cannot move. Toggle on and off.' } },
     herd:    { ico: '🦶', n: { ru: 'Топот', en: 'Stomp' }, d: { ru: 'Удар по земле: урон и оглушение всем вокруг (8 м), врагов отбрасывает. Перезарядка {cd} с.', en: 'Ground slam: damage and stun to everything around (8 m), knocks enemies back. Cooldown {cd}s.' } },
