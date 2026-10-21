@@ -5047,8 +5047,8 @@ let ctl = null, openName = null, openRender = null, toastT = 0, bannerT = 0;
 const CLS_ICO = Object.fromEntries(Object.keys(CONFIG.CLS_INFO).map(k => [k, CONFIG.CLS_INFO[k].ico]));
 const BIOME_ICO = { forest: '🌲', snow: '❄️', mountain: '⛰️', desert: '🏜️', swamp: '🐊', volcano: '🌋', reef: '🐠', kelp: '🌿', arctic: '🧊', vents: '♨️', abyss: '🦑' };
 const AUTH_ERR = {
-  bad_nick: { ru: 'Ник: 3–14 символов (буквы, цифры, _ и -)', en: 'Nickname: 3–14 chars (letters, digits, _ and -)' }, bad_password: { ru: 'Пароль: от 6 символов', en: 'Password: 6+ characters' },
-  nick_taken: { ru: 'Этот ник уже занят', en: 'Nickname already taken' }, bad_credentials: { ru: 'Неверный ник или пароль', en: 'Wrong nickname or password' },
+  bad_nick: { ru: 'Ник: 3–15 символов (буквы, цифры, _ и -)', en: 'Nickname: 3–15 chars (letters, digits, _ and -)' }, bad_password: { ru: 'Пароль: от 6 символов', en: 'Password: 6+ characters' },
+  bad_name: { ru: 'Имя динозавра: 3–15 символов', en: 'Dino name: 3–15 characters' }, nick_taken: { ru: 'Этот ник уже занят', en: 'Nickname already taken' }, bad_credentials: { ru: 'Неверный ник или пароль', en: 'Wrong nickname or password' },
   rate_limited: { ru: 'Слишком много попыток, подождите минуту', en: 'Too many attempts, wait a minute' }, server_error: { ru: 'Ошибка сервера', en: 'Server error' },
   in_game: { ru: 'Сначала выйдите из игры', en: 'Leave the game first' }, class_locked: { ru: 'Класс нельзя менять', en: 'Class is locked' }, type_locked: { ru: 'Этот вид откроется на 7 уровне любого типа', en: 'This type unlocks at level 7 of any type' }
 };
@@ -5110,10 +5110,11 @@ const UI = {
 
 // ---------------------------------------------------------------- главное меню
 function activeProf() { return P.state.token && P.state.profile && P.state.profile.hatched ? P.state.profile : P.state.local; }
+const ADM = '<span class="adm">Admin<i class="sp s1"></i><i class="sp s2"></i><i class="sp s3"></i><i class="sp s4"></i></span>';
 function showMenu() {
   closePanelState(); $('hud').classList.remove('on');
   const st = P.state, prof = activeProf();
-  const acc = st.user ? `<b>${esc(st.user)}</b>${st.admin ? '<span class="badge">ADMIN</span>' : ''}` : `<b>${T('guest')}</b>`;
+  const acc = st.user ? `<b>${esc(st.user)}</b>${st.admin ? ADM : ''}` : `<b>${T('guest')}</b>`;
   $('menu-card').innerHTML = `
     <h1>DINO EVOLUTION</h1><p class="sub">${T('tagline')}</p>
     <div id="acc"><span>${acc}</span><button class="sm" id="m-acc">${st.user ? T('signout') : T('signin')}</button></div>
@@ -5126,7 +5127,7 @@ function showMenu() {
       <button data-go="ach">${T('achievements')}</button><button data-go="settings">${T('settings')}</button>
     </div>
     <div class="grid2"><button data-go="quests">📅 ${T('quests')}</button><button data-go="nest">🪺 ${T('nest')}</button></div>
-    <div class="grid2"><button data-go="duel">⚔ ${T('duel_menu')}</button><button data-go="shop">🛍 ${T('shop')}</button></div>`;
+    <div class="grid2"><button data-go="duel">🥊 ${T('duel_menu')}</button><button data-go="shop">🏪 ${T('shop')}</button></div>`;
   const root = $('menu-card');
   $('m-acc').onclick = async () => { ctl.audio.init(); if (st.user) { await P.logout(); showMenu(); } else openAuth(() => showMenu()); };
   btnClick(root, '[data-go]', b => {
@@ -5258,7 +5259,7 @@ function openCreate(online, done, newRun) {
   $('c-back').onclick = () => showMenu();
   $('c-go').onclick = async () => {
     const name = $('c-name').value.replace(/[<>]/g, '').trim();
-    if (name.length < 2) { $('c-err').textContent = T('dino_name'); return; }
+    if (name.length < CONFIG.NAME_MIN) { $('c-err').textContent = T('dino_name'); return; }
     $('c-go').disabled = true; $('c-err').textContent = '';
     try {
       await P.createCharacter({ name, color: createState.color, cls: createState.cls, hatched: true }, online, newRun);
@@ -5365,7 +5366,7 @@ function openShop(tab) {
   if (!live && shopOnline === null) shopOnline = hasOnline;
   if (!live && shopOnline && !hasOnline) shopOnline = false;
   const prof = live ? ctl.session.profile : (shopOnline ? P.state.profile : P.state.local);
-  if (!prof || !prof.hatched) { openPanel('shop', `<h2>🛍 ${T('shop')}</h2><p class="sub">${T('no_character')}</p><button id="pn-x">${T('back')}</button>`, () => { $('pn-x').onclick = panelClose; }); return; }
+  if (!prof || !prof.hatched) { openPanel('shop', `<h2>🏪 ${T('shop')}</h2><p class="sub">${T('no_character')}</p><button id="pn-x">${T('back')}</button>`, () => { $('pn-x').onclick = panelClose; }); return; }
   const mats = prof.mats || { bone: 0, hide: 0 };
   const act = async (op, a) => {
     try {
@@ -5408,7 +5409,7 @@ function openShop(tab) {
   } else body = `<h4 class="sh">🛠 ${T('shop_craft')}</h4><p class="sub">${T('mats_hint')}</p>` + grid(Object.keys(CONFIG.COSMETICS).filter(id => CONFIG.COSMETICS[id].craft));
   const tabs = [['color', '🎨', T('tab_color')], ['outfit', '👒', T('tab_outfit')], ['pets', '🐾', T('shop_pets')], ['fx', '✨', T('tab_fx')], ['egg', '🥚', T('tab_egg')], ['nest', '🪺', T('tab_nest')], ['craft', '🛠', T('tab_craft')]];
   const srcSw = !live && hasOnline && hasLocal ? `<div class="tabs"><button data-src="1" class="${shopOnline ? 'on' : ''}">🌐 ${T('prof_online')}</button><button data-src="0" class="${shopOnline ? '' : 'on'}">👤 ${T('prof_local')}</button></div>` : '';
-  openPanel('shop', `<div class="row" style="margin-bottom:6px"><h2 style="margin:0;flex:2">🛍 ${T('shop')}</h2><div class="pts" style="text-align:right">🪙 ${prof.coins} · 🦴 ${mats.bone} · 🟫 ${mats.hide}</div></div>${srcSw}
+  openPanel('shop', `<div class="row" style="margin-bottom:6px"><h2 style="margin:0;flex:2">🏪 ${T('shop')}</h2><div class="pts" style="text-align:right">🪙 ${prof.coins} · 🦴 ${mats.bone} · 🟫 ${mats.hide}</div></div>${srcSw}
     <div class="row" style="margin:4px 0 8px"><input id="sh-code" maxlength="30" placeholder="🎟 ${T('promo')}" autocomplete="off" style="flex:2"><button id="sh-redeem" style="flex:1">${T('promo_go')}</button></div>
     <div class="tabs shoptabs">${tabs.map(([k, i, n]) => `<button data-st="${k}" class="${shopTab === k ? 'on' : ''}">${i} ${n}</button>`).join('')}</div>${body}<button id="pn-x" style="margin-top:12px">${T('back')}</button>`, root => {
     const rb = root.querySelector('#sh-redeem');
@@ -5457,9 +5458,9 @@ function openNest() {
 function openDuelMenu() {
   const prof = P.state.profile && P.state.token ? P.state.profile : null, up = P.state.serverUp;
   const lg = CONFIG.leagueOf((prof && prof.elo) || 1000);
-  openPanel('duelm', `<h2>⚔ ${T('duel_menu')}</h2>${prof ? `<div class="ratehead"><b>${lg.ico} ${esc(TN(lg.n))} · ${prof.elo | 0}</b><span>${T('duels_wl', { w: prof.dw | 0, l: prof.dl | 0 })}</span></div>` : ''}
+  openPanel('duelm', `<h2>🥊 ${T('duel_menu')}</h2>${prof ? `<div class="ratehead"><b>${lg.ico} ${esc(TN(lg.n))} · ${prof.elo | 0}</b><span>${T('duels_wl', { w: prof.dw | 0, l: prof.dl | 0 })}</span></div>` : ''}
     <p class="sub">${T('duel_menu_hint')}</p>
-    <button class="pri" id="dm-q" ${up ? '' : 'disabled'}>⚔ ${T('duel_find')}</button>
+    <button class="pri" id="dm-q" ${up ? '' : 'disabled'}>🥊 ${T('duel_find')}</button>
     <button id="dm-t" ${up ? '' : 'disabled'}>🏆 ${T('tourney')}</button>
     <button id="pn-x" style="margin-top:10px">${T('back')}</button>`, () => {
     const go = (kind) => {
@@ -5489,7 +5490,7 @@ async function openLeaders(tab) {
   else {
     const rows = tab === 'wins' ? data.wins : tab === 'elo' ? (data.elo || []) : tab === 'coins' ? (data.coins || []) : data.kings;
     table = rows.length ? `<table><tr><th>${T('lb_place')}</th><th>${T('lb_name')}</th><th>${tab === 'wins' ? T('lb_wins_n') : tab === 'elo' ? T('rating') : tab === 'coins' ? T('lb_coins_n') : T('lb_kings_n')}</th><th>${T('level_short')}</th></tr>` + rows.map((r, i) =>
-      `<tr class="${r.nickKey === me ? 'me' : ''}"><td>${i + 1}</td><td>${r.cls ? CLS_ICO[r.cls] + ' ' : ''}${esc(r.nick)}${r.lord ? ' 🌟' : ''}</td><td>${tab === 'wins' ? r.wins : tab === 'elo' ? CONFIG.leagueOf(r.elo).ico + ' ' + r.elo : tab === 'coins' ? '🪙 ' + r.coins : r.count + '/6'}</td><td>${r.level || ''}</td></tr>`).join('') + '</table>' : `<p class="sub">${T('lb_empty')}</p>`;
+      `<tr class="${r.nickKey === me ? 'me' : ''}"><td>${i + 1}</td><td>${r.cls ? CLS_ICO[r.cls] + ' ' : ''}${esc(r.nick)}${r.lord ? ' 🌟' : ''}${r.admin ? ADM : ''}</td><td>${tab === 'wins' ? r.wins : tab === 'elo' ? CONFIG.leagueOf(r.elo).ico + ' ' + r.elo : tab === 'coins' ? '🪙 ' + r.coins : r.count + '/6'}</td><td>${r.level || ''}</td></tr>`).join('') + '</table>' : `<p class="sub">${T('lb_empty')}</p>`;
   }
   if (openName !== 'lb') return;
   openPanel('lb', `<h2>🏆 ${T('lb_title')}</h2><div class="tabs"><button data-t="wins" class="${tab === 'wins' ? 'on' : ''}">${T('lb_wins')}</button><button data-t="kings" class="${tab === 'kings' ? 'on' : ''}">${T('lb_kings')}</button><button data-t="elo" class="${tab === 'elo' ? 'on' : ''}">${T('rating')}</button><button data-t="coins" class="${tab === 'coins' ? 'on' : ''}">🪙 ${T('lb_coins')}</button></div>${tab === 'elo' ? ratingHead() : ''}${table}<button id="pn-x" style="margin-top:12px">${T('back')}</button>`, root => {
@@ -5533,7 +5534,7 @@ function openPause() {
   openPanel('pause', `<h2>${T('menu')} Dino Evolution</h2>${code ? `<p class="sub">${T('copy_code')}: <b style="color:var(--ac2);font-size:20px">${code}</b></p>` : ''}
     <button class="pri" id="ps-resume">${T('resume')}</button>
     <div class="grid2"><button id="ps-about">🦖 ${T('about_dino')}</button><button id="ps-chg" ${S.room.mode === 'duel' || S.room.mode === 'rush' ? 'disabled' : ''}>🔄 ${T('change_dino')}</button></div>
-    <div class="grid2"><button id="ps-evo">${T('evolution')}</button><button id="ps-pl">${T('players')}</button><button id="ps-ach">${T('achievements')}</button><button id="ps-set">${T('settings')}</button><button id="ps-nest">🪺 ${T('nest')}</button><button id="ps-shop">🛍 ${T('shop')}</button></div>
+    <div class="grid2"><button id="ps-evo">${T('evolution')}</button><button id="ps-pl">${T('players')}</button><button id="ps-ach">${T('achievements')}</button><button id="ps-set">${T('settings')}</button><button id="ps-nest">🪺 ${T('nest')}</button><button id="ps-shop">🏪 ${T('shop')}</button></div>
     <button id="ps-q">📅 ${T('quests')}</button>
     <button class="red" id="ps-exit">${T('to_menu')}</button>`, root => {
     $('ps-resume').onclick = panelClose; $('ps-about').onclick = openAbout; $('ps-chg').onclick = openChange; $('ps-evo').onclick = () => openEvo(); $('ps-pl').onclick = openPlayers; $('ps-ach').onclick = openAch; $('ps-nest').onclick = openNest; $('ps-shop').onclick = () => openShop(); $('ps-set').onclick = openSettings; $('ps-q').onclick = openQuests;
@@ -5599,7 +5600,7 @@ function openPlayers() {
     const S = ctl.session; if (!S) return;
     const mode = S.room.mode, canDuel = S.o.online && (mode === 'public' || mode === 'code') && S.biome !== 'duel' && S.alive;
     const rows = [...S.players.entries()].map(([id, p]) => {
-      const i = p.info; return `<tr><td>${CLS_ICO[i.cls] || ''} ${esc(i.nick)}${i.king ? ' 👑' : ''}${i.lord ? ' 🌟' : ''}${i.admin ? '<span class="badge">ADMIN</span>' : ''}${i.bot ? ' 🤖' : ''}</td><td>${T('level_short')}${i.level}</td><td style="text-align:right">${!i.bot && canDuel ? `<button class="sm" data-duel="${id}">⚔ ${T('duel')}</button>` : ''}</td></tr>`;
+      const i = p.info; return `<tr><td>${CLS_ICO[i.cls] || ''} ${esc(i.nick)}${i.king ? ' 👑' : ''}${i.lord ? ' 🌟' : ''}${i.admin ? ADM : ''}${i.bot ? ' 🤖' : ''}</td><td>${T('level_short')}${i.level}</td><td style="text-align:right">${!i.bot && canDuel ? `<button class="sm" data-duel="${id}">⚔ ${T('duel')}</button>` : ''}</td></tr>`;
     });
     const tq = S.tq > 0;
     const html = `<h2>${T('players')}</h2>${rows.length ? `<table>${rows.join('')}</table>` : `<p class="sub">${T('no_players')}</p>`}

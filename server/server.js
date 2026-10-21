@@ -14,7 +14,7 @@ const Rooms = require('../game/rooms.js');
 const PORT = parseInt(process.env.PORT, 10) || 3000;
 const ADMINS = (process.env.ADMINS || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
 const PUBLIC = path.join(__dirname, '..', 'game');
-const NICK_RE = /^[\p{L}\p{N}_-]{3,14}$/u;
+const NICK_RE = /^[\p{L}\p{N}_-]{3,15}$/u;
 const isAdmin = nick => ADMINS.includes(String(nick).toLowerCase());
 
 let store = null;
@@ -46,6 +46,7 @@ function applyCreate(old, inc, newRun) {
   const cls = inc.cls === null ? null : (typeof inc.cls === 'string' && C.CLASSES[inc.cls] ? inc.cls : undefined);
   if (cls === undefined) return { error: 'invalid_profile' };
   if (inc.hatched && (!cls || !name)) return { error: 'invalid_profile' };
+  if (inc.hatched && name.length < C.NAME_MIN) return { error: 'bad_name' };
   if (cls && C.TYPE_MIN_LV && C.TYPE_MIN_LV[cls] && (newRun || !old || !old.hatched)) return { error: 'type_locked' };
   let p = Sim.fixProfile(JSON.parse(JSON.stringify(old || Sim.defaultProfile(''))));
   if (newRun) {
@@ -102,7 +103,8 @@ let lbCache = { at: 0, data: null };
 async function leaderboard() {
   if (lbCache.data && Date.now() - lbCache.at < 8000) return lbCache.data;
   const [wins, kings, elo, coins] = await Promise.all([store.topWins(50), store.topKings(50), store.topElo(50), store.topCoins(50)]);
-  lbCache = { at: Date.now(), data: { wins, kings, elo, coins } };
+  const mark = rows => rows.map(r => (isAdmin(r.nickKey) ? Object.assign({}, r, { admin: true }) : r));
+  lbCache = { at: Date.now(), data: { wins: mark(wins), kings: mark(kings), elo: mark(elo), coins: mark(coins) } };
   return lbCache.data;
 }
 

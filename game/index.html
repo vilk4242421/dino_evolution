@@ -27,11 +27,14 @@
 <meta name="msapplication-config" content="browserconfig.xml">
 <meta name="msapplication-TileImage" content="mstile-150.png">
 <meta name="msapplication-TileColor" content="#10201a">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap&subset=cyrillic,latin">
 <title>Dino Evolution</title>
 <style>
-  :root { --bg:#10201a; --panel:rgba(16,32,26,.9); --ac:#9be37a; --ac2:#ffd35a; --tx:#e8f3df; --mut:#8fb08a; --red:#e8573f; --blue:#6ac8ff; }
+  :root { --ui:"Nunito",ui-rounded,"SF Pro Rounded","Segoe UI Variable Display",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; --old:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; --bg:#10201a; --panel:rgba(16,32,26,.9); --ac:#9be37a; --ac2:#ffd35a; --tx:#e8f3df; --mut:#8fb08a; --red:#e8573f; --blue:#6ac8ff; }
   * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
-  html,body { margin:0; height:100%; overflow:hidden; background:var(--bg); color:var(--tx); font:16px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; touch-action:none; user-select:none; -webkit-user-select:none; }
+  html,body { margin:0; height:100%; overflow:hidden; background:var(--bg); color:var(--tx); font:16px var(--ui); touch-action:none; user-select:none; -webkit-user-select:none; }
   #c { position:fixed; inset:0; width:100%; height:100%; display:block; }
   .screen { position:fixed; inset:0; display:none; align-items:center; justify-content:center; padding:max(12px,env(safe-area-inset-top)) 12px max(12px,env(safe-area-inset-bottom)); overflow:auto; z-index:20; }
   .screen.on { display:flex; }
@@ -40,6 +43,7 @@
   .card { background:var(--panel); border:1px solid rgba(155,227,122,.25); border-radius:18px; padding:20px; width:min(94vw,460px); max-height:94vh; overflow:auto; box-shadow:0 12px 40px rgba(0,0,0,.45); touch-action:pan-y; }
   .card.wide { width:min(96vw,860px); }
   .card.side { align-self:center; }
+  h1, h2, h3, h4 { font-family:var(--old); }
   h1 { margin:0 0 4px; font-size:clamp(30px,7vw,46px); letter-spacing:1px; color:var(--ac); text-shadow:0 3px 0 rgba(0,0,0,.35); text-align:center; }
   h2 { margin:0 0 12px; font-size:22px; color:var(--ac); }
   h3 { margin:12px 0 6px; font-size:15px; color:var(--ac2); }
@@ -58,6 +62,18 @@
   .row { display:flex; gap:8px; align-items:center; } .row > * { flex:1; }
   .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:0 8px; }
   .err { color:var(--red); min-height:20px; font-size:14px; margin:2px 0 6px; }
+  .adm { position:relative; display:inline-block; margin-left:7px; padding:1px 9px 2px; border-radius:10px; vertical-align:middle; overflow:visible; isolation:isolate;
+    font-size:12px; font-weight:800; letter-spacing:.3px; line-height:1.3; color:#5a3300; text-shadow:0 1px 0 rgba(255,244,190,.85);
+    background:linear-gradient(180deg,#fff0a0 0%,#ffd45a 38%,#e0a21c 62%,#ffd860 100%); border:2px solid #c98a12;
+    box-shadow:0 0 0 1px rgba(120,70,0,.55), 0 0 8px rgba(255,200,60,.65), inset 0 1px 0 rgba(255,255,255,.8), inset 0 -2px 3px rgba(150,90,0,.35); }
+  .adm::after { content:""; position:absolute; inset:0; border-radius:8px; pointer-events:none; z-index:1; background:linear-gradient(105deg,transparent 35%,rgba(255,255,255,.85) 50%,transparent 65%); background-size:250% 100%; background-position:160% 0; animation:admSheen 3.2s ease-in-out infinite; mix-blend-mode:soft-light; }
+  .adm .sp { position:absolute; width:9px; height:9px; z-index:2; pointer-events:none; opacity:0; background:#fffbe0; clip-path:polygon(50% 0,60% 40%,100% 50%,60% 60%,50% 100%,40% 60%,0 50%,40% 40%); filter:drop-shadow(0 0 2px #fff6b0); animation:admTwinkle 2.4s ease-in-out infinite; }
+  .adm .s1 { left:-5px; top:-4px; animation-delay:0s; }
+  .adm .s2 { right:6px; top:-6px; width:7px; height:7px; animation-delay:.8s; }
+  .adm .s3 { right:-5px; bottom:-5px; width:8px; height:8px; animation-delay:1.5s; }
+  .adm .s4 { left:42%; bottom:-4px; width:5px; height:5px; animation-delay:2s; }
+  @keyframes admTwinkle { 0%,100% { opacity:0; transform:scale(.2) rotate(0); } 45%,55% { opacity:1; transform:scale(1) rotate(45deg); } }
+  @keyframes admSheen { 0%,55% { background-position:160% 0; } 100% { background-position:-60% 0; } }
   .badge { display:inline-block; background:var(--ac2); color:#3a2a00; border-radius:8px; padding:1px 8px; font-size:12px; font-weight:800; margin-left:6px; vertical-align:middle; }
   #acc { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:12px; font-size:14px; color:var(--mut); }
   #acc b { color:var(--tx); }
@@ -212,7 +228,7 @@
 <div id="menu" class="screen"><div class="card" id="menu-card"></div></div>
 <div id="auth" class="screen dim"><div class="card">
   <h2 data-i="account">Аккаунт</h2>
-  <label data-i="nick">Ник</label><input id="a-nick" maxlength="14" autocomplete="username" autocapitalize="off" spellcheck="false">
+  <label data-i="nick">Ник</label><input id="a-nick" maxlength="15" autocomplete="username" autocapitalize="off" spellcheck="false">
   <label data-i="password">Пароль</label><input id="a-pass" type="password" maxlength="64" autocomplete="current-password">
   <div class="err" id="a-err"></div>
   <div class="row"><button class="pri" id="a-login" data-i="login">Войти</button><button id="a-reg" data-i="register">Регистрация</button></div>
@@ -220,7 +236,7 @@
 </div></div>
 <div id="create" class="screen"><div class="card side" style="margin-left:min(4vw,40px);margin-right:auto">
   <h2 data-i="create_title">Твой динозавр</h2>
-  <label data-i="dino_name">Имя</label><input id="c-name" maxlength="14" spellcheck="false">
+  <label data-i="dino_name">Имя</label><input id="c-name" maxlength="15" spellcheck="false">
   <label data-i="skin">Цвет шкуры</label><div class="swatches" id="c-colors"></div>
   <label data-i="class">Класс</label><div id="c-classes"></div>
   <div class="err" id="c-err"></div>

@@ -50,7 +50,7 @@
     XP_EXP: 1.5,              // опыт на уровень: 50 * уровень^1.5
     DEATH_XP_LOSS: 0.2,       // потеря опыта текущего уровня (сам уровень остаётся)
     SHIELD_SEC: 5,           // щит после возрождения
-    NAME_MAX: 14,
+    NAME_MAX: 15, NAME_MIN: 3,
     EVO_RESET_COST: 200,      // цена сброса очков эволюции (монеты)
     REGEN_BASE: 1.2, REGEN_PCT: 0.008,    // восстановление HP в секунду (вне боя)
     COMBAT_REGEN_DELAY: 4,
@@ -497,7 +497,7 @@
     { id: 'sea5', ico: '🔱', n: { ru: 'Повелитель океана', en: 'Lord of the Ocean' }, d: { ru: 'Победить всех 5 боссов океана', en: 'Defeat all 5 ocean bosses' }, t: function (p) { return C.worldKings(p, 'sea') >= 5; } },
     { id: 'king3', ico: '🏰', n: { ru: 'Три королевства', en: 'Three realms' }, d: { ru: 'Стать королём 3 биомов', en: 'Become king of 3 biomes' }, t: function (p) { return C.worldKings(p, 'land') >= 3; } },
     { id: 'lord', ico: '🌟', n: { ru: 'Владыка эпох', en: 'Lord of the Ages' }, d: { ru: 'Стать королём всех 6 биомов суши', en: 'Become king of all 6 land biomes' }, t: function (p) { return C.worldKings(p, 'land') >= 6; } },
-    { id: 'duel1', ico: '⚔', n: { ru: 'Дуэлянт', en: 'Duelist' }, d: { ru: 'Выиграть дуэль у живого игрока', en: 'Win a duel against a human' }, t: function (p) { return p.wins >= 1; } },
+    { id: 'duel1', ico: '🥊', n: { ru: 'Дуэлянт', en: 'Duelist' }, d: { ru: 'Выиграть дуэль у живого игрока', en: 'Win a duel against a human' }, t: function (p) { return p.wins >= 1; } },
     { id: 'duel10', ico: '🏆', n: { ru: 'Чемпион арены', en: 'Arena champion' }, d: { ru: '10 побед в дуэлях', en: '10 duel wins' }, t: function (p) { return p.wins >= 10; } },
     { id: 'tourney', ico: '🥇', n: { ru: 'Победитель турнира', en: 'Tournament winner' }, d: { ru: 'Выиграть турнир дуэлей', en: 'Win a duel tournament' }, t: function (p) { return p.stats.tourney >= 1; } },
     { id: 'rush5', ico: '🔥', n: { ru: 'Босс-раш', en: 'Boss rush' }, d: { ru: 'Дойти до 5 волны босс-раша', en: 'Reach wave 5 of the boss rush' }, t: function (p) { return p.stats.rush >= 5; } },
