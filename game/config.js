@@ -18,7 +18,7 @@
     DISCONNECT_KEEP_SEC: 10,  // сколько динозавр остаётся после отключения
     MAX_MSG_PER_SEC: 80,      // лимит сообщений от клиента
     TOKEN_DAYS: 90,
-    AOI: 140,                 // радиус «интереса»: врагов дальше не рассылаем (м)
+    AOI: 170,                 // радиус «интереса»: врагов дальше не рассылаем (м)
 
     // --- мир и физика ---
     MAP_SIZE: 640,            // каждый биом — карта 640 × 640 м
@@ -492,7 +492,7 @@
     { id: 'lv20', ico: '🦕', n: { ru: 'Взрослый', en: 'Adult' }, d: { ru: 'Достичь 20 уровня', en: 'Reach level 20' }, t: function (p) { return p.level >= 20; } },
     { id: 'lv30', ico: '🐉', n: { ru: 'Древний', en: 'Ancient' }, d: { ru: 'Достичь 30 уровня', en: 'Reach level 30' }, t: function (p) { return p.level >= 30; } },
     { id: 'evo', ico: '🧬', n: { ru: 'Эволюционист', en: 'Evolutionist' }, d: { ru: 'Вложить 10 очков эволюции', en: 'Spend 10 evolution points' }, t: function (p) { return C.evoSpent(p.evo) >= 10; } },
-    { id: 'king1', ico: '👑', n: { ru: 'Король биома', en: 'Biome king' }, d: { ru: 'Победить первого босса', en: 'Defeat your first boss' }, t: function (p) { return p.kings.length >= 1; } },
+    { id: 'king1', ico: '👑', n: { ru: 'Король суши', en: 'King of the Land' }, d: { ru: 'Победить всех 6 боссов суши', en: 'Defeat all 6 land bosses' }, t: function (p) { return C.worldKings(p, 'land') >= 6; } },
     { id: 'sea1', ico: '🌊', n: { ru: 'Владыка рифа', en: 'Reef ruler' }, d: { ru: 'Победить первого босса океана', en: 'Defeat your first ocean boss' }, t: function (p) { return C.worldKings(p, 'sea') >= 1; } },
     { id: 'sea5', ico: '🔱', n: { ru: 'Повелитель океана', en: 'Lord of the Ocean' }, d: { ru: 'Победить всех 5 боссов океана', en: 'Defeat all 5 ocean bosses' }, t: function (p) { return C.worldKings(p, 'sea') >= 5; } },
     { id: 'king3', ico: '🏰', n: { ru: 'Три королевства', en: 'Three realms' }, d: { ru: 'Стать королём 3 биомов', en: 'Become king of 3 biomes' }, t: function (p) { return C.worldKings(p, 'land') >= 3; } },
@@ -518,16 +518,16 @@
   // награды за достижения: c — монеты, title — титул, cos — наряд (забираются кнопкой, один раз)
   C.TITLES = {
     hunter: { ico: '🏹', n: { ru: 'Охотник', en: 'Hunter' } }, ancient: { ico: '🐉', n: { ru: 'Древний', en: 'Ancient' } },
-    king: { ico: '👑', n: { ru: 'Король биома', en: 'Biome king' } }, forestking: { ico: '🌲', n: { ru: 'Король леса', en: 'King of the forest' } },
-    bosshunter: { ico: '☠', n: { ru: 'Охотник на боссов', en: 'Boss hunter' } }, oceanlord: { ico: '🔱', n: { ru: 'Повелитель океана', en: 'Lord of the Ocean' } },
-    lord: { ico: '🌟', n: { ru: 'Владыка эпох', en: 'Lord of the Ages' } }, champion: { ico: '🏆', n: { ru: 'Чемпион арены', en: 'Arena champion' } },
+    forestking: { ico: '🌲', n: { ru: 'Король леса', en: 'King of the forest' } },
+    landking: { ico: '👑', n: { ru: 'Король суши', en: 'King of the Land' } }, bosshunter: { ico: '☠', n: { ru: 'Охотник на боссов', en: 'Boss hunter' } }, oceanlord: { ico: '🔱', n: { ru: 'Повелитель океана', en: 'Lord of the Ocean' } },
+    lord: { ico: '🌟', n: { ru: 'Владыка эпох', en: 'Lord of the Ages' } }, epoch_lord: { ico: '👑', n: { ru: 'Владыка Эпох (финал)', en: 'Lord of Ages (ending)' } }, spark_keeper: { ico: '🥚', n: { ru: 'Хранитель Искры', en: 'Keeper of the Spark' } }, champion: { ico: '🏆', n: { ru: 'Чемпион арены', en: 'Arena champion' } },
     tourney: { ico: '🥇', n: { ru: 'Победитель турнира', en: 'Tournament winner' } }, streak30: { ico: '🔥', n: { ru: 'Верный 30 дней', en: 'Loyal 30 days' } },
     tough: { ico: '💀', n: { ru: 'Несгибаемый', en: 'Unbreakable' } }, friend: { ico: '🐾', n: { ru: 'Друг зверей', en: 'Animal friend' } },
     ult: { ico: '💥', n: { ru: 'Мастер ульты', en: 'Ultimate master' } }
   };
   C.ACH_REWARD = {
     first: { c: 30 }, hunter: { c: 100, title: 'hunter' }, glutton: { c: 80 }, lv10: { c: 100 }, lv20: { c: 250 }, lv30: { c: 500, title: 'ancient' }, evo: { c: 100 },
-    king1: { c: 150, title: 'king' }, forestking: { c: 100, title: 'forestking' }, boss5: { c: 300, title: 'bosshunter' }, sea1: { c: 150 }, sea5: { c: 500, title: 'oceanlord' },
+    king1: { c: 150, title: 'landking' }, forestking: { c: 100, title: 'forestking' }, boss5: { c: 300, title: 'bosshunter' }, sea1: { c: 150 }, sea5: { c: 500, title: 'oceanlord' },
     king3: { c: 300 }, lord: { c: 800, title: 'lord', cos: 'aura' }, duel1: { c: 100 }, duel10: { c: 300, title: 'champion' }, tourney: { c: 300, title: 'tourney' },
     rush5: { c: 200 }, nest3: { c: 150 }, craft1: { c: 120 }, rich: { c: 100 }, tough: { c: 100, title: 'tough' }, streak7: { c: 150 }, streak30: { c: 500, title: 'streak30', cos: 'party' },
     ult10: { c: 120, title: 'ult' }, pet1: { c: 80, title: 'friend' }, kill500: { c: 250 }, quest30: { c: 200 }
@@ -552,9 +552,9 @@
   // ---------- гнездо: трофеи и яйца вокруг мирового гнезда (1.10.3) ----------
   C.NEST_MAX = 12;
   C.NEST_ITEMS = {
-    egg_blue: { ico: '🥚', price: 150, c: 0x6ac8ff, n: { ru: 'Голубое яйцо', en: 'Blue egg' } },
-    egg_spot: { ico: '🥚', price: 200, c: 0xe8dcc0, n: { ru: 'Пятнистое яйцо', en: 'Speckled egg' } },
-    egg_gold: { ico: '🥚', price: 500, c: 0xffd35a, n: { ru: 'Золотое яйцо', en: 'Golden egg' } },
+    egg_blue: { shopHidden: 1, ico: '🥚', price: 150, c: 0x6ac8ff, n: { ru: 'Голубое яйцо', en: 'Blue egg' } },
+    egg_spot: { shopHidden: 1, ico: '🥚', price: 200, c: 0xe8dcc0, n: { ru: 'Пятнистое яйцо', en: 'Speckled egg' } },
+    egg_gold: { shopHidden: 1, ico: '🥚', price: 500, c: 0xffd35a, n: { ru: 'Золотое яйцо', en: 'Golden egg' } },
     leaves_green: { ico: '🍃', price: 40, c: 0x4aa84a, n: { ru: 'Зелёные листья', en: 'Green leaves' } },
     leaves_red:   { ico: '🍂', price: 40, c: 0xc2501e, n: { ru: 'Осенние листья', en: 'Autumn leaves' } },
     leaves_gold:  { ico: '🍁', price: 90, c: 0xf0b820, n: { ru: 'Золотые листья', en: 'Golden leaves' } },
@@ -628,6 +628,9 @@
   };
   C.worldOf = function (b) { return C.OCEANS.indexOf(b) >= 0 ? 'sea' : 'land'; };
   C.worldList = function (w) { return C.WORLDS[w] || C.BIOMES; };
+  // короны: у каждого типа динозавра своё прохождение (kings активного типа лежат в профиле, остальных — в слотах); для сюжета берём объединение
+  C.typeKings = function (p, cls) { if (!p) return []; if (!cls || p.cls === cls) return p.kings || []; var q = p.slots && p.slots[cls]; return (q && q.kings) || []; };
+  C.allKings = function (p) { var s = {}, o = []; function add(a) { (a || []).forEach(function (b) { if (!s[b]) { s[b] = 1; o.push(b); } }); } if (!p) return o; add(p.kings); for (var k in (p.slots || {})) add(p.slots[k] && p.slots[k].kings); return o; };
   C.worldKings = function (p, w) { var l = C.worldList(w), n = 0, k = (p && p.kings) || []; for (var i = 0; i < k.length; i++) if (l.indexOf(k[i]) >= 0) n++; return n; };
   // Освоение мира (не по уровням!): 50% — побеждённые боссы, 50% — «бестиарий»: сколько видов существ этого мира игрок победил
   var _sp = {};

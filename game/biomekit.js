@@ -394,6 +394,9 @@ def('forest', 'amanita', 'Мухомор', 'Amanita muscaria', 0.01, r => {
     B.add(latheGeo([[0.034, 0.2], [0.06, 0.17], [0.065, 0.165]], 12), { m: M(p, null, sc), color: C('#e9e0cf') });
     const cap = latheGeo([[0.03, 0.24], [0.14, 0.24], [0.16, 0.27], [0.14, 0.33], [0.08, 0.37], [0, 0.385]], 18);
     const red = C('#c8231a'), wht = C('#f6f1e6');
+    { const q0 = qE(r.range(-0.1, 0.1), 0, r.range(-0.1, 0.1));
+      B.add(latheGeo([[0.14, 0.24], [0.1, 0.236], [0.04, 0.228], [0.033, 0.24]], 18), { m: M(p, q0, sc), color: C('#efe6d2') });   // пластинки снизу шляпки: шляпка не просвечивает
+      B.add(latheGeo([[0.033, 0.24], [0.04, 0.228], [0.1, 0.236], [0.14, 0.24]], 18), { m: M(p, q0, sc), color: C('#e6dcc4') }); }
     B.add(cap, { m: M(p, qE(r.range(-0.1, 0.1), 0, r.range(-0.1, 0.1)), sc), colorFn: (c, lx, ly, lz) => { c.copy(ly < 0.245 ? C('#efe6d2') : red); if (ly > 0.26 && noise3(lx * 40, ly * 40, lz * 40, s) > 0.55) c.copy(wht); } });
   }
   return B.build(0.01);

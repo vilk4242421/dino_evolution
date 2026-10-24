@@ -68,7 +68,7 @@ export async function createCharacter(fields, online, newRun) {
     setServerProfile(d.profile); return state.profile;
   }
   let p = loadLocal();
-  if (newRun) { const d = Sim.defaultProfile(fields.name); ['wins', 'kings', 'kingAt', 'cosmetics', 'cosmetic', 'pets', 'pet', 'claimed', 'codes', 'titles', 'title', 'patc', 'rfx', 'morph', 'eggskin', 'color', 'mats', 'trophies', 'elo', 'dw', 'dl', 'season', 'coins', 'stats', 'playTime', 'daily', 'tut', 'nest'].forEach(k => { if (p[k] !== undefined) d[k] = p[k]; }); p = d; }
+  if (newRun) { const d = Sim.defaultProfile(fields.name); ['wins', 'kings', 'kingAt', 'cosmetics', 'cosmetic', 'pets', 'pet', 'claimed', 'codes', 'titles', 'title', 'patc', 'rfx', 'morph', 'eggskin', 'color', 'mats', 'trophies', 'elo', 'dw', 'dl', 'season', 'coins', 'stats', 'playTime', 'daily', 'tut', 'nest', 'story', 'ending'].forEach(k => { if (p[k] !== undefined) d[k] = p[k]; }); p = d; }
   p.name = fields.name; p.color = fields.color; if (!p.hatched) { p.cls = fields.cls; p.hatched = fields.hatched; }
   saveLocal(p); return p;
 }

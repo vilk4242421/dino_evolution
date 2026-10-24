@@ -4,7 +4,7 @@
 const fs = require('fs'), path = require('path');
 const G = path.join(__dirname, '..', 'game');
 const mods = { three: path.join(G, 'vendor', 'three.module.js') };
-['profile', 'audio', 'dinos', 'biomekit', 'dinonest', 'treekit', 'world', 'net', 'ui', 'game'].forEach(n => mods[n] = path.join(G, n + '.js'));
+['profile', 'sounddsp', 'audio', 'trike', 'dinos', 'biomekit', 'dinonest', 'treekit', 'world', 'storyart', 'story', 'net', 'ui', 'game'].forEach(n => mods[n] = path.join(G, n + '.js'));
 const key = s => s === 'three' ? 'three' : path.basename(s, '.js');
 let out = '/* Dino Evolution — собранный клиент (node tools/build.js). Не редактировать вручную. */\n(function(){\n"use strict";\nvar __m={};\n';
 for (const name of Object.keys(mods)) {

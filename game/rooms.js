@@ -53,7 +53,7 @@
   RP.pubInfo = function (p) {
     return {
       id: p.id, nick: p.name, color: p.color, cls: p.cls, level: p.profile.level, evo: p.profile.evo, cosmetic: p.profile.cosmetic || '', pet: p.profile.pet || '', title: p.profile.title || '', nest: p.profile.nest ? p.profile.nest.put : [], patc: p.profile.patc || '', rfx: p.profile.rfx || '', morph: p.profile.morph || '',
-      admin: !!p.admin, king: (p.profile.kings || []).indexOf(this.biome) >= 0, lord: Sim.isLord(p.profile), bot: !!p.bot, team: p.team
+      admin: !!p.admin, king: (p.profile.kings || []).indexOf(this.biome) >= 0, lord: Sim.isLord(p.profile), end: p.profile.ending || '', bot: !!p.bot, team: p.team
     };
   };
   RP.refreshStats = function (p, keepRatio) {
@@ -176,6 +176,23 @@
       case 'evoreset': this.resetEvo(p); break;
       case 'evosw': this.switchEvo(p, m.id); break;
       case 'revive': this.revivePlayer(p, m.id); break;
+      case 'story': {   // сюжетные метки: пролог, зов моря, погружение, Сердце (один раз); «cine» — защита на время ролика
+        var sk = m.k;
+        if (sk === 'cine') { p.shield = Math.max(p.shield || 0, this.t + 40); break; }
+        if (['pro', 'call', 'dive', 'heart'].indexOf(sk) >= 0) { var spf = p.profile; if (!spf.story || typeof spf.story !== 'object') spf.story = {}; if (!spf.story[sk]) { spf.story[sk] = 1; this.markDirty(p); this.flushProfile(p, true); } }
+        break;
+      }
+      case 'ending': this.chooseEnding(p, m.id); break;
+      case 'warp': {   // ролик «всасывает в портал»: после победы над боссом отправляем в следующую локацию
+        var wl2 = CF.worldList(CF.worldOf(this.biome)), ix2 = wl2.indexOf(this.biome);
+        if (this.mode !== 'rush' && this.mode !== 'duel' && ix2 >= 0 && ix2 < wl2.length - 1 && p.profile.kings.indexOf(this.biome) >= 0 && this.t - (p.travelT || -99) > 3) { p.travelT = this.t; p.shield = Math.max(p.shield || 0, this.t + 6); this.hub.travelQ.push({ p: p, biome: wl2[ix2 + 1] }); }
+        break;
+      }
+      case 'goto': {   // выбор пройденной локации прямо из игры
+        var gb = String(m.biome || '');
+        if (this.mode !== 'rush' && this.mode !== 'duel' && gb !== this.biome && CF.worldOf(gb) === CF.worldOf(this.biome) && Sim.canEnterBiome(p.profile, gb) && p.alive && this.t - (p.travelT || -99) > 3) { p.travelT = this.t; p.shield = Math.max(p.shield || 0, this.t + 6); this.hub.travelQ.push({ p: p, biome: gb }); }
+        break;
+      }
       case 'tut': if (!p.profile.tut && p.profile.hatched) { p.profile.tut = 1; this.gainCoins(p, 50); this.markDirty(p); this.flushProfile(p, true); } break;      // обучение пройдено: +50 монет один раз
       case 'buy': this.buyCosmetic(p, m.id); break;
       case 'claim': this.claimAch(p, m.id); break;
@@ -302,12 +319,17 @@
   };
   RP.isAir = function (e) {
     var s = e.st; if (e.kind === 'p') return !!s.fly;
-    return !!(e.arch && e.arch.fly && !e.arch.tiny) || (e.kind === 'b' && e.flyer);
+    return !!(e.arch && e.arch.fly && !e.arch.tiny);                 // боссы (и дракон) всегда достижимы для укуса: иначе наземный игрок не победил бы дракона
   };
   RP.canReach = function (att, dst) {      // «в воздухе бьют только летающие и дальнобойные»
     if (dst.kind === 'p' ? dst.st.clm : dst.clm) return false;                       // на дереве не бьют никого: ни наземные, ни летающие, ни дальнобойные
     if (this.isAir(dst) && !this.isAir(att) && !(att.arch && att.arch.ranged) && !(att.kind === 'b')) return false;
     return true;
+  };
+  // множитель урона босса по игроку: нормировка босса × поправка на уровень игрока относительно требуемого
+  RP.bossK = function (src, p) {
+    if (this.mode === 'duel' || !src || !p.profile) return 1;
+    return (src.dmgK || 0.85) * clamp(1 - 0.05 * (p.profile.level - (CF.BOSS_LEVEL[this.biome] || 10)), 0.25, 1.2);
   };
   RP.damage = function (src, dst, raw, o) {
     o = o || {};
@@ -323,6 +345,14 @@
     var sl = this.lvOf(src), dl = this.lvOf(dst);
     if (!o.force && src.kind === 'p' && dst.kind === 'e' && sl && dl && dl - sl >= CF.maxLvUp(dst)) { this.events.push(['h', dst.id, 0, 4]); return 0; }   // враг на 2+ уровня выше — не победить
     if (sl && dl && !o.force) amount *= CF.lvFactor(sl, dl);
+    // босс: чем выше уровень игрока относительно требуемого, тем легче бой (и наоборот)
+    if (!o.force && this.mode !== 'duel') {
+      var bpl = src.kind === 'p' ? src : (src.owner && src.owner.kind === 'p' ? src.owner : null), breq = CF.BOSS_LEVEL[this.biome] || 10;
+      if (dst.kind === 'b' && bpl) amount *= 2 * clamp(1 + 0.15 * (bpl.profile.level - breq), 0.6, 5) * clamp(Math.pow(14 / ((CF.CLASSES[bpl.cls] && CF.CLASSES[bpl.cls].dmg) || 14), 0.7), 0.8, 2);   // слабый по урону класс получает поправку против босса
+      else if (dst.kind === 'p' && src.fromBoss) amount *= 0.85 * clamp(1 - 0.05 * (dst.profile.level - breq), 0.25, 1.2);
+    }
+    if (dst.kind === 'p' && src && src.kind === 'b') amount *= this.bossK(src, dst);
+    if (dst.kind === 'p' && src && this.mode !== 'duel' && this.mode !== 'rush') { if (src.kind === 'b') amount = Math.min(amount, 0.4 * dst.stats.hp); else if (src.fromBoss) amount = Math.min(amount, 0.07 * dst.stats.hp); }   // ни один удар босса не убивает с одного раза, помощники бьют слабо
     if (dst.kind === 'p' && dst.stats.fx.dodge && !o.force && this.rng() * 100 < dst.stats.fx.dodge) { this.events.push(['h', dst.id, 0, 3]); return 0; }   // увернулся
     if (dst.kind === 'p') {
       amount *= 1 - dst.stats.armor;
@@ -435,18 +465,18 @@
     this.drops.push({ k: kind, x: r1(x), y: r1(yy), z: r1(z), exp: this.t + 90 });
   };
   RP.eatNear = function (p) {
-    var s = p.st, reach = p.stats.radius + 3.4 + 1.0 * (p.stats.scale || 1), diet = CF.CLASSES[p.cls].diet, i, f;
+    var s = p.st, reach = p.stats.radius + 1.3, preach = p.stats.radius + 1.8, diet = CF.CLASSES[p.cls].diet, i, f;
     for (i = this.drops.length - 1; i >= 0; i--) {
       f = this.drops[i];
       if (diet.indexOf(f.k) < 0) continue;
-      if (Math.abs(f.x - s.x) > reach || Math.abs(f.z - s.z) > reach || Math.abs(f.y - s.y) > reach + 6) continue;
+      if (Math.hypot(f.x - s.x, f.z - s.z) > reach || Math.abs(f.y - s.y) > reach + 4) continue;   // подбор — по кружочку вокруг еды
       this.drops.splice(i, 1); this.consume(p, f.k);
     }
     if (diet.indexOf('plant') >= 0) {
       for (i = 0; i < this.plants.length; i++) {
         f = this.plants[i];
         if (f.ready > this.t) continue;
-        if (Math.abs(f.x - s.x) > reach || Math.abs(f.z - s.z) > reach) continue;
+        if (Math.hypot(f.x - s.x, f.z - s.z) > preach) continue;
         f.ready = this.t + 30; this.consume(p, 'plant');
       }
     }
@@ -469,10 +499,11 @@
     var test = function (e) {
       if (!(e.hp > 0) || e.dead || e.inv || e.hidden || !self.hostile(p, e) || e.role === 'bug') return;
       var es = e.st, dx = es.x - s.x, dz = es.z - s.z, d = Math.sqrt(dx * dx + dz * dz), er = e.radius || (e.stats && e.stats.radius) || 0.6;
+      if (e.kind === 'b' && p.kind === 'p') er *= 1.7;                       // у босса огромное тело: бьём по его габаритам, а не по центру
       if (d > reach + er) return;
       if (d > er + 0.4 && Math.abs(wrap(Math.atan2(dx, dz) - s.face)) > cone) return;
       var dy = Math.abs(es.y - s.y);
-      if (dy > reach + 3 + (p.st.fly ? 12 : 0)) return;
+      if (dy > reach + 3 + (p.st.fly || e.kind === 'b' ? 12 : 0)) return;
       if (!self.canReach(p, e)) return;
       out.push({ e: e, d: d });
     };

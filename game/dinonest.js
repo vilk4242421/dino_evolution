@@ -212,7 +212,7 @@ function terrain(seed, D, grain, o) {
   for (let i = 0; i < RING; i++) for (let j = 0; j < SEG; j++) { const j1 = (j + 1) % SEG, a = i * SEG + j, b = i * SEG + j1, cc = (i + 1) * SEG + j, d = (i + 1) * SEG + j1; idx.push(a, b, cc, b, d, cc); }
   const g = new T.BufferGeometry(); g.setAttribute('position', new T.Float32BufferAttribute(pos, 3)); g.setAttribute('color', new T.Float32BufferAttribute(col, 3)); g.setAttribute('uv', new T.Float32BufferAttribute(uv, 2));
   g.setIndex(new T.Uint32BufferAttribute(idx, 1)); g.computeVertexNormals();
-  const mat = new T.MeshStandardMaterial({ vertexColors: true, map: grain, roughness: 1, polygonOffset: !!o.rmax, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+  const mat = new T.MeshStandardMaterial({ vertexColors: true, map: grain, roughness: 1, side: T.DoubleSide, polygonOffset: !!o.rmax, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
   const mesh = new T.Mesh(g, mat); mesh.receiveShadow = true; return mesh;
 }
 

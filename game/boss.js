@@ -10,11 +10,21 @@
   var SHAPE = { circle: 0, cone: 1, line: 2, ring: 3 };
 
   // ---------------------------------------------------------------- босс
+
+  // ---- нормировка боссов под «требуемый уровень» без эволюции: бой тяжёлый, но проходимый
+  var BOSS_TUNE = { time: 52, hit: 0.11 };       // time — секунд чистого боя эталонного игрока; hit — средняя атака босса в долях HP эталона
+  RP.bossNorm = function (bossId, biome) {
+    var def = CF.BOSSES[bossId], req = CF.BOSS_LEVEL[biome]; if (!def || !req) return null;
+    var st = Sim.statsFor(CF.OCEANS.indexOf(biome) >= 0 ? 'mosa' : 'carn', req, {});
+    var dps = st.dmg / st.atkCd * 2, sw = 0, sd = 0;
+    def.attacks.forEach(function (a) { var w = a.wt || 1; sw += w; sd += w * (a.dmg || 0); });
+    return { hp: Math.round(dps * BOSS_TUNE.time / 50) * 50, dmgK: BOSS_TUNE.hit * st.hp / Math.max(1, sd / Math.max(1, sw)) };
+  };
   RP.makeBoss = function (bossId, mult) {
-    var def = CF.BOSSES[bossId], W = this.W;
+    var def = CF.BOSSES[bossId], W = this.W, nm = this.mode === 'rush' ? null : this.bossNorm(bossId, this.biome), hp0 = nm ? nm.hp : def.hp;
     var b = {
       id: newId(), kind: 'b', bossId: bossId, def: def, team: 'e', st: { x: 0, y: W.heightAt(0, 0), z: 0, face: W.portalIn ? Math.atan2(W.portalIn.x, W.portalIn.z) : 0 },
-      hp: def.hp * mult, mhp: def.hp * mult, baseHp: def.hp * mult, mult: mult, phase: 0, state: 'idle', inv: true, radius: def.size * 0.85, big: true, dead: false,
+      hp: hp0 * mult, mhp: hp0 * mult, baseHp: hp0 * mult, dmgK: nm ? nm.dmgK : 0.85, mult: mult, phase: 0, state: 'idle', inv: true, radius: def.size * 0.85, big: true, dead: false,
       atkCd: 0, atkAnim: 0, action: null, nextAtk: 0, burrowed: false, minions: [], noFightT: 0, fn: 0, hitBy: null, dots: [], speed: def.speed, lastHurt: -99, flyer: bossId === 'dragon'
     };
     return b;
@@ -34,7 +44,8 @@
     var b = this.boss; if (!b || b.state !== 'idle') return;
     b.state = 'fight'; b.inv = false; b.fn = n;
     b.mhp = b.baseHp * (1 + CF.BOSS_HP_PER_PLAYER * (n - 1)); b.hp = b.mhp; b.phase = 0;
-    b.nextAtk = this.t + 2.5; b.action = null; b.noFightT = 0;
+    b.nextAtk = this.t + 7.5; b.action = null; b.noFightT = 0; b.inv = true; b.phaseUntil = this.t + 6;   // ролик перед боссом (~6 с): никто никого не бьёт
+    var rt = this.t; this.players.forEach(function (p) { if (!p.bot && !p.gone) p.shield = Math.max(p.shield || 0, rt + 6.2); });
     this.events.push(['boss', b.id, 'start']);
   };
   RP.resetBoss = function () {
@@ -77,8 +88,8 @@
       if (fx.stun) p.st.stun = Math.max(p.st.stun, fx.stun);
       if (fx.slow) p.slowT = self.t + fx.slow;
       if (fx.freeze) { p.slowT = self.t + fx.freeze; p.st.stun = Math.max(p.st.stun, 0.6); }
-      if (fx.poison) self.addDot(p, 'poison', fx.poison * (z.mult || 1), 5, z.src);
-      if (fx.burn) self.addDot(p, 'burn', fx.burn * (z.mult || 1), 4, z.src);
+      if (fx.poison) self.addDot(p, 'poison', fx.poison * (z.mult || 1) * (z.src && z.src.kind === 'b' ? self.bossK(z.src, p) : 1), 5, z.src);
+      if (fx.burn) self.addDot(p, 'burn', fx.burn * (z.mult || 1) * (z.src && z.src.kind === 'b' ? self.bossK(z.src, p) : 1), 4, z.src);
       if (fx.knock) {
         var dx = p.st.x - z.x, dz = p.st.z - z.z, l = Math.hypot(dx, dz) || 1, dir = z.shape === 'line' ? { x: Math.sin(z.ang), z: Math.cos(z.ang) } : { x: dx / l, z: dz / l };
         var rr = Sim.resolve(self.W, p.st.x + dir.x * fx.knock, p.st.z + dir.z * fx.knock, p.stats.radius); p.st.x = rr.x; p.st.z = rr.z; p.rs++;
@@ -232,6 +243,16 @@
     });
     this.bossCool = this.t + 240;
   };
+  // финал сюжета: выбор концовки (один раз; нужны все 6 осколков суши и 5 стражей океана)
+  RP.chooseEnding = function (p, id) {
+    var pr = p.profile; if (!pr || pr.ending || (id !== 'lord' && id !== 'keeper')) return;
+    var need = CF.BIOMES.concat(CF.OCEANS), k = CF.allKings(pr);
+    for (var i = 0; i < need.length; i++) if (k.indexOf(need[i]) < 0) return;
+    pr.ending = id; var tid = id === 'lord' ? 'epoch_lord' : 'spark_keeper';
+    if (!Array.isArray(pr.titles)) pr.titles = []; if (pr.titles.indexOf(tid) < 0) pr.titles.push(tid); pr.title = tid;
+    this.gainCoins(p, 1000); this.markDirty(p); this.flushProfile(p, true);
+    this.broadcast({ t: 'upd', p: { id: p.id, end: id, title: tid } });
+  };
   // босса убили (вызывается из kill)
   var baseKill = RP.kill;
   RP.kill = function (src, dst, o) {
@@ -301,7 +322,7 @@
   RP.environment = function (p) {
     if (this.mode === 'duel' || p.shield > this.t) return;
     var W = this.W, s = p.st, hz = W.cfg.hazard, res = p.stats.resist, H = CF.HAZARD;
-    if (hz === 'cold' && this.wx > 0.5 && !s.clm) this.envDamage(p, H.cold * (1 - res) * this.wx, 'cold');
+    if (hz === 'cold' && this.wx > 0.5 && !s.clm) this.envDamage(p, H.cold * (1 - res) * this.wx * (p.food > 60 ? 0.5 : 1), 'cold');   // сытый мёрзнет вдвое слабее
     else if (hz === 'heat') {
       var noon = this.tod > 0.33 && this.tod < 0.67;
       if (noon || this.wx > 0.5) {

@@ -1,0 +1,81 @@
+<!doctype html><meta charset="utf-8"><title>trike export</title>
+<!-- Страница для tools/trike_glb.py: строит трицератопса игры и снимает кадры анимаций (кости, корпус, веки). Не часть игры. -->
+<script src="../game/config.js"></script><script src="../game/sim.js"></script>
+<script type="importmap">{"imports":{"three":"../game/vendor/three.module.js"}}</script>
+<script type="module">
+import * as THREE from 'three';
+import { buildDino, animateDino } from '../game/dinos.js';
+const b64 = (ta) => { const u = new Uint8Array(ta.buffer, ta.byteOffset, ta.byteLength); let s = ''; for (let i = 0; i < u.length; i += 32768) s += String.fromCharCode.apply(null, u.subarray(i, i + 32768)); return btoa(s); };
+function make(color) { const d = buildDino({ cls: 'herb', color, level: 1 }); d.scale.setScalar(1); d.updateMatrixWorld(true); return d; }
+window.exportModel = (color) => {
+  const d = make(color), P = d.userData.parts, T = P.trike, mesh = T.mesh, sk = mesh.skeleton;
+  mesh.updateMatrixWorld(true);
+  const inv = new THREE.Matrix4().copy(mesh.matrixWorld).invert();
+  const joints = sk.bones.slice(), jIndex = new Map(joints.map((b, i) => [b, i]));
+  // веки — тоже суставы (их поворачивает аниматор), родитель — кость головы
+  const lidJ = [];
+  for (const l of T.lids) for (const g of [l.tp, l.bp]) { jIndex.set(g, joints.length); joints.push(g); lidJ.push(g); }
+  const jointInfo = joints.map((j) => {
+    let parent = j.parent, local = new THREE.Matrix4().copy(j.matrix);
+    if (lidJ.includes(j)) { local = new THREE.Matrix4().multiplyMatrices(j.parent.matrix, j.matrix); parent = j.parent.parent; }   // группа глаза сливается с веком
+    const p = new THREE.Vector3(), q = new THREE.Quaternion(), s = new THREE.Vector3(); local.decompose(p, q, s);
+    const ibm = new THREE.Matrix4().multiplyMatrices(inv, j.matrixWorld).invert();
+    return { name: j.name || ('lid' + lidJ.indexOf(j)), parent: jIndex.has(parent) ? jIndex.get(parent) : -1, t: [p.x, p.y, p.z], r: [q.x, q.y, q.z, q.w], s: [s.x, s.y, s.z], ibm: ibm.toArray() };
+  });
+  const g = mesh.geometry, A = (n) => g.attributes[n].array;
+  const body = { pos: b64(A('position')), nrm: b64(A('normal')), uv: b64(A('uv')), col: b64(A('color')), si: b64(new Uint16Array(A('skinIndex'))), sw: b64(new Float32Array(A('skinWeight'))), idx: b64(new Uint32Array(g.index.array)), n: g.attributes.position.count };
+  // жёсткие детали (глаза, рога, шипы, веки): в пространство привязки, вес 1 на свой сустав; группируем по материалу
+  const parts = {};
+  mesh.traverse((o) => {
+    if (!o.isMesh || o === mesh) return;
+    let j = o.parent; while (j && !jIndex.has(j)) j = j.parent; if (!j) return;
+    const m = new THREE.Matrix4().multiplyMatrices(inv, o.matrixWorld), nm = new THREE.Matrix3().getNormalMatrix(m);
+    const mat = o.material, key = mat.isMeshBasicMaterial ? 'glow' : (mat.metalness > 0.1 && mat.roughness < 0.3 ? 'eye' : (mat.vertexColors ? 'acc' : 'lid'));
+    const G = o.geometry.index ? o.geometry : o.geometry, P0 = G.attributes.position, N0 = G.attributes.normal || (G.computeVertexNormals(), G.attributes.normal), C0 = G.attributes.color;
+    const pr = parts[key] || (parts[key] = { pos: [], nrm: [], col: [], j: [], idx: [], rough: mat.roughness, metal: mat.metalness, color: mat.color ? mat.color.toArray() : [1, 1, 1] });
+    const base = pr.pos.length / 3, v = new THREE.Vector3(), c = new THREE.Color();
+    for (let i = 0; i < P0.count; i++) {
+      v.fromBufferAttribute(P0, i).applyMatrix4(m); pr.pos.push(v.x, v.y, v.z);
+      v.fromBufferAttribute(N0, i).applyMatrix3(nm).normalize(); pr.nrm.push(v.x, v.y, v.z);
+      if (C0) { c.setRGB(C0.getX(i), C0.getY(i), C0.getZ(i)); } else c.copy(mat.color);
+      pr.col.push(c.r, c.g, c.b); pr.j.push(jIndex.get(j));
+    }
+    if (G.index) for (let i = 0; i < G.index.count; i++) pr.idx.push(G.index.getX(i) + base); else for (let i = 0; i < P0.count; i++) pr.idx.push(base + i);
+  });
+  for (const k in parts) { const p = parts[k]; p.n = p.pos.length / 3; p.pos = b64(new Float32Array(p.pos)); p.nrm = b64(new Float32Array(p.nrm)); p.col = b64(new Float32Array(p.col)); p.j = b64(new Uint16Array(p.j)); p.idx = b64(new Uint32Array(p.idx)); }
+  const fr = P.frame, bd = P.body;
+  return JSON.stringify({ joints: jointInfo, body, parts, frame: { r: fr.quaternion.toArray(), t: fr.position.toArray() } });
+};
+// клипы: speed — скорость (как в игре, ×6 м/с), w — поворот (рад/с), run, extra — события (бодание/рёв)
+window.sampleClip = (color, c) => {
+  const d = make(color), P = d.userData.parts, T = P.trike, joints = T.mesh.skeleton.bones.slice(), lids = [];
+  for (const l of T.lids) lids.push(l.tp, l.bp);
+  const fps = 30, dt = 1 / fps, warm = c.warm || 3; let t = 0, yaw = 0;
+  const st = { run: !!c.run, swim: false };
+  const step = () => { yaw += (c.w || 0) * dt; d.rotation.y = yaw; animateDino(d, t, c.speed || 0, dt, st); t += dt; };
+  step(); if (c.graze) { T.st.idle = 0; T.st.gT = 0.2; }
+  for (let i = 0; i < warm * fps; i++) step();
+  // длительность — целое число шагов для походки (бесшовный цикл), иначе как задано
+  let dur = c.dur || 2;
+  if (c.cycle) {                      // походка: ждём начала шага, меряем длину цикла и снимаем следующий такой же — бесшовная петля
+    const S = T.st; let prev = S.ph, n = 0;
+    while (n++ < 900) { step(); if (S.ph < prev - 0.5) break; prev = S.ph; }
+    let m = 0; prev = S.ph; while (m < 900) { step(); m++; if (S.ph < prev - 0.5) break; prev = S.ph; }
+    dur = m / fps;
+  }
+  const N = Math.round(dur * fps) + 1, out = { dur, n: N, j: joints.map(() => ({ t: [], r: [] })), lid: lids.map(() => ({ r: [], s: [] })), body: { t: [], r: [] }, root: { r: [] }, chest: [] };
+  if (c.bite) d.userData.bite = 1; if (c.roar) d.userData.roar = 1;
+  const y0 = yaw;
+  for (let i = 0; i < N; i++) {
+    if (c.bite && i > 0 && i % Math.round(c.bite * fps) === 0) d.userData.bite = 1;
+    joints.forEach((b, k) => { out.j[k].t.push(b.position.x, b.position.y, b.position.z); out.j[k].r.push(b.quaternion.x, b.quaternion.y, b.quaternion.z, b.quaternion.w); });
+    lids.forEach((g, k) => { const q = new THREE.Quaternion().multiplyQuaternions(g.parent.quaternion, g.quaternion); out.lid[k].r.push(q.x, q.y, q.z, q.w); const v = g.visible ? 1 : 0.0001; out.lid[k].s.push(g.scale.x * v, g.scale.y * v, g.scale.z * v); });
+    out.body.t.push(P.body.position.x, P.body.position.y, P.body.position.z); out.body.r.push(P.body.quaternion.x, P.body.quaternion.y, P.body.quaternion.z, P.body.quaternion.w);
+    const qr = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw - y0); out.root.r.push(qr.x, qr.y, qr.z, qr.w);
+    out.chest.push(T.chest.scale.x, T.chest.scale.y, T.chest.scale.z);
+    step();
+  }
+  return JSON.stringify(out);
+};
+document.title = 'ready';
+</script>

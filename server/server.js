@@ -51,7 +51,7 @@ function applyCreate(old, inc, newRun) {
   let p = Sim.fixProfile(JSON.parse(JSON.stringify(old || Sim.defaultProfile(''))));
   if (newRun) {
     const d = Sim.defaultProfile(name);
-    ['wins', 'kings', 'kingAt', 'cosmetics', 'cosmetic', 'pets', 'pet', 'claimed', 'codes', 'titles', 'title', 'patc', 'rfx', 'morph', 'eggskin', 'color', 'mats', 'trophies', 'elo', 'dw', 'dl', 'season', 'coins', 'stats', 'playTime', 'daily', 'tut', 'nest'].forEach(k => { if (p[k] !== undefined) d[k] = p[k]; });
+    ['wins', 'kings', 'kingAt', 'cosmetics', 'cosmetic', 'pets', 'pet', 'claimed', 'codes', 'titles', 'title', 'patc', 'rfx', 'morph', 'eggskin', 'color', 'mats', 'trophies', 'elo', 'dw', 'dl', 'season', 'coins', 'stats', 'playTime', 'daily', 'tut', 'nest', 'story', 'ending'].forEach(k => { if (p[k] !== undefined) d[k] = p[k]; });
     p = d;
   } else if (p.hatched && p.cls && cls !== p.cls) return { error: 'class_locked' };
   p.name = name; p.color = inc.color;

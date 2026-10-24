@@ -602,8 +602,9 @@ export function buildWorld(scene, biomeId, opts) {
     const [gMax, gDens] = GRASS_FILTER[W.biome] || [14, 1], grng = Sim.mulberry32(W.biome.length * 977 + 4242), N = Math.round(46000 * gDens), items = [];
     for (let i = 0; i < N; i++) {
       const x = (grng() * 2 - 1) * (HALF - 8), z = (grng() * 2 - 1) * (HALF - 8), h = MH(x, z);
-      if (h < W.waterY + 0.45 || h > gMax + 20 || Math.hypot(x, z) < ARENA - 1 || W.slopeAt(x, z) > 0.75 || Math.hypot(x - W.nest.x, z - W.nest.z) < 9) continue;
-      const v = grng(); items.push({ x, y: h - 0.03, z, rot: grng() * 6.28, s: 0.75 + grng() * 0.5, ksi: pickW(kit.cover, v), kv: (grng() * 2) | 0 });
+      if (h < W.waterY + 0.45 || h > gMax + 20 || Math.hypot(x, z) < ARENA - 1 || W.slopeAt(x, z) > 1.05 || Math.hypot(x - W.nest.x, z - W.nest.z) < 9) continue;   // трава растёт и на крутых склонах
+      const v = grng(), ks = pickW(kit.cover, v), gl = /grass|sedge/.test(String(kit.cover[ks][0])) ? 0.7 : 1;   // травянистые — ниже
+      items.push({ x, y: h - 0.03, z, rot: grng() * 6.28, s: (0.75 + grng() * 0.5) * gl, ksi: ks, kv: (grng() * 2) | 0 });
     }
     cover = { pool: kitPool(kit.cover, 2, 900, false), grid: gridOf(items) };
     // кувшинки на мелководье, подводные растения на дне
@@ -645,6 +646,25 @@ export function buildWorld(scene, biomeId, opts) {
   }
   // пересборка ближних наборов, когда камера сдвинулась
   const vegTmp = [], hiddenNow = new Set(); let vegAt = null, vegQ = '';
+  // кувшинки плавают: поднимаются и опускаются вместе с волнами и слегка покачиваются
+  function waveH(x, z) {
+      if (!waterU) return 0;
+      const t = waterU.uTime.value, A = waterU.uAmp.value, Dn = [[1, 0.3], [-0.6, 1], [0.9, -0.7], [-1, -0.2]], Am = [0.11, 0.075, 0.045, 0.028], Ln = [19, 11, 6.3, 3.4];
+      let h = 0; for (let i = 0; i < 4; i++) { const l = Math.hypot(Dn[i][0], Dn[i][1]), k = 6.2832 / Ln[i], w = Math.sqrt(9.8 * k); h += Am[i] * A * Math.sin((Dn[i][0] * x + Dn[i][1] * z) / l * k + t * w); }
+      return h;
+  }
+  let lilyList = [], lilyT = 0;
+  const _lq = new THREE.Quaternion(), _le = new THREE.Euler();
+  function lilyFill() {
+    if (!lilies || !lilyList.length) return;
+    const tt = waterU ? waterU.uTime.value : 0;
+    fillPool(lilies.pool, lilyList, (im, i, it, sc) => {
+      const ph = it.x * 1.7 + it.z * 2.3, dx = Math.sin(tt * 0.35 + ph) * 0.14, dz = Math.cos(tt * 0.29 + ph * 1.3) * 0.14;   // слабый дрейф по воде
+      const x = it.x + dx, z = it.z + dz, w = waveH(x, z), w2 = waveH(x + 0.7, z), w3 = waveH(x, z + 0.7);
+      _le.set((w3 - w) / 0.7 * 1.3 + Math.sin(tt * 1.1 + ph) * 0.05, it.rot + Math.sin(tt * 0.3 + ph) * 0.12, -(w2 - w) / 0.7 * 1.3 + Math.cos(tt * 0.9 + ph) * 0.05); q4.setFromEuler(_le);
+      p4.set(x, W.waterY + 0.06 + w * 1.0 + Math.sin(tt * 1.6 + ph) * 0.012, z); s4.setScalar(it.s * sc); m4.compose(p4, q4, s4); im.setMatrixAt(i, m4);
+    });
+  }
   function fillPool(pool, list, fn) {
     for (const p of pool.pools) p.im.count = 0;
     if (!pool.pools.length) return;
@@ -662,11 +682,11 @@ export function buildWorld(scene, biomeId, opts) {
       const x = (ix + r()) * BC, z = (iz + r()) * BC, pv = r(), a1 = r(), a2 = r(), a3 = r(), s1 = r(), s2 = r(), cp = r(), cs = r();
       if (Math.abs(x) > HALF - 6 || Math.abs(z) > HALF - 6) continue;
       const h = MH(x, z);
-      if (h < W.waterY + 0.3 || Math.hypot(x, z) < ARENA - 1 || Math.hypot(x - W.nest.x, z - W.nest.z) < 8.5 || W.slopeAt(x, z) > 0.8) continue;
+      if (h < W.waterY + 0.3 || Math.hypot(x, z) < ARENA - 1 || Math.hypot(x - W.nest.x, z - W.nest.z) < 8.5 || W.slopeAt(x, z) > 1.15) continue;
       const patch = 0.82 + 0.45 * Tree.fbm2(x * 0.18 + 3, z * 0.18, 2, 11) * 1.6;
       if (pv > patch) continue;
       _bo.position.set(x, h - 0.02, z); _bo.rotation.set(-0.15 + a1 * 0.3, a2 * 6.2832, -0.15 + a3 * 0.3);
-      _bo.scale.set((0.8 + s1 * 0.5) * 1.3, (0.25 + s2 * 0.45) * (0.7 + 0.5 * Math.min(1, patch)) * 1.5 * blades.hmul, 1); _bo.updateMatrix();
+      _bo.scale.set((0.8 + s1 * 0.5) * 1.3, (0.25 + s2 * 0.45) * (0.7 + 0.5 * Math.min(1, patch)) * 0.95 * blades.hmul, 1); _bo.updateMatrix();
       mats.push(..._bo.matrix.elements); tc.copy(blades.pal[Math.floor(cp * blades.pal.length)]).multiplyScalar(0.85 + cs * 0.3); cols.push(tc.r, tc.g, tc.b);
     }
     c = { m: new Float32Array(mats), c: new Float32Array(cols), n: cols.length / 3 };
@@ -708,7 +728,7 @@ export function buildWorld(scene, biomeId, opts) {
     }
     if (blades) refreshBlades(cx, cz, qn);
     if (cover) fillPool(cover.pool, query(cover.grid, cx, cz, covR, vegTmp).slice(), (im, i, it, sc) => setM(im, i, it, it.s * sc));
-    if (lilies) fillPool(lilies.pool, query(lilies.grid, cx, cz, covR * 1.3, vegTmp).slice(), (im, i, it, sc) => setM(im, i, it, it.s * sc));
+    if (lilies) { lilyList = query(lilies.grid, cx, cz, covR * 1.3, vegTmp).slice(); lilyFill(); }
     if (under) fillPool(under.pool, query(under.grid, cx, cz, W.ocean ? UNDER_DIST[qn] || 60 : covR * 1.2, vegTmp).slice(), (im, i, it, sc) => setM(im, i, it, it.s * sc));
     vegAt = { x: cx, z: cz }; vegQ = qn;
   }
@@ -848,6 +868,7 @@ export function buildWorld(scene, biomeId, opts) {
   function applyQuality(name) {
     Q = Object.assign({ name: CONFIG.QUALITY[name] ? name : 'high' }, CONFIG.QUALITY[name] || CONFIG.QUALITY.high);
     sun.castShadow = Q.shadow > 0;
+    { const hs = { high: 55, med: 42, low: 28 }[Q.name] || 55, sc = sun.shadow.camera; sc.left = -hs; sc.right = hs; sc.top = hs; sc.bottom = -hs; sc.updateProjectionMatrix(); }   // тень только там, где деревья ещё отбрасывают тень (иначе светлые пятна меняются при движении камеры)
     if (Q.shadow > 0 && sun.shadow.mapSize.x !== Q.shadow) { sun.shadow.mapSize.set(Q.shadow, Q.shadow); if (sun.shadow.map) { sun.shadow.map.dispose(); sun.shadow.map = null; } }
     pCount = Math.min(PMAX, Q.particles * 2); pg.setDrawRange(0, pCount);
     return Q;
@@ -914,6 +935,7 @@ export function buildWorld(scene, biomeId, opts) {
     if (lavaMat && lavaMat.normalMap) lavaMat.normalMap.offset.set(t * 0.012, t * 0.008);
     if (waterU) {
       waterU.uTime.value = t; waterU.uSunDir.value.copy(skyU.sunDir.value); waterU.uDay.value = lastDay;
+      if (lilyList.length && t - lilyT > 0.05) { lilyT = t; lilyFill(); }
       waterU.uSkyTop.value.copy(skyU.top.value); waterU.uSkyBot.value.copy(skyU.bot.value);
     }
     if (wg && !waterU) {
@@ -973,12 +995,7 @@ export function buildWorld(scene, biomeId, opts) {
     meshH: MH,
     nestLift(x, z) { if (!nestKit) return 0; const dx = (x - W.nest.x) / NEST_S, dz = (z - W.nest.z) / NEST_S; if (dx * dx + dz * dz > 2.4 * 2.4) return 0; return Math.max(0, nestKit.heightAt(dx, dz) * NEST_S); },
     // высота волны в точке (та же формула, что в шейдере воды): по ней динозавр качается на поверхности и не торчит над водой
-    waveAt(x, z) {
-      if (!waterU) return 0;
-      const t = waterU.uTime.value, A = waterU.uAmp.value, Dn = [[1, 0.3], [-0.6, 1], [0.9, -0.7], [-1, -0.2]], Am = [0.11, 0.075, 0.045, 0.028], Ln = [19, 11, 6.3, 3.4];
-      let h = 0; for (let i = 0; i < 4; i++) { const l = Math.hypot(Dn[i][0], Dn[i][1]), k = 6.2832 / Ln[i], w = Math.sqrt(9.8 * k); h += Am[i] * A * Math.sin((Dn[i][0] * x + Dn[i][1] * z) / l * k + t * w); }
-      return h;
-    },
+    waveAt(x, z) { return waveH(x, z); },
     get underwater() { return underNow; },
     sim: W, root, nest: W.nest, nestInfo, sun, minimap, minimapSize: MM, mapSize: SIZE, applyQuality, update, dispose, setTramplers, barrier, portalIn, portalNext,
     setPortalNext(on) { if (portalNext) portalNext.group.visible = !!on; },

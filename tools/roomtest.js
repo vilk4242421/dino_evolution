@@ -441,7 +441,8 @@ console.log('21. Гнездо');
   const b = hub.join({ profile: profile('herb', 8), conn: c2, userId: 82, biome: 'forest', mode: 'code', code: 'NESTA' });
   ok(c2.last('welcome').host === pa.id, 'хозяин комнаты — тот, кто её создал (виден гостю)');
   const pr = pa.profile; pr.coins = 1000;
-  rm.nestBuy(pa, 'egg_gold'); ok(pr.nest.items.indexOf('egg_gold') >= 0 && pr.nest.put[0] === 'egg_gold' && pr.coins === 500, 'яйцо куплено и поставлено');
+  rm.nestBuy(pa, 'egg_gold'); ok(pr.nest.items.indexOf('egg_gold') < 0 && pr.coins === 1000, 'три яйца убраны из магазина: купить нельзя');
+  pr.coins = 500; pr.nest.items.push('egg_gold'); pr.nest.put.push('egg_gold'); ok(pr.nest.put[0] === 'egg_gold' && Core.CF.NEST_ITEMS.egg_blue.shopHidden && Core.CF.NEST_ITEMS.egg_spot.shopHidden, 'старое яйцо остаётся у владельца');
   rm.nestBuy(pa, 'egg_gold'); ok(pr.coins === 500, 'дубликат не покупается');
   rm.nestPut(pa, ['tr_forest', 'egg_gold']); ok(pr.nest.put.length === 1 && pr.nest.put[0] === 'egg_gold', 'трофей без победы над боссом поставить нельзя');
   pr.trophies.forest = 1; rm.nestPut(pa, ['tr_forest', 'egg_gold', 'egg_gold', 'zzz']); ok(pr.nest.put.join() === 'tr_forest,egg_gold', 'трофей босса, дубли и мусор отфильтрованы');
@@ -512,6 +513,40 @@ console.log('24. Бывалые враги (минимум 7 уровень)');
     ok(k.chest >= 8 && k.pearl >= 3 && k.fruit >= 2, 'в океане много сокровищ: сундуки ' + k.chest + ', жемчужины ' + k.pearl + ', плоды ' + k.fruit);
     const pk = Sim.getWorld('reef').features.peaks; let tiers = [0, 0, 0]; pk.forEach(o => tiers[o.v < 0.34 ? 0 : o.v < 0.67 ? 1 : 2]++); let sep = true; for (let i = 0; i < pk.length; i++) for (let j = i + 1; j < pk.length; j++) if (Math.hypot(pk[i].x - pk[j].x, pk[i].z - pk[j].z) < pk[i].r + pk[j].r) sep = false;
     ok(pk.length >= 15 && tiers.every(n => n >= 3) && sep, 'подводные горы: низкие/средние/высокие (' + tiers.join('/') + '), стоят раздельно'); }
+}
+
+console.log('\n13. Сюжет «Последняя Искра»: метки, защита на ролик, выбор концовки');
+{
+  const hub = new Core.Hub({ onSave() { } }), c = mkConn(), r = hub.join({ profile: profile('carn', 20, { kings: CF.BIOMES.slice() }), conn: c, userId: 701, biome: 'forest', mode: 'solo' }), p = r.player;
+  tick(hub, 5);
+  hub.onMessage(p, { t: 'story', k: 'pro' }); ok(p.profile.story && p.profile.story.pro === 1, 'метка пролога сохранена в профиле');
+  hub.onMessage(p, { t: 'story', k: 'hack' }); ok(!p.profile.story.hack, 'неизвестные метки отбрасываются');
+  const sh0 = p.shield || 0; hub.onMessage(p, { t: 'story', k: 'cine' }); ok((p.shield || 0) > sh0 + 30, 'на время ролика игрока не трогают (щит)');
+  hub.onMessage(p, { t: 'ending', id: 'lord' }); ok(!p.profile.ending, 'без Сердца (5 стражей океана) концовку выбрать нельзя');
+  CF.OCEANS.forEach(b => p.profile.kings.push(b)); const coins = p.profile.coins;
+  hub.onMessage(p, { t: 'ending', id: 'nope' }); ok(!p.profile.ending, 'неверная концовка отклоняется');
+  hub.onMessage(p, { t: 'ending', id: 'keeper' }); ok(p.profile.ending === 'keeper' && p.profile.title === 'spark_keeper' && p.profile.titles.indexOf('spark_keeper') >= 0 && p.profile.coins > coins, 'Хранитель Искры: концовка, звание и награда');
+  hub.onMessage(p, { t: 'ending', id: 'lord' }); ok(p.profile.ending === 'keeper', 'выбор делается один раз');
+  ok(Sim.fixProfile(JSON.parse(JSON.stringify(p.profile))).ending === 'keeper', 'концовка переживает fixProfile');
+  ok(Sim.fixProfile({ ending: 'x', story: 5 }).ending === '' && typeof Sim.fixProfile({ story: 5 }).story === 'object', 'мусор в story/ending чистится');
+  const pi = r.room.pubInfo(p); ok(pi.end === 'keeper', 'концовка видна другим игрокам (end в pubInfo)');
+}
+
+console.log('14. Сохранения по видам, выбор локации, титул «Король суши»');
+{
+  const pr = profile('carn', 12); pr.kings = ['forest', 'snow'];
+  Sim.switchType(pr, 'herb'); ok(pr.kings.length === 0 && pr.level === 1, 'у травоядного своё прохождение: корон нет, уровень 1');
+  pr.kings = ['forest']; pr.level = 5;
+  Sim.switchType(pr, 'carn'); ok(pr.kings.join() === 'forest,snow' && pr.level === 12, 'хищник вернулся со своими коронами и уровнем');
+  const fp = Sim.fixProfile(JSON.parse(JSON.stringify(pr))); ok(fp.slots.herb && fp.slots.herb.kings.join() === 'forest', 'короны слота переживают fixProfile');
+  ok(CF.allKings(fp).length === 2 && CF.typeKings(fp, 'herb').join() === 'forest', 'allKings — объединение, typeKings — по виду');
+  const hub = new Core.Hub({ onSave() { } }), conn = mkConn(); const p2 = profile('carn', 12); p2.kings = ['forest', 'snow'];
+  const r = hub.join({ profile: p2, conn, userId: 5, biome: 'forest', mode: 'solo' }), p = r.player;
+  hub.onMessage(p, { t: 'goto', biome: 'mountain' }); ok(hub.travelQ.length === 1 && hub.travelQ[0].biome === 'mountain', 'goto: открытая локация (следующая после корон) доступна');
+  hub.travelQ.length = 0; p.travelT = -99; hub.onMessage(p, { t: 'goto', biome: 'desert' }); ok(hub.travelQ.length === 0, 'goto: закрытая локация отклоняется');
+  hub.onMessage(p, { t: 'goto', biome: 'reef' }); ok(hub.travelQ.length === 0, 'goto: из другого мира нельзя');
+  const A = CF.ACHIEVEMENTS ? CF.ACHIEVEMENTS.find(a => a.id === 'king1') : null;
+  if (A) { ok(!A.t({ kings: ['forest'], slots: {} }) && A.t({ kings: CF.BIOMES.slice(), slots: {} }), 'достижение «Король суши» — только за всех 6 боссов суши'); ok(CF.TITLES.landking, 'титул «Король суши» существует'); }
 }
 
 console.log('\nПройдено проверок: ' + passed);

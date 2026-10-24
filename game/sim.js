@@ -315,7 +315,8 @@
       if (Math.hypot(rx, rz) < ARENA + 8) continue;
       if (Math.hypot(rx - W.portalIn.x, rz - W.portalIn.z) < 6 || Math.hypot(rx - W.portalNext.x, rz - W.portalNext.z) < 6) continue;
       var rs = 0.7 + rng() * 1.8;
-      var rk = { x: rx, z: rz, y: rh, s: rs, r: 0.95 * rs, rot: rng() * 6.28, v: rng(), kind: 'rock', h: 1.4 * rs };
+      var rk = { x: rx, z: rz, y: rh, s: rs, r: 0.6 * rs, rot: rng() * 6.28, v: rng(), kind: 'rock', h: 1.4 * rs };
+      if (!W.ocean) { var wet = false; for (var q = 0; q < 8 && !wet; q++) { var qa = q / 8 * 6.2832; if (heightAt(rx + Math.cos(qa) * rk.r, rz + Math.sin(qa) * rk.r) < W.waterY + 0.05) wet = true; } if (wet) continue; }   // валун у самой воды уходил под воду, а столкновение оставалось — невидимый блок
       W.rocks.push(rk); if (!W.ocean) addObstacle(W, rk);
     }
     // ближайшее дерево, на которое можно залезть
@@ -392,7 +393,7 @@
     var st = {
       sprintMult: sprintMult, noSprint: !!c.noSprint,
       cls: cls, level: level, hp: hp, speed: c.speed * spd, dmg: c.dmg * dmgMult,
-      scale: sc, radius: 0.5 * sc + 0.1, reach: c.reach * (0.6 + sc * 0.4) + 0.4, atkCd: c.atkCd, ranks: ranks, fx: fx,
+      scale: sc, radius: 0.5 * sc + 0.1, reach: c.reach * (0.45 + sc * 0.62) + 0.3, atkCd: c.atkCd, ranks: ranks, fx: fx,
       regen: (CF.REGEN_BASE + CF.REGEN_PCT * hp) + v('regen') * (1 + level * 0.08),
       armor: Math.min(0.55, (v('armor') + (c.armor || 0)) / 100), resist: Math.min(1, v('resist') / 100),
       sense: v('sense') ? Math.round(v('sense')) : 0, stealth: Math.min(0.8, v('stealth') / 100),
@@ -554,7 +555,7 @@
       }
       p.onGround = false;
     } else if (deep) {                                                  // не морской: плывёт по поверхности
-      var target = W.waterY - 0.55 - 0.25 * st.scale;
+      var target = W.waterY - 0.12 - 0.08 * st.scale;
       p.y += (target - p.y) * Math.min(1, 6 * dt);
       p.vy = 0; p.onGround = false;
     } else {
@@ -674,7 +675,7 @@
     if (op === 'setpet') { if (id && pr.pets.indexOf(id) < 0) return fail('bad'); pr.pet = id; return { ok: true, field: 'pet' }; }
     if (op === 'setcolor') { var i = a.i | 0; if (i < 0 || i >= CF.COLORS.length) return fail('bad'); pr.color = i; return { ok: true, field: 'color' }; }
     if (op === 'nestbuy') {
-      c = CF.NEST_ITEMS[id]; if (!c || pr.nest.items.indexOf(id) >= 0) return fail('bad');
+      c = CF.NEST_ITEMS[id]; if (!c || c.shopHidden || pr.nest.items.indexOf(id) >= 0) return fail('bad');
       if (c.craft) {
         if (pr.mats.bone < (c.craft.bone | 0) || pr.mats.hide < (c.craft.hide | 0)) return fail('mats');
         pr.mats.bone -= c.craft.bone | 0; pr.mats.hide -= c.craft.hide | 0; pr.stats.crafted = (pr.stats.crafted | 0) + 1;
@@ -718,6 +719,8 @@
     if (!p.evo || typeof p.evo !== 'object') p.evo = {};
     p.evo = CF.evoClean(p.evo);             // старая эволюция (до деревьев) сбрасывается — очки возвращаются
     if (!Array.isArray(p.kings)) p.kings = [];
+    if (!p.story || typeof p.story !== 'object' || Array.isArray(p.story)) p.story = {};
+    if (p.ending !== 'lord' && p.ending !== 'keeper') p.ending = '';
     if (!p.kingAt || typeof p.kingAt !== 'object') p.kingAt = {};
     if (!Array.isArray(p.cosmetics)) p.cosmetics = [];
     // убранные из игры следы: покупка возвращается монетами
@@ -726,6 +729,7 @@
     delete p.trail;
     if (!Array.isArray(p.codes)) p.codes = []; p.codes = p.codes.filter(function (x) { return typeof x === 'string'; }).slice(0, 50);
     if (!Array.isArray(p.claimed)) p.claimed = []; if (!Array.isArray(p.titles)) p.titles = [];
+    if (p.titles.indexOf('king') >= 0) { if (CF.worldKings(p, 'land') >= 6 && p.titles.indexOf('landking') < 0) p.titles.push('landking'); if (p.title === 'king') p.title = CF.worldKings(p, 'land') >= 6 ? 'landking' : ''; }      // старый титул «Король биома» заменён на «Король суши»
     p.titles = p.titles.filter(function (x) { return CF.TITLES[x]; }); if (!p.title || p.titles.indexOf(p.title) < 0) p.title = '';
     ['patc', 'rfx', 'morph', 'eggskin'].forEach(function (f) { if (typeof p[f] !== 'string' || (p[f] && p.cosmetics.indexOf(p[f]) < 0)) p[f] = ''; });
     if (typeof p.cosmetic !== 'string' || (p.cosmetic && p.cosmetics.indexOf(p.cosmetic) < 0)) p.cosmetic = '';
@@ -745,7 +749,8 @@
       if (!CF.CLASSES[key] || !q || typeof q !== 'object' || key === p.cls) continue;
       var lv = clamp(q.level | 0 || 1, 1, CF.MAX_LEVEL);
       var tx = Math.max(CF.cumXp(lv), +q.totalXp || 0);
-      sl[key] = { level: lv, totalXp: tx, xp: Math.max(0, Math.min(tx - CF.cumXp(lv), +q.xp || 0)), evo: CF.evoClean(q.evo || {}) };
+      var all = CF.BIOMES.concat(CF.OCEANS), ks = (Array.isArray(q.kings) ? q.kings : []).filter(function (b, i, a) { return all.indexOf(b) >= 0 && a.indexOf(b) === i; }), kat = {}; ks.forEach(function (b) { kat[b] = +(q.kingAt && q.kingAt[b]) || 0; });
+      sl[key] = { level: lv, totalXp: tx, xp: Math.max(0, Math.min(tx - CF.cumXp(lv), +q.xp || 0)), evo: CF.evoClean(q.evo || {}), kings: ks, kingAt: kat };
     }
     p.slots = sl;
     p.daily = fixDaily(p.daily); p.tut = p.tut ? 1 : 0;
@@ -760,11 +765,12 @@
     if (!typeUnlocked(p, cls)) return 'locked';
     if (p.cls === cls) return 'same';
     var slots = Object.assign({}, p.slots || {});
-    if (p.cls) slots[p.cls] = { level: p.level, totalXp: p.totalXp, xp: p.xp, evo: p.evo || {} };
+    if (p.cls) slots[p.cls] = { level: p.level, totalXp: p.totalXp, xp: p.xp, evo: p.evo || {}, kings: (p.kings || []).slice(), kingAt: Object.assign({}, p.kingAt || {}) };
     var q = slots[cls], isNew = !q;
     delete slots[cls];
     p.slots = slots; p.cls = cls;
     p.level = q ? q.level : 1; p.totalXp = q ? q.totalXp : 0; p.xp = q ? q.xp : 0; p.evo = q ? CF.evoClean(q.evo) : {};
+    p.kings = q && q.kings ? q.kings.slice() : []; p.kingAt = q && q.kingAt ? Object.assign({}, q.kingAt) : {};
     return isNew ? 'new' : 'switch';
   }
   // уровень типа (для меню): у активного — из профиля, у остальных — из сохранённого слота

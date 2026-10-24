@@ -4,6 +4,7 @@
    Анимация — скелетная (кости внутри кожи), поэтому кожа гнётся плавно и это дёшево для видеокарты.
    Внутри модель строится в системе «x — вперёд, y — вверх, z — вбок», снаружи смотрит в +Z, как и раньше. */
 import * as THREE from 'three';
+import { TRIKE } from './trike.js';
 const CONFIG = window.CONFIG, Sim = window.Sim;
 const V3 = THREE.Vector3;
 const PI = Math.PI;
@@ -32,6 +33,7 @@ const MAT = {
   eye: new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: 0.14, metalness: 0.2 }),
   glow: new THREE.MeshBasicMaterial({ color: 0xffffff, vertexColors: true, toneMapped: false }),
   ice: new THREE.MeshStandardMaterial({ color: 0xd6f1ff, roughness: 0.12, metalness: 0.15, emissive: 0x2a74a8, emissiveIntensity: 0.6, flatShading: true }),
+  horn: new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: 0.55, metalness: 0.02, bumpMap: BUMP, bumpScale: 0.012 }),
   bugwing: new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: 0.15, metalness: 0.1, transparent: true, opacity: 0.5, side: THREE.DoubleSide, depthWrite: false })
 };
 const skinVar = new Map();
@@ -1028,6 +1030,358 @@ function scorpion(o) {
   return rig;
 }
 
+
+// ======================================================================== ТРАВОЯДНЫЙ: ТРИЦЕРАТОПС (сетка из STL, подготовлена tools/bake_trike.py → trike_uv.py → trike_rig.py → trike_js.py)
+// В trike.js — правая половина сетки (левая — зеркало), UV, регионы (кожа/воротник/край/клюв/рог/когти), скелет и веса (тепловая диффузия),
+// карта нормалей (чешуя и складки, запечены с исходной детальной сетки) и карта рельефа (тёмные щели между чешуями).
+// Цвет кожи — вершинные цвета по палитре и узору (работают все скины, морфы и цвета узоров), рог/клюв/когти/воротник — свои цвета.
+// Анимация — своя (animTrike): шаг по фазам с опорой на землю (IK ног, без скольжения), повороты, дыхание, выпас, рёв, бодание.
+let TRIKE_D = null;
+function b64buf(str) { const bin = atob(str), a = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i); return a.buffer; }
+function trikeData() {
+  if (TRIKE_D) return TRIKE_D;
+  const T = TRIKE, v = new Int16Array(b64buf(T.v)), n = v.length / 3, P = new Float32Array(n * 3);
+  for (let i = 0; i < n * 3; i++) P[i] = v[i] / T.s;
+  const uv16 = new Uint16Array(b64buf(T.uv)), UV = new Float32Array(n * 2); for (let i = 0; i < n * 2; i++) UV[i] = uv16[i] / 65535;
+  TRIKE_D = { n, P, UV, F: new Uint16Array(b64buf(T.f)), O: new Uint16Array(b64buf(T.o)), R: new Uint8Array(b64buf(T.r)), SI: new Uint8Array(b64buf(T.si)), SW: new Uint8Array(b64buf(T.sw)), bones: T.bones, lm: T.lm };
+  return TRIKE_D;
+}
+let TRIKE_TEX = null;
+function trikeTex() {
+  if (TRIKE_TEX || typeof document === 'undefined') return TRIKE_TEX;
+  const L = new THREE.TextureLoader(), mk = (src) => { const t = L.load(src); t.anisotropy = 4; t.colorSpace = THREE.NoColorSpace; return t; };
+  TRIKE_TEX = { nrm: mk(TRIKE.nrm), det: mk(TRIKE.det) };
+  return TRIKE_TEX;
+}
+const trikeMats = new Map();
+function trikeMat(emis) {
+  const key = emis || 0; let m = trikeMats.get(key); if (m) return m;
+  const T = trikeTex();
+  // det — серый множитель (0.82 — нейтраль), поэтому общий цвет поднят на 1/0.82
+  m = new THREE.MeshStandardMaterial({ color: new THREE.Color(1.22, 1.22, 1.22), vertexColors: true, roughness: 0.8, metalness: 0, map: T && T.det, normalMap: T && T.nrm, normalScale: new THREE.Vector2(1.1, 1.1) });
+  if (emis) { m.emissive = new THREE.Color(emis); m.emissiveIntensity = 1; }
+  trikeMats.set(key, m); return m;
+}
+// рог: изогнутый конус с продольными бороздками и переходом цвета (тёмное основание → кость → тёмный кончик)
+function trikeHornGeo(len, r0, bend) {
+  // объёмный рог: овальное сечение, продольные бороздки, кольца роста у основания, тёмное основание и кончик, затенение в бороздках
+  const RG = 30, SG = 26, pos = [], col = [], idx = [], c = new THREE.Color(), cb = hx(0x6e5c44), cm = hx(0xdccfae), cl = hx(0xefe6cc), ct = hx(0x2a221a);
+  for (let i = 0; i <= RG; i++) {
+    const t = i / RG, x = len * t, y = bend * len * t * t, r = r0 * Math.pow(1 - t, 0.62) * (1 + 0.18 * (1 - sstep(0, 0.12, t))) * Math.min(1, 0.4 + t * 14) + 0.01 * r0;
+    if (t < 0.3) c.copy(cb).lerp(cm, sstep(0, 0.3, t)); else if (t < 0.7) c.copy(cm).lerp(cl, sstep(0.3, 0.7, t)); else c.copy(cl).lerp(ct, sstep(0.78, 1, t));
+    const ang = Math.atan(2 * bend * t), ring = 1 + 0.035 * Math.max(0, Math.sin(t * 70)) * (1 - sstep(0.05, 0.45, t));
+    for (let j = 0; j <= SG; j++) {
+      const a = j / SG * PI * 2, gv = Math.sin(a * 9 + t * 3), gr = (1 + 0.085 * gv * (1 - 0.55 * t)) * ring;
+      const ny = Math.cos(a) * r * gr * 1.0, nz = Math.sin(a) * r * gr * 1.0;
+      pos.push(x - ny * Math.sin(ang), y + ny * Math.cos(ang), nz);
+      const ao = (0.72 + 0.28 * (0.5 + 0.5 * gv)) * (0.6 + 0.4 * sstep(0, 0.14, t)) * (ring > 1.01 ? 1.08 : 0.96) * (0.85 + 0.15 * (0.5 + 0.5 * Math.cos(a)));
+      col.push(c.r * ao, c.g * ao, c.b * ao);
+    }
+  }
+  for (let i = 0; i < RG; i++) for (let j = 0; j < SG; j++) { const a = i * (SG + 1) + j, b = a + SG + 1; idx.push(a, a + 1, b, b, a + 1, b + 1); }
+  const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3)); g.setIndex(idx); g.computeVertexNormals();
+  return g;
+}
+// базис «ось x по dir, ось y — вверх, насколько можно»
+function basisX(dir) { const x = dir.clone().normalize(), z = new V3().crossVectors(x, new V3(0, 1, 0)).normalize(), y = new V3().crossVectors(z, x); return new THREE.Matrix4().makeBasis(x, y, z); }
+function triceratops(o) {
+  const r = o.r || {}, stage = o.stage || 0, Q = (o.q || 1) * qMul(); _eyeQ = Q;
+  const D = trikeData(), nh = D.n, n = nh * 2, s = 0.0245, bz = 1 + (r.mass || 0) * 0.04, lm = D.lm;
+  // ---- геометрия: правая половина + зеркальная левая
+  const pos = new Float32Array(n * 3), uv = new Float32Array(n * 2), mp = new Float32Array(n * 3), reg = new Uint8Array(n);
+  for (let i = 0; i < nh; i++) for (let m = 0; m < 2; m++) {
+    const j = i + m * nh, sz = m ? -1 : 1;
+    mp[j * 3] = D.P[i * 3]; mp[j * 3 + 1] = D.P[i * 3 + 1]; mp[j * 3 + 2] = D.P[i * 3 + 2] * sz;
+    pos[j * 3] = mp[j * 3] * s; pos[j * 3 + 1] = mp[j * 3 + 1] * s; pos[j * 3 + 2] = mp[j * 3 + 2] * s * bz;
+    uv[j * 2] = D.UV[i * 2]; uv[j * 2 + 1] = D.UV[i * 2 + 1]; reg[j] = D.R[i];
+  }
+  const nf = D.F.length / 3, idx = new Uint32Array(nf * 6);
+  for (let f = 0; f < nf; f++) { const a = D.F[f * 3], b = D.F[f * 3 + 1], c = D.F[f * 3 + 2]; idx[f * 3] = a; idx[f * 3 + 1] = b; idx[f * 3 + 2] = c; idx[(nf + f) * 3] = a + nh; idx[(nf + f) * 3 + 1] = c + nh; idx[(nf + f) * 3 + 2] = b + nh; }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3)); geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2)); geo.setIndex(new THREE.BufferAttribute(idx, 1));
+  // гладкие нормали: вершины, разрезанные швами UV и плоскостью симметрии, сшиваем по исходному номеру
+  { let no = 0; for (let i = 0; i < nh; i++) no = Math.max(no, D.O[i] + 1);
+    const key = new Int32Array(n); for (let i = 0; i < nh; i++) { key[i] = D.O[i]; key[i + nh] = Math.abs(D.P[i * 3 + 2]) < 1e-3 ? D.O[i] : D.O[i] + no; }
+    const acc = new Float32Array(no * 2 * 3), nrm = new Float32Array(n * 3), e1 = new V3(), e2 = new V3(), fn = new V3(), pa = new V3(), pb = new V3(), pc = new V3();
+    for (let f = 0; f < nf * 2; f++) {
+      const a = idx[f * 3], b = idx[f * 3 + 1], c = idx[f * 3 + 2];
+      pa.fromArray(pos, a * 3); pb.fromArray(pos, b * 3); pc.fromArray(pos, c * 3); fn.crossVectors(e1.subVectors(pb, pa), e2.subVectors(pc, pa));
+      for (const v of [a, b, c]) { const k = key[v] * 3; acc[k] += fn.x; acc[k + 1] += fn.y; acc[k + 2] += fn.z; }
+    }
+    for (let i = 0; i < n; i++) { const k = key[i] * 3; fn.set(acc[k], acc[k + 1], acc[k + 2]).normalize(); nrm[i * 3] = fn.x; nrm[i * 3 + 1] = fn.y; nrm[i * 3 + 2] = fn.z; }
+    geo.setAttribute('normal', new THREE.BufferAttribute(nrm, 3)); }
+  // ---- раскраска: палитра/узор/морф из магазина + природные цвета роговых частей
+  const nor = geo.attributes.normal.array, up = new Float32Array(n), vu = new Float32Array(n);
+  let xmin = 1e9, xmax = -1e9; for (let i = 0; i < n; i++) { xmin = Math.min(xmin, mp[i * 3]); xmax = Math.max(xmax, mp[i * 3]); }
+  for (let i = 0; i < n; i++) { up[i] = nor[i * 3 + 1] * 0.8 + sstep(10, 60, mp[i * 3 + 1]) * 0.45 - 0.2; vu[i] = mp[i * 3] - xmin; }
+  const L = paint({ geo, up, vu, U: xmax - xmin }, o.pal, o.pat);
+  { const col = L.geo.attributes.color.array, c = new THREE.Color(), pal = o.pal;
+    const boneC = hx(mixHex(0xd8c8a0, pal.side, 0.12)), beakC = hx(0x2c241d), beakC2 = hx(0x5a4a3a), clawC = hx(0x2a231d), hornB = hx(0x8a7658), hornT = hx(0xe2d6b6);
+    const frC = hx(mixHex(pal.side, pal.belly, 0.25)), eye = lm.eye;
+    for (let i = 0; i < n; i++) {
+      const x = mp[i * 3], y = mp[i * 3 + 1], z = mp[i * 3 + 2], R = reg[i];
+      c.setRGB(col[i * 3], col[i * 3 + 1], col[i * 3 + 2]);
+      if (R === 1) c.lerp(frC, 0.25).multiplyScalar(1.06);                              // воротник: светлее, узор остаётся
+      else if (R === 2) c.lerp(boneC, 0.8);                                             // край воротника — кость
+      else if (R === 3) c.copy(beakC).lerp(beakC2, sstep(12, 22, y) * 0.6);             // клюв — тёмный рог
+      else if (R === 4) { const ht = sstep(34, 48, y); c.copy(hornB).lerp(hornT, sstep(0, 0.55, ht)).lerp(hx(0x2e261e), sstep(0.8, 1, ht)); c.multiplyScalar(0.85 + 0.15 * Math.sin(Math.atan2(z, x - 66) * 9)); }   // носовой рог
+      else if (R === 5) c.copy(clawC);                                                  // когти
+      // глазница — тёмная впадина вокруг глаза
+      const dx = x - eye[0], dy = y - eye[1], dz = Math.abs(z) - eye[2], dd = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      if (dd < 5) c.lerp(hx(0x1a130e), 0.6 * (1 - sstep(2.6, 5, dd)));
+      col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b;
+    } }
+  // ---- скелет: позвоночник общий, ноги — правые и зеркальные левые
+  const bones = [], rest = [], byName = {}, bi = {};
+  const BL = D.bones.slice();
+  for (const b of D.bones) if (/R$/.test(b[0])) BL.push([b[0].slice(0, -1) + 'L', b[1], [b[2][0], b[2][1], -b[2][2]]]);
+  BL.forEach((b, i) => { const bn = new THREE.Bone(); bn.name = b[0]; bones.push(bn); rest.push(new V3(b[2][0] * s, b[2][1] * s, b[2][2] * s * bz)); byName[b[0]] = bn; bi[b[0]] = i; });
+  BL.forEach((b, i) => {
+    let pn = b[1] >= 0 ? D.bones[b[1]][0] : null; if (pn && /L$/.test(b[0]) && /R$/.test(pn)) pn = pn.slice(0, -1) + 'L';
+    if (pn) { bones[i].position.copy(rest[i]).sub(rest[bi[pn]]); byName[pn].add(bones[i]); } else bones[i].position.copy(rest[i]);
+  });
+  const mirB = BL.map((b, i) => (/R$/.test(b[0]) ? bi[b[0].slice(0, -1) + 'L'] : i));
+  const si = new Uint16Array(n * 4), sw = new Float32Array(n * 4);
+  for (let i = 0; i < nh; i++) {
+    let tot = 0; for (let k = 0; k < 4; k++) tot += D.SW[i * 4 + k];
+    for (let k = 0; k < 4; k++) { const b = D.SI[i * 4 + k], w = tot ? D.SW[i * 4 + k] / tot : (k ? 0 : 1); si[i * 4 + k] = b; sw[i * 4 + k] = w; si[(i + nh) * 4 + k] = mirB[b]; sw[(i + nh) * 4 + k] = w; }
+  }
+  geo.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(si, 4)); geo.setAttribute('skinWeight', new THREE.Float32BufferAttribute(sw, 4));
+  const mesh = new THREE.SkinnedMesh(geo, trikeMat(o.emis));
+  mesh.add(byName.root); mesh.updateMatrixWorld(true); mesh.bind(new THREE.Skeleton(bones));
+  geo.computeBoundingSphere(); mesh.boundingSphere = geo.boundingSphere.clone(); mesh.boundingSphere.radius *= 1.3;
+  mesh.castShadow = true; mesh.receiveShadow = true;
+  const rig = baseRig('quad'); rig.frame.add(mesh);
+  rig.spine = { root: byName.root, tail: ['tail0', 'tail1', 'tail2', 'tail3', 'tail4'].map(k => byName[k]), neck: [byName.neck0, byName.neck1], head: byName.head };
+  const legDef = [['thigh', 'shin', 'ankle', 'foot', 0], ['upper', 'fore', 'wrist', 'hand', 1]];
+  for (const [a0, a1, a2, a3, fr] of legDef) for (const sd of ['R', 'L']) {
+    const ch = [a0, a1, a2, a3].map(k => byName[k + sd]), rs = [a0, a1, a2, a3].map(k => rest[bi[k + sd]]);
+    const g = new THREE.Group(); g.position.copy(rs[0]); rig.frame.add(g);
+    rig.legs.push({ g, bones: ch, rest: rs, L: null, end: new V3(rs[3].x, 0, rs[3].z), ph: 0, side: sd === 'R' ? 1 : -1, front: !!fr,
+      tip: new V3(((fr ? 27 : -37) - (fr ? 18 : -46)) * s, -2.5 * s, 0) });
+  }
+  // ---- детали на голове: глаза с веками, надглазничные рога, шипики по краю воротника
+  const kit = new Kit(), head = byName.head, headO = rest[bi.head];
+  const glow = (r.sense || 0) >= 2 || o.glowEyes;
+  const eyeC = lm.eye, ER = 2.6 * s * (o.eyeK || 1), irisC = o.irisC || (glow ? 0xffd23a : 0xc8862a);
+  const eyes = [], lids = [];
+  // веко — цвета кожи вокруг глаза (берём средний цвет вершин рядом), чуть темнее
+  const lidC = new THREE.Color(0, 0, 0); { const col = L.geo.attributes.color.array; let cnt = 0;
+    for (let i = 0; i < nh; i++) { const dx = mp[i * 3] - eyeC[0], dy = mp[i * 3 + 1] - eyeC[1], dz = mp[i * 3 + 2] - eyeC[2], d2 = dx * dx + dy * dy + dz * dz; if (d2 > 30 && d2 < 80) { lidC.r += col[i * 3]; lidC.g += col[i * 3 + 1]; lidC.b += col[i * 3 + 2]; cnt++; } }
+    if (cnt) lidC.multiplyScalar(0.95 / cnt); else lidC.set(o.pal.side); }
+  const lidTex = (t) => { if (!t) return t; const c = t.clone(); c.wrapS = c.wrapT = THREE.RepeatWrapping; c.repeat.set(5, 3); c.needsUpdate = true; return c; };
+  const lidMat = new THREE.MeshStandardMaterial({ color: lidC.clone().multiplyScalar(1.22), roughness: 0.8, map: lidTex(trikeTex() && trikeTex().det), normalMap: lidTex(trikeTex() && trikeTex().nrm), normalScale: new THREE.Vector2(1.1, 1.1) });   // текстура и рельеф кожи динозавра
+  for (const sd of [1, -1]) {
+    const pe = new V3((eyeC[0] + lm.eyeDir[0] * 0.4) * s, (eyeC[1] + lm.eyeDir[1] * 0.4) * s, sd * (eyeC[2] + lm.eyeDir[2] * 0.4) * s * bz), dir = (lm.eyeDir ? new V3(lm.eyeDir[0], lm.eyeDir[1], sd * lm.eyeDir[2]) : new V3(0.12, 0.05, sd)).normalize();
+    const ex = new V3().crossVectors(new V3(0, 1, 0), dir).normalize(), ey = new V3().crossVectors(dir, ex), qd = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(ex, ey, dir));
+    const c0 = pe.clone(), Fd = ER * 0.45;                                       // глаз приплюснутый: сидит в ямке заподлицо, не выпирает
+    const qE = (k) => [ER * k, ER * k, Fd * 0.8];
+    kit.add(head, headO, 'eye', eyeG(), M_ell(c0, [ER, ER, Fd * 0.9], qd), 0x140d08);                                                                   // глазное яблоко
+    kit.add(head, headO, glow ? 'glow' : 'eye', eyeG(), M_ell(c0.clone().addScaledVector(dir, Fd * 0.14), qE(0.93), qd), mulHex(irisC, 0.62));     // тёмный край радужки
+    kit.add(head, headO, glow ? 'glow' : 'eye', eyeG(), M_ell(c0.clone().addScaledVector(dir, Fd * 0.2), qE(0.8), qd), irisC);                      // радужка
+    kit.add(head, headO, glow ? 'glow' : 'eye', UNIT.sphLo, M_ell(c0.clone().addScaledVector(dir, Fd * 0.24), [ER * 0.42, ER * 0.42, Fd * 0.78], qd), mixHex(irisC, 0xfff0b0, 0.35));   // светлое кольцо
+    kit.add(head, headO, 'eye', UNIT.sphLo, M_ell(c0.clone().addScaledVector(dir, Fd * 0.29), [ER * 0.26, ER * 0.3, Fd * 0.76], qd), 0x030202);   // зрачок
+    kit.add(head, headO, 'glow', UNIT.sphLo, M_ell(c0.clone().addScaledVector(dir, Fd * 0.8).addScaledVector(ey, ER * 0.3).addScaledVector(ex, ER * 0.2), [ER * 0.1, ER * 0.1, Fd * 0.1]), 0xfffaf0);   // блик
+    // веки: верхнее и нижнее — оболочки цвета кожи; закрываются, «вырастая» от края глаза к середине
+    const eg = new THREE.Group(); eg.position.copy(c0).sub(headO); eg.quaternion.copy(qd); head.add(eg);
+    const LR = ER * 1.02, lidG = new THREE.SphereGeometry(1, 20, 12);
+    const mkLid = (sgn) => { const g = new THREE.Group(); g.position.set(0, sgn * LR, 0); const m = new THREE.Mesh(lidG, lidMat); m.scale.set(LR * 1.12, LR, Fd * (sgn > 0 ? 1.14 : 1.12)); m.position.set(0, -sgn * LR, 0); m.castShadow = false; g.add(m); g.scale.y = 0.02; g.visible = false; eg.add(g); return g; };
+    const tp = mkLid(1), bp = mkLid(-1);
+    lids.push({ tp, bp }); eyes.push(pe);
+  }
+  const ivory = 0xe8dcc0;
+  // надглазничные рога: длинные, вперёд и вверх, кончики загибаются вперёд; растут с возрастом
+  { const hl = (28 + stage * 3.2) * s * (1 + (o.hornK || 0)), hr = 4.1 * s, hg = trikeHornGeo(hl, hr, -0.2), HB = [48.5, 43.6, 8.6], HD = [0.5, 0.82, 0.24];
+    for (const sd of [1, -1]) {
+      const b = new V3(HB[0] * s, HB[1] * s, sd * HB[2] * s * bz), dv = new V3(HD[0], HD[1], sd * HD[2]).normalize(), m = basisX(dv).setPosition(b.clone().addScaledVector(dv, -hr * 2.2));
+      kit.add(head, headO, 'horn', hg, m, null);
+    } }
+  // край воротника: костяные шипики (эпокципиталии) по всему краю
+  { let cx = 0, cy = 0, cn = 0; const rim = [];
+    for (let i = 0; i < nh; i++) { if (reg[i] === 1 || reg[i] === 2) { cx += mp[i * 3]; cy += mp[i * 3 + 1]; cn++; } if (reg[i] === 2) rim.push(i); }
+    cx /= cn; cy /= cn;
+    const NB = 9, best = new Array(NB).fill(-1), br = new Array(NB).fill(0);
+    for (const i of rim) {
+      const dy = mp[i * 3 + 1] - cy, dz = mp[i * 3 + 2], th = Math.atan2(dz, dy); if (th < -0.05 || th > 1.95) continue;
+      const k = Math.min(NB - 1, Math.floor((th + 0.05) / 2.0 * NB)), rr = Math.hypot(dy, dz);
+      if (rr > br[k]) { br[k] = rr; best[k] = i; }
+    }
+    const sg = new THREE.ConeGeometry(1, 1, 7, 1, false);
+    best.forEach((i, k) => {
+      if (i < 0) return;
+      const p = new V3(mp[i * 3], mp[i * 3 + 1], mp[i * 3 + 2]), out = new V3(0.12, p.y - cy, p.z).normalize();
+      for (const sd of (Math.abs(p.z) < 1.5 ? [1] : [1, -1])) {
+        const pp = new V3(p.x * s, p.y * s, sd * p.z * s * bz), dd = new V3(out.x, out.y, sd * out.z), big = k % 2 ? 1.25 : 1;
+        kit.add(head, headO, 'acc', sg, M_spike(pp.addScaledVector(dd, -0.8 * s), dd, 5.2 * s * big, 2.0 * s * big), mixHex(0xd8c8a0, o.pal.side, 0.15), true);
+      }
+    }); }
+  // ---- вид от эволюции: шипы по спине, костные бляшки, свечение стада
+  const topAt = (x) => { let y = 0; for (let i = 0; i < nh; i++) if (Math.abs(mp[i * 3] - x) < 2 && mp[i * 3 + 2] < 4 && mp[i * 3 + 1] > y) y = mp[i * 3 + 1]; return y; };
+  const spineB = ['tail2', 'tail1', 'tail0', 'root', 'chest'], boneAtX = (x) => { let b = 'root', bd = 1e9; for (const k of spineB) { const d = Math.abs(rest[bi[k]].x / s - x); if (d < bd) { bd = d; b = k; } } return b; };
+  const spk = r.spikes || 0;
+  for (let i = 0; i < spk * 2; i++) for (const sd of [1, -1]) {
+    const x = -50 + i * 10, k = boneAtX(x), p = new V3(x * s, (topAt(x) - 4) * s, sd * 9 * s * bz);
+    kit.add(byName[k], rest[bi[k]], 'acc', UNIT.cone, M_spike(p, new V3(-0.25, 0.8, sd * 0.5), (0.16 + spk * 0.04), 0.04), ivory);
+  }
+  for (let i = 0; i < (r.hide || 0) * 3; i++) for (const sd of [1, -1]) {
+    const x = -46 + i * 9, k = boneAtX(x), p = new V3(x * s, (topAt(x) - 6) * s, sd * 12 * s * bz);
+    kit.add(byName[k], rest[bi[k]], 'skin', UNIT.sphLo, M_ell(p, [0.15, 0.06, 0.11], new THREE.Quaternion().setFromUnitVectors(Y_UP, new V3(0, 1, sd * 0.7).normalize())), mulHex(o.pal.back, 0.75), true);
+  }
+  if ((r.herd || 0) > 0) for (let i = 0; i < r.herd; i++) { const x = -30 + i * 12, k = boneAtX(x); kit.add(byName[k], rest[bi[k]], 'glow', UNIT.sphLo, M_ell(new V3(x * s, (topAt(x) + 1) * s, 0), [0.07, 0.07, 0.07]), 0xffd35a); }
+  if (o.extras) o.extras({ L, kit, head, headO, k: 1, s, rig });
+  kit.build({ emis: o.emis });
+  setHeadAnch(rig, head, new V3(lm.hat[0] * s, lm.hat[1] * s, 0).sub(headO), eyes[0].clone().sub(headO), new V3(lm.neck[0] * s, lm.neck[1] * s, 0));
+  rig.walkAmp = 0.3; rig.gait = 'quad'; rig.k = 0.98;
+  rig.tagH = 80 * s + 0.35;
+  rig.trike = { s, lids, chest: byName.chest, hipH: 40 * s, legs: rig.legs, mesh };
+  return rig;
+}
+
+// ---------- анимация трицератопса ----------
+const _tv = [new V3(), new V3(), new V3(), new V3(), new V3(), new V3(), new V3()], _tq = [new THREE.Quaternion(), new THREE.Quaternion(), new THREE.Quaternion()];
+// поворачивает кость так, чтобы направление к её ребёнку (child.position) в мире смотрело на dirW
+function aimBone(b, child, dirW) {
+  const pq = _tq[0]; b.parent.getWorldQuaternion(pq); pq.invert();
+  const dl = _tv[5].copy(dirW).applyQuaternion(pq).normalize(), rl = _tv[6].copy(child.position).normalize();
+  b.quaternion.setFromUnitVectors(rl, dl); b.updateMatrixWorld(true);
+}
+function aimDir(b, restDirLocal, dirW) {
+  const pq = _tq[0]; b.parent.getWorldQuaternion(pq); pq.invert();
+  const dl = _tv[5].copy(dirW).applyQuaternion(pq).normalize();
+  b.quaternion.setFromUnitVectors(restDirLocal, dl); b.updateMatrixWorld(true);
+}
+const wrapA = (a) => { while (a > PI) a -= 2 * PI; while (a < -PI) a += 2 * PI; return a; };
+export function animTrike(dino, P, t, speed, dt, st) {
+  const T = P.trike, sp = P.spine, ddt = Math.min(Math.max(dt || 0, 0), 0.1), sc = dino.scale.x || 1;
+  const S = T.st || (T.st = { ph: Math.random(), v: 0, w: 0, yaw: dino.rotation.y, acc: 0, idle: 0, graze: 0, gT: 6 + Math.random() * 5, blink: 2 + Math.random() * 3, roar: 0, run: 0, look: 0, drop: 0 });
+  // скорость (мировая) → в единицах модели; угловая скорость поворота — по изменению направления
+  const vW = Math.max(0, speed) * 6, vM = vW / sc;
+  const yaw = dino.rotation.y, wRaw = ddt > 0 ? wrapA(yaw - S.yaw) / ddt : 0; S.yaw = yaw;
+  { const wT = Math.max(-3, Math.min(3, wRaw)); S.w += (wT - S.w) * Math.min(1, ddt * (Math.abs(wT) < Math.abs(S.w) ? 18 : 6)); }
+  const vPrev = S.v; S.v += (vM - S.v) * Math.min(1, ddt * (vM < S.v ? (vM < 0.05 ? 40 : 16) : 6)); S.acc += ((S.v - vPrev) / Math.max(ddt, 1e-3) - S.acc) * Math.min(1, ddt * 4);
+  const swim = !!st.swim, climb = !!st.climb, fly = !!st.fly, guard = !!st.guard;
+  const base = ((CONFIG.CLASSES.herb || {}).speed || 112) / 30;
+  const runT = st.run !== undefined ? (st.run ? 1 : 0) : sstep(1.2, 1.5, vW / base);
+  S.run += (runT * (S.v > 0.05 ? 1 : 0) - S.run) * Math.min(1, ddt * 4); const run = S.run;
+  const hipH = T.hipH, Rb = 1.0;                                                        // половина длины тела (единицы модели)
+  const turnV = Math.abs(S.w) * Rb, mvSp = Math.max(S.v, turnV);
+  const moving = sstep(0.04, 0.25, mvSp / hipH);
+  // шаг: длина цикла растёт со скоростью; частота — скорость / длина (ступни не скользят), не больше 3.2 шага/с
+  // шаг: ступня за опору проходит назад ~0.5·высоты бедра (на бегу 0.75) — ноги не задираются; частота = β·скорость / длина опоры
+  const beta = 0.62 - 0.22 * run;                                                        // доля опоры в цикле
+  // маленький динозавр быстрее перебирает ногами; если и этого мало — длина опоры ограничена (ноги не выпрямляются в струну)
+  const Sx = hipH * (0.95 + 0.2 * run), fmax = Math.min(1.6, 1.0 / Math.sqrt(Math.min(1, sc))) * (1 + 0.1 * run), Smax = hipH * (1.0 + 0.2 * run);
+  // при остановке ноги не продолжают перебирать: шаг идёт только пока динозавр движется; ступни плавно встают на место
+  const f = mvSp > 0.1 * hipH ? Math.max(0.3, Math.min(fmax, beta * mvSp / Sx)) : 0;     // частота ∝ скорости (до предела)
+  if (f > 0) S.ph = (S.ph + ddt * f) % 1;
+  S.mv = (S.mv || 0) + ((f > 0 ? 1 : 0) - (S.mv || 0)) * Math.min(1, ddt * (f > 0 ? 8 : 16));
+  // бодание / рёв
+  const bc = biteCurve(dino.userData.bite || 0), pull = bc ? bc.pull : 0, lunge = bc ? bc.lunge : 0;
+  if (dino.userData.roar > 0) { S.roar = 1; dino.userData.roar = 0; }
+  if (S.roar > 0) S.roar = Math.max(0, S.roar - ddt / 2.2);
+  const ro = S.roar > 0 ? sstep(0, 0.15, 1 - S.roar) * sstep(0, 0.25, S.roar) : 0, roShake = ro * Math.sin(t * 30) * 0.06;
+  // выпас в покое: время от времени опускает голову к земле и щиплет траву
+  if (mvSp < 0.05 * hipH && !swim && !climb && !bc && !ro) { S.idle += ddt; if (S.idle > S.gT) { S.graze = Math.min(1, S.graze + ddt * 0.8); if (S.idle > S.gT + 5) { S.idle = 0; S.gT = 7 + Math.random() * 8; } } else S.graze = Math.max(0, S.graze - ddt * 1.2); }
+  else { S.idle = 0; S.graze = Math.max(0, S.graze - ddt * 2); }
+  const gz = sstep(0, 1, S.graze), chew = gz * Math.max(0, Math.sin(t * 7)) * 0.05;
+  // ---- корпус: инерция (наклон при разгоне/торможении), крен в поворотах, дыхание
+  P.body.rotation.x = Math.max(-0.08, Math.min(0.08, -S.acc / Math.max(hipH, 0.1) * 0.012)) + (climb ? -1.35 : 0) + Math.sin(S.ph * PI * 2 + 0.6) * 0.07 * run * (S.mv || 0);   // в скачке корпус качается вперёд-назад
+  P.body.rotation.z = Math.max(-0.1, Math.min(0.1, -S.w * S.v / hipH * 0.02));
+  P.body.rotation.y = 0;
+  P.frame.position.set((lunge * 0.12 - pull * 0.05) * hipH * 2, 0, 0); P.frame.rotation.set(0, -PI / 2, 0);
+  const br = Math.sin(t * (1.6 + 1.4 * moving)) * (0.012 + 0.008 * run); T.chest.scale.set(1, 1 + br, 1 + br * 1.4);
+  // ---- хвост: волна, отстающая от шага; в повороте тянется по дуге; не волочится
+  const tw = S.ph * PI * 2;
+  sp.tail.forEach((b, i) => {
+    b.rotation.y = Math.sin(t * 0.8 - i * 0.6) * 0.05 * (1 - moving) + Math.sin(tw * 2 - i * 0.7) * 0.035 * moving * (1 + i * 0.2) - S.w * 0.05 * (i + 1) * 0.5;
+    b.rotation.z = Math.sin(t * 0.6 - i * 0.5) * 0.015 + run * 0.04 + (i === 0 ? 0.02 : 0) - ro * 0.04 + Math.cos(tw * 2 - i * 0.6) * 0.015 * moving;
+  });
+  sp.root.rotation.set(0, Math.sin(tw * 2) * 0.02 * moving, 0);
+  // ---- шея и голова: осматривается в покое, смотрит в поворот, опускает голову к траве, бодается, ревёт
+  S.look += ddt; const lk = (1 - moving) * (1 - gz);
+  const lookY = (Math.sin(S.look * 0.19) * 0.18 + Math.sin(S.look * 0.43 + 1) * 0.05) * lk + S.w * 0.09, lookZ = (Math.sin(S.look * 0.27 + 2) * 0.04) * lk;
+  const nod = Math.sin(tw * 2 + 0.6) * 0.007 * moving;
+  for (const b of sp.neck) { b.rotation.y = lookY * 0.35; b.rotation.z = lookZ * 0.4 - gz * 0.26 - pull * 0.12 - lunge * 0.06 + ro * 0.11 + nod - run * 0.04 + (swim ? 0.12 : 0); b.rotation.x = 0; }
+  sp.head.rotation.y = lookY * 0.3 + roShake; sp.head.rotation.x = roShake * 0.6;
+  sp.head.rotation.z = lookZ * 0.5 - gz * 0.32 + chew - pull * 0.3 + lunge * 0.32 + ro * 0.16 + nod * 0.5 + (swim ? 0.15 : 0);
+  // ---- моргание
+  // моргание: верхнее веко опускается быстро (0.08 с), короткая пауза, открывается медленнее (0.2 с); нижнее лишь слегка поднимается; иногда двойное
+  // в покое верхнее веко чуть прикрывает глаз (тяжёлый взгляд), при ходьбе/беге — шире открыт
+  S.blink -= ddt; let bl = 0;
+  if (S.blink < 0) { const u = -S.blink; bl = u < 0.08 ? sstep(0, 0.08, u) : u < 0.13 ? 1 : 1 - sstep(0.13, 0.33, u);
+    if (u > 0.33) S.blink = Math.random() < 0.18 ? 0.15 : 2.5 + Math.random() * 3.5; }
+  const droop = 0.07 * (1 - 0.6 * moving) + 0.1 * gz + 0.16 * ro;
+  for (const l of T.lids) { l.tp.visible = l.bp.visible = true; l.tp.scale.y = 0.02 + droop + bl * (1.0 - droop); l.bp.scale.y = 0.02 + bl * 0.72; }
+  // ---- ноги: IK от бедра к цели ступни; цели в системе корня (земля — y = 0)
+  // фазы: шаг (боковая последовательность ЗП→ПП→ЗЛ→ПЛ), бег — рысь (диагональные пары)
+  // бег — скачки «с двух на две»: задние лапы толкаются парой, затем передние парой (небольшой сдвиг левой и правой)
+  const offW = { RH: 0, RF: 0.25, LH: 0.5, LF: 0.75 }, offR = { RH: 0, LH: 0.06, RF: 0.5, LF: 0.56 };
+  // корпус опускается, если ногам не хватает длины (маятник: выше всего над опорной ногой), и чуть приседает в защите
+  P.body.position.y = 0;
+  dino.updateMatrixWorld(true);
+  const root = dino, wq = _tq[1], hipW = _tv[0], tg = _tv[1], ankT = _tv[2], kn = _tv[3], tmp = _tv[4];
+  const fwd = new V3(), right = new V3();
+  // направления «вперёд» и «вправо» модели в системе корня: x модели → +z корня, z модели → −x корня
+  const drop = []; let need = 0;
+  const legT = [];
+  for (const lg of P.legs) {
+    const key = (lg.side > 0 ? 'R' : 'L') + (lg.front ? 'F' : 'H');
+    const phi = ((S.ph + offW[key] * (1 - run) + offR[key] * run) % 1 + 1) % 1;
+    // перемещение земли относительно тела за опору: −(V + ω×r)·(β/f)
+    const rx = lg.rest[3].x, rz = lg.rest[3].z, fr = Math.max(f, 0.3);
+    let gx = -(S.v + S.w * rz) * beta / fr * moving, gz_ = S.w * rx * beta / fr * moving;
+    const gl = Math.hypot(gx, gz_); if (gl > Smax) { gx *= Smax / gl; gz_ *= Smax / gl; }
+    let ox, oz, oy = 0, toe = 0;
+    if (swim) { const a = t * 3 + (lg.front ? 0 : PI) + (lg.side > 0 ? 0 : PI / 2); ox = Math.sin(a) * hipH * 0.25; oy = hipH * (0.35 + 0.15 * Math.cos(a)); oz = 0; toe = -0.4; }
+    else if (phi < beta) { const u = phi / beta; ox = gx * (u - 0.5); oz = gz_ * (u - 0.5); }
+    else { const u = (phi - beta) / (1 - beta), e = u * u * (3 - 2 * u); ox = gx * (0.5 - e); oz = gz_ * (0.5 - e); oy = Math.sin(PI * u) * hipH * (0.13 + 0.1 * run) * moving; toe = Math.sin(PI * u) * (0.3 + 0.2 * run) * moving - (u < 0.2 ? 0.3 * moving * (1 - u / 0.2) : 0); }
+    const mk = S.mv; ox *= mk; oz *= mk; oy *= mk; toe *= mk;
+    if (!swim) oz += lg.side * (lg.front ? 3.4 : 1.2) * T.s;                      // стойка пошире: передние ступни не сходятся внутрь
+    legT.push({ lg, ox, oy, oz, toe, stance: !swim && phi < beta, sp: 0 });
+  }
+  // сколько опустить корпус, чтобы опорные ноги дотягивались
+  if (!swim && !climb) for (const L of legT) {
+    const lg = L.lg, b = lg.bones, Lmax = (b[1].position.length() + b[2].position.length()) * 0.985 + b[3].position.length() * 0;
+    const dx = lg.rest[2].x + L.ox - lg.rest[0].x, dz = (lg.rest[3].z + L.oz + L.sp) - lg.rest[0].z, hy = lg.rest[0].y - (lg.rest[2].y - lg.rest[3].y) - lg.rest[3].y - L.oy;
+    const reach = Math.sqrt(Math.max(0, Lmax * Lmax - dx * dx - dz * dz));
+    if (L.stance || L.oy < 0.02) need = Math.max(need, hy - reach);
+  }
+  S.drop += (Math.min(Math.max(0, need), hipH * 0.07) + hipH * 0.02 * S.mv + (guard ? hipH * 0.22 : 0) - S.drop) * Math.min(1, ddt * 14);   // стоя — ноги прямые
+  P.body.position.y = swim ? -hipH * 0.15 : -S.drop;
+  dino.updateMatrixWorld(true);
+  if (climb || fly) { for (const lg of P.legs) for (const b of lg.bones) b.quaternion.identity(); return; }
+  for (const L of legT) {
+    const lg = L.lg, b = lg.bones;
+    b[0].quaternion.identity(); b[0].updateMatrixWorld(true);
+    b[0].getWorldPosition(hipW);
+    // цель сустава стопы (foot) в системе корня → в мир
+    const fx = lg.rest[3].x + L.ox, fz = lg.rest[3].z + L.oz + L.sp, fy = lg.rest[3].y + L.oy;
+    tg.set(-fz, fy, fx); root.localToWorld(tg);
+    // лодыжка (ankle) — над стопой на «пястной» кости, наклон как в покое
+    tmp.set(-(lg.rest[2].z - lg.rest[3].z), lg.rest[2].y - lg.rest[3].y, lg.rest[2].x - lg.rest[3].x).multiplyScalar(sc);
+    root.getWorldQuaternion(wq); tmp.applyQuaternion(wq);
+    ankT.copy(tg).add(tmp);
+    // двухзвенная IK: бедро → колено → лодыжка; колено задних ног вперёд, локоть передних — назад
+    const L1 = b[1].position.length() * sc, L2 = b[2].position.length() * sc;
+    const dv = tmp.subVectors(ankT, hipW); let d = dv.length(); const dmax = (L1 + L2) * 0.999, dmin = Math.abs(L1 - L2) + 1e-4;
+    if (d > dmax) { ankT.copy(hipW).addScaledVector(dv, dmax / d); d = dmax; } else if (d < dmin) d = dmin;
+    const dir = dv.normalize();
+    const pole = _tv[5].set(0, 0, lg.front ? -1 : 1).applyQuaternion(wq);
+    const nrm = kn.copy(pole).addScaledVector(dir, -pole.dot(dir)).normalize();
+    const ca = Math.max(-1, Math.min(1, (L1 * L1 + d * d - L2 * L2) / (2 * L1 * d))), al = Math.acos(ca);
+    const knee = kn.multiplyScalar(Math.sin(al) * L1).addScaledVector(dir, Math.cos(al) * L1).add(hipW);
+    aimBone(b[0], b[1], tmp.subVectors(knee, hipW));
+    aimBone(b[1], b[2], tmp.subVectors(ankT, knee));
+    const fW = _tv[4].copy(tg); aimBone(b[2], b[3], fW.sub(ankT));
+    // стопа плоско на земле; в переносе — отрыв пальцев и подъём носка
+    const td = _tv[4].set(-(lg.tip.z), lg.tip.y, lg.tip.x).applyAxisAngle(_tv[6].set(-1, 0, 0), 0).normalize();
+    const pitch = new THREE.Quaternion().setFromAxisAngle(new V3(1, 0, 0), -L.toe);
+    td.applyQuaternion(pitch).applyQuaternion(wq);
+    if (!b[3].userData.tipL) b[3].userData.tipL = new V3(lg.tip.x, lg.tip.y, lg.tip.z).normalize();
+    aimDir(b[3], b[3].userData.tipL, td);
+  }
+}
+
 // ======================================================================== КЛАССЫ ИГРОКА
 function pal4(color, extra) { return palette(color, extra); }
 function buildCarn(o) {
@@ -1038,7 +1392,7 @@ function buildCarn(o) {
 }
 function buildHerb(o) {
   const { color, stage, r } = o;
-  return quadruped({ k: 0.98, head: 'cera', bulk: 1 + (r.mass || 0) * 0.05, pal: pal4(color), pat: { type: 'spots', amt: 0.55, freq: 3.4, from: 0.15, to: 0.75 }, r, stage, q: o.q });
+  return triceratops({ pal: pal4(color), pat: { type: 'spots', amt: 0.68, freq: 3.0, from: 0.12, to: 0.85 }, r, stage, q: o.q });
 }
 function buildFly(o) {
   const { color, stage, r } = o;
@@ -1248,9 +1602,10 @@ function animRig(P, tt, sw, dt, o) {
     // бег: шаг шире, колено поднимается выше, толчок назад сильнее (нога разгибается в конце опоры)
     const amp = (P.walkAmp || 0.4) * (1 + (gait === 'quad' ? 0.6 : 0.5) * run), sw1 = Math.max(0, Math.cos(p)), push = Math.max(0, -Math.sin(p)) * Math.max(0, -Math.cos(p));
     b[0].rotation.z = Math.sin(p) * amp * w + run * 0.06;
-    b[1].rotation.z = -sw1 * ((gait === 'quad' ? 0.45 : 0.6) + run * (gait === 'quad' ? 0.15 : 0.6)) * w + push * run * 0.15;
-    b[2].rotation.z = (sw1 * (0.4 + run * 0.35) - push * run * 0.2) * w;
-    if (b[3]) b[3].rotation.z = (-Math.sin(p) * (0.2 + run * 0.15) + sw1 * (0.15 + run * 0.25)) * w;
+    const LK = P.legK || 1;     // у толстоногих (трицератопс) суставы сгибаются слабее, чтобы кожа не мялась
+    b[1].rotation.z = (-sw1 * ((gait === 'quad' ? 0.45 : 0.6) + run * (gait === 'quad' ? 0.15 : 0.6)) * w + push * run * 0.15) * LK;
+    b[2].rotation.z = (sw1 * (0.4 + run * 0.35) - push * run * 0.2) * w * LK;
+    if (b[3]) b[3].rotation.z = (-Math.sin(p) * (0.2 + run * 0.15) + sw1 * (0.15 + run * 0.25)) * w * LK;
     // травоядные бьют передними лапами: привстают (замах — лапы вверх-вперёд), затем обрушивают их вниз
     if (butt && lg.front) { const wd = pull, ht = lunge; b[0].rotation.z += LEGSIGN * (wd * 1.15 - ht * 0.55); b[1].rotation.z += -(wd * 0.9) + ht * 0.7; if (b[2]) b[2].rotation.z += wd * 0.5 - ht * 0.5; }
   }
@@ -1303,6 +1658,7 @@ function bodyBob(P, sw, swim, fly) {
 export function animateDino(dino, t, speed, dt, st) {
   st = st || {};
   const P = dino.userData.parts, ph = dino.userData.phase, tt = t + ph, cls = dino.userData.cls;
+  if (P.trike) { if (dino.userData.bite > 0) dino.userData.bite = Math.max(0, dino.userData.bite - dt * 2.1); animTrike(dino, P, tt, speed, dt, st); return; }
   const sw = Math.min(speed, 1.4);
   let bite = dino.userData.bite;
   if (bite > 0) { bite = Math.max(0, bite - dt * 2.1); dino.userData.bite = bite; }
@@ -1319,7 +1675,7 @@ export function animateDino(dino, t, speed, dt, st) {
     return;
   }
   const crouch = st.guard ? -0.25 : 0;
-  P.body.position.y = bodyBob(P, sw, st.swim, st.fly) + (st.swim ? -0.3 : 0) + crouch + (st.fly ? Math.sin(tt * 2) * 0.06 : 0);
+  P.body.position.y = bodyBob(P, sw, st.swim, st.fly) + (st.swim ? -0.1 : 0) + crouch + (st.fly ? Math.sin(tt * 2) * 0.06 : 0);
   P.body.rotation.z = Math.sin(P.gph) * 0.025 * sw * (1 - 0.5 * P.run);
   // наклон корпуса вперёд на бегу (хвост поднимается противовесом), у четвероногих — качание галопа
   P.body.rotation.x = (cls === 'carn' ? 0.03 : 0) + (st.climb ? -1.35 : 0) + (st.fly ? 0.15 + Math.min(1, speed) * 0.2 : 0)
@@ -1388,13 +1744,19 @@ export function buildPet(id) {
 }
 
 function titleText(id) { const t = id && CONFIG.TITLES[id]; return t && typeof window !== 'undefined' && window.TN ? t.ico + ' ' + window.TN(t.n) : ''; }
-export function makeActor({ nick, color, cls, level, evo, cosmetic, admin, king, lord, label, pet, title, patc, morph, colorIdx }) {
+let _auraTex = null;
+function auraSprite() {   // золотое свечение «Владыки Эпох»
+  if (!_auraTex) { const c = document.createElement('canvas'); c.width = c.height = 128; const g = c.getContext('2d'), q = g.createRadialGradient(64, 64, 0, 64, 64, 64); q.addColorStop(0, 'rgba(255,230,140,.55)'); q.addColorStop(0.45, 'rgba(255,200,80,.28)'); q.addColorStop(1, 'rgba(255,190,60,0)'); g.fillStyle = q; g.fillRect(0, 0, 128, 128); _auraTex = new THREE.CanvasTexture(c); }
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: _auraTex, transparent: true, opacity: 0.9, depthWrite: false, blending: THREE.AdditiveBlending })); s.scale.setScalar(7.5); s.position.set(0, 1.3, 0); s.renderOrder = 5; return s;
+}
+export function makeActor({ nick, color, cls, level, evo, cosmetic, admin, king, lord, label, pet, title, patc, morph, colorIdx, end }) {
   const group = new THREE.Group();
-  const actor = { title: title || '', patc: patc || '', morph: morph || '', group, color: CONFIG.COLORS[color] != null ? CONFIG.COLORS[color] : color, cls, level, evo: evo || {}, cosmetic: cosmetic || '', dino: null, tag: null, king: king ? 1 : 0, lord: lord ? 1 : 0, admin: !!admin, nick, st: {} };
+  const actor = { title: title || '', patc: patc || '', morph: morph || '', group, color: CONFIG.COLORS[color] != null ? CONFIG.COLORS[color] : color, cls, level, evo: evo || {}, cosmetic: cosmetic || '', dino: null, tag: null, king: king ? 1 : 0, lord: lord ? 1 : 0, end: end || '', aura: null, admin: !!admin, nick, st: {} };
   function rebuild() {
     if (actor.dino) group.remove(actor.dino);
     actor.dino = buildDino({ cls, color: actor.color, level: actor.level, evo: actor.evo, cosmetic: actor.cosmetic, patc: actor.patc, morph: actor.morph });
     group.add(actor.dino); setCrown(actor.dino, actor.lord ? 2 : actor.king ? 1 : 0);
+    actor.aura = null; if (actor.end === 'lord') { actor.aura = auraSprite(); actor.dino.add(actor.aura); }
     if (actor.tag) group.remove(actor.tag);
     actor.tag = makeNameTag(nick, { badge: actor.admin ? '★Admin' : '', color: actor.admin ? '#ffd35a' : actor.lord ? '#7af0ff' : '#ffffff', sub: label || titleText(actor.title) });
     group.add(actor.tag);
@@ -1424,6 +1786,7 @@ export function makeActor({ nick, color, cls, level, evo, cosmetic, admin, king,
     if (o.cosmetic != null && o.cosmetic !== actor.cosmetic) { actor.cosmetic = o.cosmetic; r = true; }
     if (o.king != null && (o.king ? 1 : 0) !== actor.king) { actor.king = o.king ? 1 : 0; r = true; }
     if (o.lord != null && (o.lord ? 1 : 0) !== actor.lord) { actor.lord = o.lord ? 1 : 0; r = true; }
+    if (o.end != null && o.end !== actor.end) { actor.end = o.end; r = true; }
     if (r) rebuild();
   };
   actor.update = (x, y, z, face, speed01, t, dt, st) => {
@@ -1434,6 +1797,7 @@ export function makeActor({ nick, color, cls, level, evo, cosmetic, admin, king,
       if (k >= 1) { actor.grow = null; actor.dino.scale.setScalar(to); }
     }
     animateDino(actor.dino, t, speed01, dt, st);
+    if (actor.aura) { const k = 1 + 0.08 * Math.sin(t * 2.2); actor.aura.scale.setScalar(7.5 * k); actor.aura.material.opacity = 0.75 + 0.2 * Math.sin(t * 1.6); }
     const pm = actor.petM;
     if (pm) {
       const sc = Sim.scaleOf(actor.level), d = 2.0 * sc + 0.6, tx = -Math.sin(face) * d + Math.cos(face) * 0.9, tz = -Math.cos(face) * d - Math.sin(face) * 0.9;

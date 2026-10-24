@@ -40,8 +40,18 @@
   .screen.on { display:flex; }
   @media (min-width:900px) { #menu { justify-content:flex-start; padding-left:7vw; } }
   .dim { background:rgba(8,18,14,.5); backdrop-filter:blur(3px); }
+  /* полосы прокрутки в стиле игры (везде) */
+  * { scrollbar-width: thin; scrollbar-color: rgba(155,227,122,.55) rgba(0,0,0,.25); }
+  *::-webkit-scrollbar { width: 10px; height: 10px; }
+  *::-webkit-scrollbar-track { background: rgba(0,0,0,.28); border-radius: 10px; margin: 8px 0; }
+  *::-webkit-scrollbar-thumb { background: linear-gradient(180deg, rgba(155,227,122,.75), rgba(90,170,80,.65)); border-radius: 10px; border: 2px solid rgba(12,28,14,.85); }
+  *::-webkit-scrollbar-thumb:hover { background: linear-gradient(180deg, #b6f08a, #6fc65e); }
+  *::-webkit-scrollbar-corner { background: transparent; }
   .card { background:var(--panel); border:1px solid rgba(155,227,122,.25); border-radius:18px; padding:20px; width:min(94vw,460px); max-height:94vh; overflow:auto; box-shadow:0 12px 40px rgba(0,0,0,.45); touch-action:pan-y; }
   .card.wide { width:min(96vw,860px); }
+  .card { position:relative; }
+  .pclose { position:sticky; top:-8px; float:right; margin:-12px -12px 0 8px; width:36px; height:36px; padding:0; border-radius:50%; font-size:18px; line-height:1; background:rgba(0,0,0,.35); border:1px solid rgba(255,255,255,.25); color:#fff; z-index:20; cursor:pointer; }
+  .pclose:hover { background:rgba(220,60,60,.8); }
   .card.side { align-self:center; }
   h1, h2, h3, h4 { font-family:var(--old); }
   h1 { margin:0 0 4px; font-size:clamp(30px,7vw,46px); letter-spacing:1px; color:var(--ac); text-shadow:0 3px 0 rgba(0,0,0,.35); text-align:center; }
@@ -124,6 +134,7 @@
   .br { background:rgba(0,0,0,.28); border:1px solid rgba(155,227,122,.22); border-radius:12px; padding:8px; }
   .br h4 { margin:0 0 2px; font-size:14px; color:var(--ac); } .br p { margin:0 0 6px; font-size:11px; color:var(--mut); min-height:42px; }
   .tiers { display:flex; gap:4px; margin-bottom:6px; } .tier { flex:1; height:10px; border-radius:5px; background:rgba(255,255,255,.12); } .tier.on { background:var(--ac); }
+  .br.off { opacity:.62; } .br.worn { border-color:var(--ac); background:rgba(155,227,122,.16); } button.pri2 { border-color:var(--ac2); color:var(--ac2); font-weight:700; background:rgba(255,211,90,.12); }
   .br button { padding:6px; font-size:13px; margin:0; }
   .pts { color:var(--ac2); font-weight:700; }
   .ach { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:8px; } .a { display:flex; gap:10px; padding:8px 10px; border-radius:12px; background:rgba(0,0,0,.28); opacity:.45; } .a.on { opacity:1; border:1px solid rgba(255,211,90,.5); } .a i { font-style:normal; font-size:26px; } .a b { font-size:14px; } .a span { display:block; font-size:12px; color:var(--mut); }
@@ -188,7 +199,9 @@
   @keyframes fade { 0%,75% { opacity:1; } 100% { opacity:0; } }
   #abil { position:absolute; left:50%; bottom:max(14px,env(safe-area-inset-bottom)); transform:translateX(-50%); display:flex; gap:10px; pointer-events:none; }
   .ab { width:56px; height:56px; border-radius:14px; background:rgba(0,0,0,.5); border:2px solid rgba(255,255,255,.5); position:relative; overflow:hidden; display:flex; align-items:center; justify-content:center; font-size:22px; pointer-events:auto; padding:0; margin:0; touch-action:none; color:#fff; }
-  .ab small { position:absolute; left:4px; top:1px; font-size:10px; font-weight:800; color:#ffd35a; } .ab .cd { position:absolute; left:0; bottom:0; width:100%; background:rgba(0,0,0,.65); height:0; } .ab .nm { position:absolute; bottom:1px; width:100%; text-align:center; font-size:9px; color:#ddd; }
+  .ab small { position:absolute; left:4px; top:1px; font-size:10px; font-weight:800; color:#ffd35a; } .ab .cd { position:absolute; left:0; bottom:0; width:100%; background:rgba(0,0,0,.65); height:0; } .ab .ct { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-size:17px; font-weight:900; color:#fff; text-shadow:0 0 4px #000,0 1px 2px #000; pointer-events:none; z-index:2; }
+  body.touch .ab .ct { font-size:15px; }
+  .ab .nm { position:absolute; bottom:1px; width:100%; text-align:center; font-size:9px; color:#ddd; }
   .ab.ult-ready { border-color:#ffd35a; box-shadow:0 0 14px 3px #ffb800; animation:ultp 1s infinite alternate; } .ab.ult-on { border-color:#ff5a2a; background:rgba(255,90,42,.45); } @keyframes ultp { to { box-shadow:0 0 22px 7px #ffe066; } }
   .ab.held { background:rgba(155,227,122,.55); }
   #joy { position:absolute; left:max(18px,env(safe-area-inset-left)); bottom:max(22px,env(safe-area-inset-bottom)); width:108px; height:108px; border-radius:50%; background:rgba(255,255,255,.12); border:2px solid rgba(255,255,255,.35); pointer-events:auto; display:none; touch-action:none; }

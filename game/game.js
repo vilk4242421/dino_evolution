@@ -6,6 +6,7 @@ import { eggCanvas, buildCrownMesh, buildDino, animateDino, makeActor, makeNameT
 import * as Profile from './profile.js';
 import { connectOnline, connectLocal } from './net.js';
 import * as Audio from './audio.js';
+import { Story, Decor } from './story.js';
 import { UI } from './ui.js';
 
 const CONFIG = window.CONFIG, Sim = window.Sim, Core = window.RoomsCore, T = window.T, TN = window.TN;
@@ -57,7 +58,7 @@ window.__menu3d = menu3d;
 function menuSetDino(o) {
   if (menu3d.dino) { menu3d.group.remove(menu3d.dino); menu3d.dino = null; }
   if (!o) return;
-  menu3d.dino = buildDino(o); menu3d.dino.scale.setScalar(Math.max(1.3, Sim.scaleOf(o.level || 1) * 1.5));
+  menu3d.dino = buildDino(o); menu3d.dino.scale.setScalar(0.85 + 1.35 * clamp((Sim.scaleOf(3) - 0.36) / 1.74, 0, 1));   // в меню динозавр всегда размером как на 3 уровне
   menu3d.group.add(menu3d.dino);
   if (menu3d.egg) { menu3d.group.remove(menu3d.egg); menu3d.egg = null; }
 }
@@ -117,7 +118,7 @@ function updateMenu3d(dt) {
       if (h.grow >= 1 && !h.finishing) { h.finishing = true; setTimeout(() => { for (const m of h.shards) menu3d.group.remove(m); if (h.eggGroup) menu3d.group.remove(h.eggGroup); menu3d.egg = null; $('eggtxt').style.display = 'none'; menu3d.hatch = null; h.done && h.done(); }, 1400); }
     }
   }
-  if (menu3d.dino) { menu3d.dino.rotation.y += dt * 0.6; animateDino(menu3d.dino, menu3d.t, menu3d.dino.userData.dbgSpeed || 0, dt, menu3d.dino.userData.dbgSt || {}); }
+  if (menu3d.dino) { menu3d.dino.rotation.y = 0.5; animateDino(menu3d.dino, menu3d.t, menu3d.dino.userData.dbgSpeed || 0, dt, menu3d.dino.userData.dbgSt || {}); }
   // камера: чуть вбок, чтобы карточка слева не закрывала динозавра
   const wide = window.innerWidth > 900, ox = wide ? 2.1 : 0, by = menu3d.world.sim.def.arenaY + 0.25;
   camera.position.set(Math.sin(menu3d.t * 0.12) * 0.5 + (wide ? 0 : 0), by + 2.6, 6.6); camera.lookAt(0, by + (wide ? 1.2 : 2.3), 0);
@@ -203,6 +204,38 @@ function readInput() {
 
 // ---------------------------------------------------------------- состояние сессии
 let S = null;
+
+// ---- временный максимальный уровень (только одиночная игра): сохранение всегда пишет настоящий уровень
+function boostFix(p) {
+  const b = S && S.boost; if (!b || !p) return p;
+  const c = JSON.parse(JSON.stringify(p)); c.level = b.lv; c.totalXp = b.tx; c.xp = b.xp;
+  if (c.slots && c.cls && c.slots[c.cls]) { c.slots[c.cls].level = b.lv; c.slots[c.cls].totalXp = b.tx; c.slots[c.cls].xp = b.xp; }
+  return c;
+}
+function boostApply(lv, tx, xp) {
+  const pl = S.conn.player && S.conn.player(); if (!pl) return;
+  const pr = pl.profile; pr.level = lv; pr.totalXp = tx; pr.xp = xp;
+  if (pr.slots && pl.cls && pr.slots[pl.cls]) { pr.slots[pl.cls].level = lv; pr.slots[pl.cls].totalXp = tx; pr.slots[pl.cls].xp = xp; }
+  if (S.profile) { S.profile.level = lv; S.profile.totalXp = tx; S.profile.xp = xp; S.stats = Sim.statsFor(S.profile.cls, lv, S.profile.evo); }
+  pl.room.refreshStats(pl); pl.hp = pl.stats.hp;
+  pl.room.broadcast({ t: 'upd', p: { id: pl.id, level: lv } });
+  if (S.actor && S.actor.set) S.actor.set({ level: lv });
+}
+function boostEnd() {
+  const b = S && S.boost; if (!b) return; S.boost = null;
+  try { localStorage.removeItem('dino_maxlv'); } catch (e) { /* ignore */ }
+  try { boostApply(b.lv, b.tx, b.xp); } catch (e) { console.error(e); }
+  UI.banner('↩ Твой настоящий уровень возвращён: ' + b.lv, 3500);
+}
+function boostStart(quiet) {
+  if (!S || !S.conn || !S.conn.player || S.conn.online || S.boost) return false;
+  const pl = S.conn.player(); if (!pl) return false; const pr = pl.profile;
+  S.boost = { lv: pr.level, tx: pr.totalXp, xp: pr.xp };
+  try { localStorage.setItem('dino_maxlv', '1'); } catch (e) { /* ignore */ }
+  boostApply(CONFIG.MAX_LEVEL, CONFIG.cumXp(CONFIG.MAX_LEVEL), 0);
+  if (!quiet) UI.banner('⚡ Максимальный уровень ' + CONFIG.MAX_LEVEL + ' включён', 3500);
+  return true;
+}
 const prefersRu = () => window.I18N.lang === 'ru';
 function newSession(o) {
   return {
@@ -226,7 +259,7 @@ function startSession(o) {
   const h = {
     onmsg: m => { if (S === mine) handleMsg(m); },
     onclose: reason => { if (S !== mine || mine.ending) return; failSession(reason); },
-    onSave: p => { Profile.saveLocal(p); }
+    onSave: p => { Profile.saveLocal(boostFix(p)); }
   };
   if (o.online) S.conn = connectOnline({ token: Profile.state.token, biome: o.biome, cls: o.cls, mode: o.mode, code: o.code }, h);
   else S.conn = connectLocal({ profile: JSON.parse(JSON.stringify(prof)), biome: o.biome, cls: o.cls, mode: o.mode }, h);
@@ -240,8 +273,10 @@ function failSession(reason) {
 }
 function endSession(silent) {
   if (!S) return;
-  S.ending = true;
+  S.ending = true; try { Story.abort(); } catch (e) { /* ignore */ }
+  if (S.decor) { try { S.decor.dispose(); } catch (e) { /* ignore */ } S.decor = null; }
   if (S.coro) { try { endCoro(true); } catch (e) { /* ignore */ } }
+  if (S.bc) { document.body.classList.remove('cine'); S.bc = null; } if (S.warp) { document.body.classList.remove('cine'); const d = S.warp.done; S.warp = null; d && d(); }
   $('tut').classList.remove('on');
   if (S.hatch && S.hatch.grp) { S.hatch.grp.parent && S.hatch.grp.parent.remove(S.hatch.grp); }
   try { S.conn && S.conn.close(); } catch (e) { /* ignore */ }
@@ -293,16 +328,21 @@ function updateTq(m) {
 $('tq-x').addEventListener('click', () => S && S.conn.send({ t: 'tourney_cancel' }));
 
 function buildWorldFor(biome) {
+  if (S.decor) { S.decor.dispose(); S.decor = null; }
   if (S.world) S.world.dispose();
   scene = new THREE.Scene();
   S.world = buildWorld(scene, biome); S.W = S.world.sim; S.biome = biome; S.world.applyQuality(qualityName);
   S.texts.length = 0; S.fx = { rings: [], parts: [] }; initFx();   // эффекты и всплывающие цифры живут в сцене мира
+  S.decor = new Decor(scene);
   Audio.setScene(biome);
 }
 function onWelcome(m) {
   if (m.proto !== CONFIG.PROTO) { failSession('server_off'); return; }
   const first = !S.welcomed; S.welcomed = true; S.id = m.id; S.room = m.room; S.host = m.host || 0;
   if (first && S.o && (S.o.duelq || S.o.tourneyJoin)) { const kind = S.o.duelq ? 'duelq' : 'tourney'; S.o.duelq = S.o.tourneyJoin = false; setTimeout(() => S && S.conn && S.welcomed && S.conn.send({ t: kind }), 2200); }
+  if (!first && S.warp) endWarp();          // перелёт в новый мир: ролик портала закончен, новый динозавр не должен его «доигрывать»
+  if (!first && S.bc) endBcine();
+  if (!first && !S.warp && !S.coro && !S.bc) document.body.classList.remove('cine');
   if (!S.world || S.biome !== m.room.biome) buildWorldFor(m.room.biome);
   for (const p of S.players.values()) p.actor && p.actor.dispose();
   for (const e of S.ents.values()) e.group && e.group.parent && e.group.parent.remove(e.group);
@@ -315,7 +355,7 @@ function onWelcome(m) {
   setTimeout(() => { if (S && S.welcomed && !S.ending) tutStart(); }, 2500);
   S.actor && S.actor.dispose();
   const pr = S.profile;
-  S.actor = makeActor({ nick: pr.name, color: pr.color, cls: pr.cls, level: pr.level, evo: pr.evo, cosmetic: pr.cosmetic, pet: pr.pet || '', title: pr.title || '', patc: pr.patc || '', morph: pr.morph || '', admin: Profile.state.admin && S.o.online, king: pr.kings.indexOf(m.room.biome) >= 0, lord: Sim.isLord(pr) });
+  S.actor = makeActor({ nick: pr.name, color: pr.color, cls: pr.cls, level: pr.level, evo: pr.evo, cosmetic: pr.cosmetic, pet: pr.pet || '', title: pr.title || '', patc: pr.patc || '', morph: pr.morph || '', admin: Profile.state.admin && S.o.online, king: pr.kings.indexOf(m.room.biome) >= 0, lord: Sim.isLord(pr), end: pr.ending || '' });
   scene.add(S.actor.group);
   for (const p of m.players) addPlayer(p);
   S.tod = m.tod; input.yaw = S.me.face + Math.PI; input.pitch = 0.3; S.snapN = 0;
@@ -324,9 +364,16 @@ function onWelcome(m) {
   const inDuel = m.room.biome === 'duel';
   $('hint').textContent = IS_TOUCH ? '' : T('hint_pc'); setTimeout(() => { if ($('hint')) $('hint').style.opacity = 0; }, 14000); $('hint').style.opacity = 0.8;
   const hatchNow = first && S.o.hatch && !inDuel && S.world.nestInfo;
-  if (hatchNow) { ctl.pendingHatch = null; beginHatch(); setTimeout(() => fade(false, 1300), 350); }
+  const sw = Story.onWelcome(S.profile, { hatchNow: !!hatchNow, sea: !inDuel && CONFIG.OCEANS.indexOf(m.room.biome) >= 0 });
+  if (hatchNow) {
+    ctl.pendingHatch = null; const mine = S;
+    const go = () => { if (S !== mine || S.ending) return; beginHatch(); setTimeout(() => fade(false, 1300), 350); };
+    if (sw.needPrologue) Story.queue(async () => { fade(false, 300); await Story.play('prologue'); if (S === mine && !S.ending) S.conn && S.conn.send({ t: 'story', k: 'pro' }); go(); }); else go();
+  }
   else { if (S.o.hatch) { ctl.pendingHatch = null; } fade(false, 900); if (inDuel) { Audio.setScene('duel'); } else if (first) UI.banner(TN(CONFIG.BIOME[m.room.biome].n), 2600); }
   Audio.sfx('portal');
+  if (first) setTimeout(() => { if (S && S.welcomed && !S.ending) sw.after(); }, 3000);
+  try { if (localStorage.getItem('dino_maxlv') === '1') setTimeout(() => { if (S && S.welcomed && !S.boost) boostStart(true); }, 400); } catch (e) { /* ignore */ }
   if (S.o.online) S.pingT = setInterval(() => { if (S && S.conn) S.conn.send({ t: 'ping', n: performance.now() }); }, 4000);
   $('respawn').classList.remove('on');
 }
@@ -335,14 +382,15 @@ function showLogin(l) {   // награда за вход в новый день
   UI.banner('🔥 ' + T('streak_n', { n: l.streak }) + ' · +' + l.coins + ' 🪙' + (l.cos ? ' · 🎁 ' + TN(CONFIG.COSMETICS[l.cos].n) : ''), 4600); Audio.sfx('coin');
 }
 function onProfile(p, silent) {
+  if (S.boost) { S.boost.lv = p.level; S.boost.tx = p.totalXp; S.boost.xp = p.xp; p = Object.assign({}, p, { level: CONFIG.MAX_LEVEL, totalXp: CONFIG.cumXp(CONFIG.MAX_LEVEL), xp: 0 }); }
   const old = S.profile; S.profile = Sim.fixProfile(p);
-  if (S.o.online) Profile.setServerProfile(p); else Profile.saveLocal(S.profile);
+  if (S.o.online) Profile.setServerProfile(p); else Profile.saveLocal(boostFix(S.profile));
   S.stats = Sim.statsFor(S.profile.cls, S.profile.level, S.profile.evo);
   S.sense = S.stats.sense || 0;
   if (old && S.actor && old.cls === S.profile.cls && CONFIG.stageIndex(S.profile.level) > CONFIG.stageIndex(old.level) && !silent) {
     const sn = T('stage_' + CONFIG.STAGES[CONFIG.stageIndex(S.profile.level)].id); UI.banner('🦖 ' + T('grew', { s: sn }), 3200); Audio.sfx('coin');
   }
-  if (S.actor) S.actor.set({ level: S.profile.level, evo: S.profile.evo, cosmetic: S.profile.cosmetic || '', pet: S.profile.pet || '', title: S.profile.title || '', patc: S.profile.patc || '', morph: S.profile.morph || '', color: S.profile.color, lord: Sim.isLord(S.profile), king: S.profile.kings.indexOf(S.biome) >= 0 });
+  if (S.actor) S.actor.set({ level: S.profile.level, evo: S.profile.evo, cosmetic: S.profile.cosmetic || '', pet: S.profile.pet || '', title: S.profile.title || '', patc: S.profile.patc || '', morph: S.profile.morph || '', color: S.profile.color, lord: Sim.isLord(S.profile), end: S.profile.ending || '', king: S.profile.kings.indexOf(S.biome) >= 0 });
   // новые достижения
   const done = {}; for (const a of CONFIG.ACH) done[a.id] = !!a.t(S.profile);
   if (S.ach && !silent) for (const a of CONFIG.ACH) if (done[a.id] && !S.ach[a.id]) { UI.note('🏆 ' + TN(a.n)); Audio.sfx('coin'); }
@@ -352,7 +400,7 @@ function onProfile(p, silent) {
 }
 function addPlayer(info) {
   if (info.id === S.id || S.players.has(info.id)) return;
-  const actor = makeActor({ nick: info.nick, color: info.color, cls: info.cls, level: info.level, evo: info.evo, cosmetic: info.cosmetic, pet: info.pet || '', title: info.title || '', patc: info.patc || '', morph: info.morph || '', admin: info.admin, king: info.king, lord: info.lord, label: info.bot ? '' : '' });
+  const actor = makeActor({ nick: info.nick, color: info.color, cls: info.cls, level: info.level, evo: info.evo, cosmetic: info.cosmetic, pet: info.pet || '', title: info.title || '', patc: info.patc || '', morph: info.morph || '', admin: info.admin, king: info.king, lord: info.lord, end: info.end || '', label: info.bot ? '' : '' });
   scene.add(actor.group);
   S.players.set(info.id, { info, actor, buf: [], hp: 100, flags: 0, shown: false, speed: 0 });
 }
@@ -412,7 +460,7 @@ function updateEnt(r, now) {
     scene.add(group); S.ents.set(r[0], e);
   }
   e.seen = now; e.hp = r[6]; e.mhp = r[7]; const prevF = e.flags; e.flags = r[8]; e.lv = r[9];
-  if ((r[8] & 1) && !(prevF & 1)) e.model.userData.bite = 1;
+  if ((r[8] & 1) && !(prevF & 1)) { e.model.userData.bite = 1; Audio.sfx(e.boss ? 'chomp' : 'swing', { x: r[2], z: r[4], ref: e.boss ? 20 : 6 }); }
   e.buf.push({ t: now, x: r[2], y: r[3], z: r[4], f: r[5] }); if (e.buf.length > 8) e.buf.shift();
   e.phase = r[9];
 }
@@ -481,7 +529,11 @@ function syncFood() {
   for (let i = 0; i < list.length; i++) {
     const d = list[i]; let f = S.foodMeshes[i];
     if (!f || f.userData.k !== d[3]) { if (f) f.parent.remove(f); f = foodMesh(d[3]); f.userData.k = d[3]; scene.add(f); S.foodMeshes[i] = f; }
-    f.position.set(d[0], d[1] > S.W.waterY - 0.6 && S.world && S.world.meshH ? Math.max(d[1], S.world.meshH(d[0], d[2]) + 0.03) : d[1], d[2]);
+    let fy = d[1] > S.W.waterY - 0.6 && S.world && S.world.meshH ? Math.max(d[1], S.world.meshH(d[0], d[2]) + 0.03) : d[1];
+    if (S.world && S.world.waveAt && !S.W.ocean && S.W.liquid !== 'lava' && S.world.meshH && S.world.meshH(d[0], d[2]) < S.W.waterY - 0.05) {   // еда над водой плавает на поверхности и качается на волнах
+      const k = clock * 1.7 + d[0] * 0.7; fy = S.W.waterY + S.world.waveAt(d[0], d[2]) * 0.9 + 0.04 + Math.sin(k) * 0.025;
+    }
+    f.position.set(d[0], fy, d[2]);
   }
 }
 
@@ -569,6 +621,24 @@ function spawnTelegraph(shape, x, z, ang, a, b, warn, hz) {
   scene.add(holder); S.zones.push({ mesh: holder, fill, t0: performance.now() / 1000, warn: Math.max(0.2, warn), shape });
   Audio.sfx('warn');
 }
+// ---- звук: тип голоса по классу/виду, позиция, шаги
+const kindOfCls = (cls) => { const c = CONFIG.CLASSES[cls]; return !c ? 'carn' : c.aqua ? 'aqua' : cls === 'fly' ? 'fly' : cls === 'herb' ? 'herb' : 'carn'; };
+function voiceOf(id) {   // {kind, size, boss} голоса существа по его id
+  if (id === S.id) return { kind: kindOfCls(S.profile.cls), size: Sim.scaleOf(S.profile.level) / 2.1 };
+  const p = S.players.get(id); if (p) return { kind: kindOfCls(p.info.cls), size: Sim.scaleOf(p.info.level || 1) / 2.1 };
+  const e = S.ents.get(id); if (e) { if (e.boss) return { kind: 'carn', size: 1, boss: e.bossId }; const a = e.arch || {}; return { kind: a.fly ? 'fly' : a.water ? 'aqua' : a.model === 'quad' ? 'herb' : 'carn', size: Math.min(1, (a.size || 1) / 3) }; }
+  return { kind: 'carn', size: 0.5 };
+}
+const sndAt = (p, o) => Object.assign({ x: p.x, z: p.z }, o || {});
+function stepSurf(water) { if (water) return 'water'; const b = S.biome; return b === 'snow' ? 'snow' : b === 'desert' ? 'sand' : b === 'mountain' || b === 'volcano' ? 'rock' : b === 'swamp' ? 'mud' : 'grass'; }
+// один звук на шаг: длина шага растёт с размером; в воздухе — тишина
+function footSound(o, x, z, mass, ground, water, ref) {
+  if (o.stD === undefined) { o.stD = 0; o.stX = x; o.stZ = z; return; }
+  const d = Math.hypot(x - o.stX, z - o.stZ); o.stX = x; o.stZ = z; if (d > 3) return;
+  if (!ground) { o.stD = 0; return; }
+  o.stD += d; const stride = 0.8 + mass * 1.5;
+  if (o.stD >= stride) { o.stD -= stride; Audio.step(stepSurf(water), mass, { x, z, ref: ref || 6 }); }
+}
 function posOf(id) {
   if (id === S.id) { const a = S.actor; return a ? a.group.position : null; }
   const p = S.players.get(id); if (p) return p.actor.group.position;
@@ -587,47 +657,48 @@ function onEvent(ev, now) {
       floatText(p.x, p.y + 2.2, p.z, (me ? '-' : '') + ev[2], col, heavy ? 1.6 : ev[3] ? 1.3 : 1);
       burst(p.x, p.y + 1.1, p.z, me ? 0xff3a2a : 0xffe08a, me ? 8 : 6, 3.5);
       if (heavy) { burst(p.x, p.y + 1.1, p.z, 0xc4180e, 14, 5.5, 3); burst(p.x, p.y + 1.3, p.z, 0xffffff, 8, 7, 1); ring(p.x, p.y, p.z, me ? 0xff3a2a : 0xffd35a, 2.6, 0.35); }   // удар посильнее: капли, искры и кольцо
-      Audio.sfx(me ? 'hurt' : crit ? 'crit' : 'hit'); if (heavy) Audio.sfx('thud');
+      { const sp = sndAt(p); if (me) { Audio.sfx('hurt', sp); Audio.sfx(heavy ? 'thud' : 'hit', sp); } else if (crit) { Audio.sfx('crit', sp); Audio.sfx('thud', sp); } else Audio.sfx(heavy ? 'thud' : Math.random() < 0.55 ? 'bite' : 'hit', sp); }
       if (me) { S.camShake = Math.max(S.camShake, heavy ? 0.55 : 0.25); const hf = $('hurtfx'); hf.classList.remove('go'); void hf.offsetWidth; hf.classList.add('go'); }
       else { S.camShake = Math.max(S.camShake, heavy ? 0.2 : 0.07); const te = S.ents.get(ev[1]); if (te) { te.olUntil = now + 0.7; te.olOn = true; setOutline(te.model, true, 0xff2418); } }   // красный контур укушенного врага
       const pl = S.players.get(ev[1]); if (pl) pl.hurt = now;
       break;
     }
-    case 'k': { const e = S.ents.get(ev[1]); if (e) { const bs = (e.arch && e.arch.size) || 1; burst(e.group.position.x, e.group.position.y + 1, e.group.position.z, 0xffd35a, 18, 5); burst(e.group.position.x, e.group.position.y + 1, e.group.position.z, 0xc4180e, Math.round(8 + 10 * bs), 4.5, 3); if (bs >= 1) { ring(e.group.position.x, e.group.position.y, e.group.position.z, 0xffd35a, 2.5 * bs, 0.5); Audio.sfx('thud'); } e.group.parent && e.group.parent.remove(e.group); S.ents.delete(ev[1]); } break; }
-    case 'd': p = posOf(ev[1]); if (p) burst(p.x, p.y + 1, p.z, 0xcc3322, 22, 5); if (ev[1] === S.id) { Audio.sfx('die'); S.camShake = 0.6; } break;
+    case 'k': { const e = S.ents.get(ev[1]); if (e) { const bs = (e.arch && e.arch.size) || 1; burst(e.group.position.x, e.group.position.y + 1, e.group.position.z, 0xffd35a, 18, 5); burst(e.group.position.x, e.group.position.y + 1, e.group.position.z, 0xc4180e, Math.round(8 + 10 * bs), 4.5, 3); if (bs >= 1) { ring(e.group.position.x, e.group.position.y, e.group.position.z, 0xffd35a, 2.5 * bs, 0.5); const sp = sndAt(e.group.position); Audio.sfx('thud', sp); Audio.sfx('die', Object.assign({ g: 0.7 }, sp)); } e.group.parent && e.group.parent.remove(e.group); S.ents.delete(ev[1]); } break; }
+    case 'd': p = posOf(ev[1]); if (p) burst(p.x, p.y + 1, p.z, 0xcc3322, 22, 5); if (ev[1] === S.id) { Audio.sfx('die'); S.camShake = 0.6; } else if (p) Audio.sfx('die', sndAt(p)); break;
     case 'lv': p = posOf(ev[1]); if (p) { ring(p.x, p.y, p.z, 0xffe066, 4, 0.9); burst(p.x, p.y + 1, p.z, 0xffe066, 24, 5); } if (ev[1] === S.id) { Audio.sfx('level'); UI.banner(T('lv_up', { n: ev[2] }), 2200); } break;
     case 'xp': if (ev[1] === S.id) { p = posOf(ev[1]); if (p) floatText(p.x, p.y + 3.0, p.z, '+' + ev[2] + ' XP', '#9be37a', 0.8); } break;
-    case 'eat': p = posOf(ev[1]); if (p) burst(p.x, p.y + 1.4, p.z, ev[2] === 'plant' ? 0x6ccf4a : 0xd9534f, 8, 2.5); if (ev[1] === S.id) Audio.sfx('eat'); break;
-    case 'b': { const pl = ev[1] === S.id ? S.actor : (S.players.get(ev[1]) || {}).actor; if (pl) pl.dino.userData.bite = 1; if (ev[1] === S.id) Audio.sfx('swing'); break; }
+    case 'eat': p = posOf(ev[1]); if (p) burst(p.x, p.y + 1.4, p.z, ev[2] === 'plant' ? 0x6ccf4a : 0xd9534f, 8, 2.5); if (p) Audio.sfx(ev[2] === 'plant' ? 'eat_plant' : 'eat_meat', ev[1] === S.id ? null : sndAt(p)); break;
+    case 'b': { const pl = ev[1] === S.id ? S.actor : (S.players.get(ev[1]) || {}).actor; if (pl) pl.dino.userData.bite = 1; { const q = posOf(ev[1]); if (q) Audio.sfx('swing', ev[1] === S.id ? null : sndAt(q, { g: 0.7 })); } break; }
     case 'evo': p = posOf(ev[1]); if (p) { ring(p.x, p.y, p.z, 0x7af0ff, 5, 1.0); burst(p.x, p.y + 1, p.z, 0x7af0ff, 30, 6); } if (ev[1] === S.id) { Audio.sfx('evo'); UI.banner(T('evo_done'), 1600); } break;
-    case 'ult': { p = posOf(ev[1]); const id = ev[2], R = ev[3] || 8;
+    case 'ult': { trikeRoar(ev[1]); p = posOf(ev[1]); const id = ev[2], R = ev[3] || 8;
       if (p) { const col = { rampage: 0xff5a2a, quake: 0xc9a86a, storm: 0xbfe6ff, whirl: 0x4aa8ff, tide: 0x6affc8, frenzy: 0xffe14a }[id] || 0xffffff;
         ring(p.x, p.y, p.z, rfxBurst(ev[1], p) || col, R || 8, 1.1); ring(p.x, p.y + 0.3, p.z, 0xffffff, (R || 8) * 0.6, 0.8); burst(p.x, p.y + 1, p.z, col, 60, 9, 4); }
-      Audio.sfx(id === 'quake' ? 'boom' : 'roar'); if (ev[1] === S.id) { S.camShake = Math.max(S.camShake || 0, 0.5); UI.banner(CONFIG.ABIL_INFO[id].ico + ' ' + TN(CONFIG.ABIL_INFO[id].n), 2200); } break; }
+      if (p) Audio.sfx(id === 'quake' ? 'quake' : 'roar', sndAt(p, voiceOf(ev[1]))); if (ev[1] === S.id) { S.camShake = Math.max(S.camShake || 0, 0.5); UI.banner(CONFIG.ABIL_INFO[id].ico + ' ' + TN(CONFIG.ABIL_INFO[id].n), 2200); } break; }
     case 'heal': p = posOf(ev[1]); if (p) { burst(p.x, p.y + 1.5, p.z, 0x6affc8, 18, 3, 3); } break;
     case 'pet': { p = posOf(ev[1]); if (p) { if (ev[2] === 1) { burst(p.x, p.y + 1.2, p.z, 0xffd35a, 10, 3, 2); if (ev[1] === S.id) { floatText(p.x, p.y + 2.8, p.z, '+' + ev[3] + ' 🪙', '#ffd35a', 1); Audio.sfx('coin'); } } else if (ev[2] === 0) burst(p.x, p.y + 1.5, p.z, 0x6affc8, 8, 2, 2); else { const t = S.ents.get(ev[3]); if (t) burst(t.group.position.x, t.group.position.y + 1, t.group.position.z, 0x8a6a3a, 8, 3, 1); } } break; }
-    case 'dash': p = posOf(ev[1]); if (p) burst(p.x, p.y + 0.5, p.z, 0xffffff, 10, 3, 0.5); Audio.sfx('dash'); break;
-    case 'dive': p = posOf(ev[1]); if (p) { ring(p.x, p.y, p.z, 0xffffff, 3, 0.4); burst(p.x, p.y, p.z, 0xdddddd, 14, 4); } Audio.sfx('boom'); break;
-    case 'roar': p = posOf(ev[1]); if (p) ring(p.x, p.y, p.z, rfxBurst(ev[1], p) || 0xff7a4a, ev[2] || 14, 0.8); Audio.sfx('roar'); if (ev[1] !== S.id) S.camShake = Math.max(S.camShake, 0.1); break;
-    case 'screech': p = posOf(ev[1]); if (p) ring(p.x, p.y, p.z, 0xffe14a, ev[2] || 10, 0.7); Audio.sfx('screech'); break;
-    case 'herd': p = posOf(ev[1]); if (p) { ring(p.x, p.y, p.z, 0xc9a86a, ev[2] || 9, 0.6); burst(p.x, p.y + 0.3, p.z, 0xb59a6a, 26, 5); if (ev[1] === S.id) S.camShake = Math.max(S.camShake || 0, 0.35); } Audio.sfx('hit'); break;
-    case 'grd': p = posOf(ev[1]); if (p) burst(p.x, p.y + 1.0, p.z, 0x9ad8ff, 10, 2.5); break;   // щит: светящийся пузырь вокруг динозавра (без плоского «круга-таблички»)
+    case 'dash': p = posOf(ev[1]); if (p) { burst(p.x, p.y + 0.5, p.z, 0xffffff, 10, 3, 0.5); Audio.sfx('dash', sndAt(p)); } break;
+    case 'dive': p = posOf(ev[1]); if (p) { ring(p.x, p.y, p.z, 0xffffff, 3, 0.4); burst(p.x, p.y, p.z, 0xdddddd, 14, 4); Audio.sfx('dash', sndAt(p)); Audio.sfx('thud', sndAt(p)); } break;
+    case 'roar': trikeRoar(ev[1]); p = posOf(ev[1]); if (p) ring(p.x, p.y, p.z, rfxBurst(ev[1], p) || 0xff7a4a, ev[2] || 14, 0.8); if (p) Audio.sfx('roar', sndAt(p, voiceOf(ev[1]))); if (ev[1] !== S.id) S.camShake = Math.max(S.camShake, 0.1); break;
+    case 'screech': p = posOf(ev[1]); if (p) { ring(p.x, p.y, p.z, 0xffe14a, ev[2] || 10, 0.7); Audio.sfx('screech', sndAt(p, voiceOf(ev[1]))); } break;
+    case 'herd': trikeRoar(ev[1]); p = posOf(ev[1]); if (p) { ring(p.x, p.y, p.z, 0xc9a86a, ev[2] || 9, 0.6); burst(p.x, p.y + 0.3, p.z, 0xb59a6a, 26, 5); if (ev[1] === S.id) S.camShake = Math.max(S.camShake || 0, 0.35); Audio.sfx('thud', sndAt(p)); } break;
+    case 'grd': p = posOf(ev[1]); if (p) { burst(p.x, p.y + 1.0, p.z, 0x9ad8ff, 10, 2.5); Audio.sfx('shield', ev[1] === S.id ? null : sndAt(p)); } break;   // щит: светящийся пузырь вокруг динозавра (без плоского «круга-таблички»)
     case 'fly': p = posOf(ev[1]); if (p) burst(p.x, p.y + 0.3, p.z, 0xdddddd, 12, 3); break;
-    case 'arc': { const a = posOf(ev[1]), b = posOf(ev[2]); if (a && b) { for (let i = 0; i < 8; i++) { const t = i / 7; burst(a.x + (b.x - a.x) * t, a.y + 1 + (b.y - a.y) * t, a.z + (b.z - a.z) * t, 0x7ad8ff, 2, 1, 0); } Audio.sfx('shock'); } break; }
-    case 'em': p = posOf(ev[1]); if (p) { floatText(p.x, p.y + 3.6, p.z, EMOJI[ev[2]] || '?', '#ffffff', 1.4); Audio.sfx('emote'); } break;
+    case 'arc': { const a = posOf(ev[1]), b = posOf(ev[2]); if (a && b) { for (let i = 0; i < 8; i++) { const t = i / 7; burst(a.x + (b.x - a.x) * t, a.y + 1 + (b.y - a.y) * t, a.z + (b.z - a.z) * t, 0x7ad8ff, 2, 1, 0); } Audio.sfx('shock', sndAt(a)); } break; }
+    case 'em': p = posOf(ev[1]); if (p) { floatText(p.x, p.y + 3.6, p.z, EMOJI[ev[2]] || '?', '#ffffff', 1.4); Audio.sfx('emote', sndAt(p)); } break;
     case 'tel': spawnTelegraph(ev[1], ev[2], ev[3], ev[4], ev[5], ev[6], ev[7], ev[8]); break;
-    case 'shake': S.camShake = Math.max(S.camShake, ev[1] * 0.7); Audio.sfx('boom'); break;
+    case 'shake': S.camShake = Math.max(S.camShake, ev[1] * 0.7); Audio.sfx('boom', { g: 0.7 }); break;
     case 'boss': {
-      if (ev[2] === 'start') { UI.banner(T('boss_start'), 2200); Audio.sfx('boss'); }
-      else if (ev[2] === 'dead') { UI.banner(T('boss_dead'), 3200); Audio.sfx('king'); const e = S.ents.get(ev[1]); if (e) for (let i = 0; i < 4; i++) burst(e.group.position.x, e.group.position.y + 2 + i, e.group.position.z, 0xffb04a, 30, 8); }
+      if (ev[2] === 'start') { UI.banner(T('boss_start'), 2200); { const be = S.ents.get(ev[1]); Audio.sfx('boss', { boss: be && be.bossId }); } Audio.setBoss(true); if (!S.rush && S.biome !== 'duel') { Story.bossIntro(S.biome, S.profile.kings.indexOf(S.biome) >= 0); { const bid = ev[1], tryBc = (n) => { if (!S || !S.welcomed) return; const be = S.ents.get(bid); if (be && be.group) startBcine(be); else if (n < 25) setTimeout(() => tryBc(n + 1), 120); }; tryBc(0); } } }
+      else if (ev[2] === 'reset') Audio.setBoss(false);
+      else if (ev[2] === 'dead') { Audio.setBoss(false); if (!S.rush && S.biome !== 'duel') Story.bossOutro(S.biome); UI.banner(T('boss_dead'), 3200); Audio.sfx('king'); const e = S.ents.get(ev[1]); if (e) Audio.sfx('die', { x: e.group.position.x, z: e.group.position.z, ref: 30 }); if (e) for (let i = 0; i < 4; i++) burst(e.group.position.x, e.group.position.y + 2 + i, e.group.position.z, 0xffb04a, 30, 8); }
       break;
     }
-    case 'bossph': UI.banner(T('boss_phase', { n: ev[2] + 1 }), 1800); Audio.sfx('boss'); break;
-    case 'summon': Audio.sfx('roar'); break;
-    case 'burrow': { const e = S.ents.get(ev[1]); if (e) { e.burrowed = !!ev[2]; burst(e.group.position.x, e.group.position.y, e.group.position.z, 0xc9a25a, 24, 6); } Audio.sfx('boom'); break; }
+    case 'bossph': UI.banner(T('boss_phase', { n: ev[2] + 1 }), 1800); { const be = S.ents.get(ev[1]); Audio.sfx('boss', { boss: be && be.bossId }); } break;
+    case 'summon': { const be = S.ents.get(ev[1]); if (be) Audio.sfx('roar', sndAt(be.group.position, { boss: be.bossId, ref: 20 })); break; }
+    case 'burrow': { const e = S.ents.get(ev[1]); if (e) { e.burrowed = !!ev[2]; burst(e.group.position.x, e.group.position.y, e.group.position.z, 0xc9a25a, 24, 6); Audio.sfx('boom', sndAt(e.group.position, { ref: 20 })); } break; }
     case 'king': {
       p = posOf(ev[1]); if (p) { ring(p.x, p.y, p.z, 0xffd35a, 8, 1.4); burst(p.x, p.y + 2, p.z, 0xffd35a, 40, 8); }
-      if (ev[1] === S.id) { if (ev[3] || ev[4]) startCoro({ biome: ev[2], lord: ev[4], xp: ev[5], coins: ev[6] }); else { UI.banner(T('king_new', { b: TN(CONFIG.BIOME[ev[2]].n) }), 4200); Audio.sfx('king'); } }
+      if (ev[1] === S.id) { if (ev[3]) { Story.afterKing(ev[2], S.profile); Story.queue(() => startWarp()); } if (ev[3] || ev[4]) startCoro({ biome: ev[2], lord: ev[4], xp: ev[5], coins: ev[6] }); else { UI.banner(T('king_new', { b: TN(CONFIG.BIOME[ev[2]].n) }), 4200); Audio.sfx('king'); } }
       break;
     }
     case 'rev': { p = posOf(ev[1]); if (p) { ring(p.x, p.y, p.z, 0x6cff9a, 5, 1.0); burst(p.x, p.y + 1.2, p.z, 0x6cff9a, 28, 6, 4); floatText(p.x, p.y + 2.6, p.z, '❤', '#6cff9a', 1.6); } Audio.sfx('level'); if (ev[1] === S.id) UI.banner('❤ ' + T('rev_you'), 2600); break; }
@@ -663,11 +734,11 @@ function buildAbilityBar() {
   defs.push(['x', CONFIG.ULTS[cls].id, 'X', null]);
   S.abBtns = [];
   for (const [slot, id, key, cd] of defs) {
-    const b = document.createElement('button'); b.className = 'ab'; b.innerHTML = `<small>${key === 'LMB' ? (IS_TOUCH ? '' : '🖱') : key}</small><span>${(id === 'atk' ? CONFIG.CLS_INFO[cls].atkIco : (ABIL[id] || CONFIG.ABIL_INFO[id]).ico)}</span><div class="cd"></div><div class="nm">${TN((ABIL[id] || CONFIG.ABIL_INFO[id]).n)}</div>`;
+    const b = document.createElement('button'); b.className = 'ab'; b.innerHTML = `<small>${key === 'LMB' ? (IS_TOUCH ? '' : '🖱') : key}</small><span>${(id === 'atk' ? CONFIG.CLS_INFO[cls].atkIco : (ABIL[id] || CONFIG.ABIL_INFO[id]).ico)}</span><div class="cd"></div><b class="ct"></b><div class="nm">${TN((ABIL[id] || CONFIG.ABIL_INFO[id]).n)}</div>`;
     const down = e => { e.preventDefault(); Audio.init(); if (slot === 'atk') { input.atk = true; b.classList.add('held'); } else act(slot); };
     const up = () => { if (slot === 'atk') { input.atk = false; b.classList.remove('held'); } };
     b.addEventListener('touchstart', down, { passive: false }); b.addEventListener('touchend', up); b.addEventListener('mousedown', down); b.addEventListener('mouseup', up); b.addEventListener('mouseleave', up);
-    bar.appendChild(b); S.abBtns.push({ slot, b, cd, el: b.querySelector('.cd') });
+    bar.appendChild(b); S.abBtns.push({ slot, b, cd, el: b.querySelector('.cd'), ct: b.querySelector('.ct') });
   }
 }
 
@@ -766,7 +837,7 @@ function updateHatch(dt) {
   for (const m of h.chips) { const v = m.userData.v; if (!v) continue; v.y -= 9.8 * dt; m.position.addScaledVector(v, dt); m.rotation.x += m.userData.w.x * dt; m.rotation.z += m.userData.w.z * dt; if (m.position.y < 0.05) { m.position.y = 0.05; m.userData.v = null; m.rotation.x = Math.PI / 2 + Math.random() * 0.6; } }
   // нижняя половинка заваливается набок, когда детёныш выбрался
   if (t > 4.95 && h.tip < 1) { h.tip = Math.min(1, h.tip + dt * 2.2); h.lo.rotation.z = -1.35 * h.tip * h.tip; h.lo.position.x = 0.35 * h.tip; h.lo.position.y = 0.18 * Math.sin(h.tip * Math.PI) + 0.05 * h.tip; }
-  if (t > 6.1 && !h.roared) { h.roared = true; if (S.actor) S.actor.dino.userData.bite = 1; Audio.sfx('roar'); }
+  if (t > 6.1 && !h.roared) { h.roared = true; if (S.actor) S.actor.dino.userData.bite = 1; Audio.sfx('roar', { kind: kindOfCls(S.profile.cls), size: 0.05 }); }
   if (t > HATCH_END && !h.done) {
     h.done = true; $('hud').classList.add('on'); const hh = $('hatchhint'); if (hh) hh.classList.remove('on');
     UI.banner(TN(CONFIG.BIOME[S.biome].n), 2600);
@@ -777,6 +848,8 @@ function updateHatch(dt) {
   if (h.cleanAt && clock > h.cleanAt) { h.grp.parent && h.grp.parent.remove(h.grp); h.mat.dispose(); h.tex.dispose(); S.hatch = null; }
 }
 // поза детёныша в катсцене: прячется в яйце, затем выбирается и растёт до своего размера
+// трицератопс поднимает голову и ревёт (рёв, топот стада, ульта)
+function trikeRoar(id) { const pl = id === S.id ? S.actor : (S.players.get(id) || {}).actor; if (pl && pl.dino) pl.dino.userData.roar = 1; }
 function hatchPose(a) {
   const h = S.hatch; if (!h || h.blend >= 1) return;
   const t = clock - h.t0, base = Sim.scaleOf(S.profile.level);
@@ -790,7 +863,7 @@ function hatchPose(a) {
   a.dino.position.y = (h.floorY - S.py) + inside * (1 - e) + 0.08 * Math.sin(g * Math.PI);
   a.dino.rotation.y = S.me.face + Math.sin(t * 3) * 0.15 * (1 - e);
 }
-const _cq = new THREE.Quaternion(), _cp = new THREE.Vector3(), _tmpCam = new THREE.PerspectiveCamera();
+const _lf = new THREE.Vector3(), _cq = new THREE.Quaternion(), _cp = new THREE.Vector3(), _tmpCam = new THREE.PerspectiveCamera();
 function hatchCamera(dt) {
   const h = S.hatch; if (!h || h.blend >= 1) return false;
   const t = clock - h.t0, gp = h.grp.position, u = Math.min(1, t / HATCH_END), a = h.camA + (u * u * (3 - 2 * u)) * Math.PI * 0.92, R = 3.4 + u * 1.4, lift = h.burst ? 0.9 : 0.55;
@@ -853,7 +926,7 @@ function boltFx(x, z) {
   scene.add(ln); setTimeout(() => { scene.remove(ln); ln.geometry.dispose(); ln.material.dispose(); }, 260);
   burst(x, y0 + 0.5, z, 0xcfe4ff, 24, 7, 3);
   const f = $('boltfx'); f.classList.remove('go'); void f.offsetWidth; f.classList.add('go');
-  const d = Math.hypot(x - S.px, z - S.pz); setTimeout(() => Audio.sfx('boom'), Math.min(2200, d / 340 * 1000));
+  const d = Math.hypot(x - S.px, z - S.pz); setTimeout(() => Audio.sfx('thunder', { x, z, ref: 70 }), Math.min(2600, d / 340 * 1000));
   if (d < 40) S.camShake = Math.max(S.camShake, 0.3);
 }
 
@@ -958,7 +1031,7 @@ function nestItemMesh(id) {
     [[0, 0, 0], [0.34, 0.1, 1], [-0.26, 0.22, 2], [0.12, -0.3, 1], [-0.12, -0.2, 0]].forEach(([x, z, si], i) => { const sp = species[si], k = sp.k * (i > 2 ? 0.55 : 1);
       const sp1 = []; for (let j = 0; j <= 8; j++) { const t = j / 8; sp1.push(new THREE.Vector2(0.05 + 0.03 * Math.pow(1 - t, 2) + 0.02 * Math.sin(t * 3), t * 0.4)); } const stem = new THREE.Mesh(new THREE.LatheGeometry(sp1, 12), mat(sp.stem, 0, { roughness: 0.85 })); stem.scale.setScalar(k); stem.position.set(x, 0, z); stem.castShadow = true; g.add(stem);
       const cp = []; for (let j = 0; j <= 10; j++) { const t = j / 10, a = t * Math.PI / 2; cp.push(new THREE.Vector2(Math.sin(a) * 0.27 * (si === 1 ? 1.15 : 1), Math.cos(a) * 0.17 * (si === 1 ? 0.8 : 1))); } cp.push(new THREE.Vector2(0.0001, 0));
-      const cap = new THREE.Mesh(new THREE.LatheGeometry(cp, 16), mat(sp.cap, 0, { roughness: 0.55 })); cap.scale.setScalar(k); cap.position.set(x, 0.37 * k, z); cap.rotation.z = (i % 2 ? 0.06 : -0.05); cap.castShadow = true; g.add(cap);
+      const cap = new THREE.Mesh(new THREE.LatheGeometry(cp, 16), mat(sp.cap, 0, { roughness: 0.55, side: THREE.DoubleSide })); cap.scale.setScalar(k); cap.position.set(x, 0.37 * k, z); cap.rotation.z = (i % 2 ? 0.06 : -0.05); cap.castShadow = true; g.add(cap);
       const gl = new THREE.Mesh(new THREE.CircleGeometry(0.25 * k, 14), mat(sp.gills, 0, { side: THREE.DoubleSide })); gl.rotation.x = Math.PI / 2; gl.position.set(x, 0.372 * k, z); g.add(gl);
       if (sp.spots) for (let s = 0; s < 9; s++) { const sa = s * 2.4, sr = 0.05 + (s % 3) * 0.07, h = Math.cos(Math.asin(Math.min(0.95, sr / 0.27))) * 0.17; const d = new THREE.Mesh(SG(0.022 + (s % 2) * 0.012, 6, 5), mat(0xfaf5e6, 0, { roughness: 0.8 })); d.scale.y = 0.4; d.position.set(x + Math.cos(sa) * sr * k, 0.37 * k + h * k, z + Math.sin(sa) * sr * k); g.add(d); } });
   } else if (id === 'moss') {        // мягкие моховые подушки из множества бугорков
@@ -1085,6 +1158,7 @@ $('tut-x').addEventListener('click', () => tutDone(true));
 const CORO_LAND = 3.4, CORO_DUR = 8.2;
 function startCoro(o) {
   if (!S || !S.actor || S.coro || S.hatch) return;
+  if (S.bc) endBcine();
   const c = S.coro = { t0: clock, lord: !!o.lord, biome: o.biome, xp: o.xp | 0, coins: o.coins | 0, landed: false, end: false, blend: 0, lastT: 0, sparkT: 0, freezeT: null, grp: new THREE.Group(), pose: null };
   // колонна света: мягкие края (ярче в центре) и растворяется кверху
   const mat = new THREE.ShaderMaterial({ transparent: true, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, uniforms: { uOp: { value: 0 }, uCol: { value: new THREE.Color(0xffc44a) } },
@@ -1153,17 +1227,118 @@ function updateCoro(dt) {
 function skipCoro() { const c = S && S.coro; if (c && clock >= c.skipOk) c.end = true; }
 window.addEventListener('pointerdown', skipCoro); window.addEventListener('keydown', e => { if (S && S.coro && (e.code === 'Space' || e.code === 'Escape' || e.code === 'Enter')) skipCoro(); });
 
+
+// ---------------------------------------------------------------- 3D-ролики: встреча с боссом и «всасывание в портал»
+let flashEl = null;
+function warpFlash(on, ms) {
+  if (!flashEl) { flashEl = document.createElement('div'); flashEl.style.cssText = 'position:fixed;inset:0;z-index:250;background:#fff;opacity:0;pointer-events:none;transition:opacity .5s'; document.body.appendChild(flashEl); }
+  flashEl.style.transition = 'opacity ' + (ms || 500) + 'ms'; flashEl.style.opacity = on ? '1' : '0';
+}
+const _bcv = new THREE.Vector3();
+function startBcine(be) {
+  if (!S || S.coro || S.hatch || S.bc || S.warp || !be || !be.group) return;
+  S.bc = { t0: clock, dur: 6.2, e: be, roared: false, pose: null };
+  document.body.classList.add('cine');
+}
+function endBcine() {
+  const c = S && S.bc; if (!c) return;
+  document.body.classList.remove('cine');
+  S.coroBlend = c.pose ? { t: 0, pos: c.pose.pos, q: c.pose.q } : null; S.bc = null;
+}
+function updateBcine(dt) {
+  const c = S.bc; if (!c) return false;
+  const t = clock - c.t0, e = c.e, bp = e.group.position, def = CONFIG.BOSSES[e.bossId] || { size: 3 }, sz = def.size, me = S.actor.group.position;
+  const sm = (a0, a1, x) => { const q = Math.min(1, Math.max(0, (x - a0) / (a1 - a0))); return q * q * (3 - 2 * q); };
+  const fa = Math.atan2(me.x - bp.x, me.z - bp.z);          // направление от босса к игроку
+  let ang, R, h, ly;
+  if (t < 2.3) { const k = sm(0, 2.3, t); ang = fa + 0.9 - 0.5 * k; R = sz * (7.5 - 3.2 * k); h = bp.y + sz * (0.35 + 0.5 * k); ly = bp.y + sz * (1.15 + 0.3 * k); }
+  else if (t < 4.4) { const k = sm(2.3, 4.4, t); ang = fa + 0.4 - 1.5 * k; R = sz * (4.3 + 0.8 * k); h = bp.y + sz * (0.85 + 0.25 * k); ly = bp.y + sz * 1.55; }
+  else { const k = sm(4.4, 6.2, t); ang = fa - 1.1 + 1.1 * k; R = sz * (5.1 + 1.6 * k); h = bp.y + sz * (1.1 - 0.35 * k); ly = bp.y + sz * (1.55 - 0.45 * k); }
+  if (t > 2.3 && !c.roared) { c.roared = true; S.camShake = 0.7; Audio.sfx('roar', { kind: 'big', size: 1.6, boss: e.bossId }); const bx = bp.x, bz = bp.z; ring(bx, bp.y + 0.2, bz, 0xffffff, sz * 3, 0.9); }
+  _tmpCam.position.set(bp.x + Math.sin(ang) * R, h, bp.z + Math.cos(ang) * R);
+  const gy = S.W.heightAt(_tmpCam.position.x, _tmpCam.position.z) + 0.8; if (_tmpCam.position.y < gy) _tmpCam.position.y = gy;
+  _tmpCam.lookAt(bp.x, ly, bp.z);
+  if (S.camShake > 0.01) { const s = S.camShake; _tmpCam.position.x += (Math.random() - 0.5) * s; _tmpCam.position.y += (Math.random() - 0.5) * s; S.camShake *= Math.pow(0.05, dt); }
+  camera.position.copy(_tmpCam.position); camera.quaternion.copy(_tmpCam.quaternion); camera.fov = 52 - 8 * sm(0, 4, t); camera.updateProjectionMatrix();
+  c.pose = { pos: _tmpCam.position.clone(), q: _tmpCam.quaternion.clone() };
+  if (t >= c.dur || c.end) endBcine();
+  return true;
+}
+// всасывание в портал следующей локации (после коронации)
+function startWarp() {
+  return new Promise(res => {
+    if (!S || !S.welcomed || S.coro || S.hatch || S.bc || S.warp || !S.W.portalNext) { res(); return; }
+    const wl = CONFIG.worldList(CONFIG.worldOf(S.biome)); if (wl.indexOf(S.biome) >= wl.length - 1 || S.profile.kings.indexOf(S.biome) < 0) { res(); return; }
+    const gp = S.actor.group.position, P = S.W.portalNext;
+    S.warp = { t0: clock, dur: 7, start: gp.clone(), s0: S.actor.group.scale.x, sent: false, spT: 0, done: res, pose: null };
+    if (S.world.setPortalNext) S.world.setPortalNext(true);
+    document.body.classList.add('cine'); Audio.sfx('portal'); ring(P.x, P.y + 1.5, P.z, 0x9be37a, 8, 1.4);
+  });
+}
+function endWarp() {
+  const w = S && S.warp; if (!w) return; S.warp = null;
+  try { S.actor.group.scale.setScalar(w.s0); S.actor.group.visible = true; S.actor.group.rotation.set(0, 0, 0); } catch (e) { /* ignore */ }
+  document.body.classList.remove('cine'); warpFlash(false, 900); w.done && w.done();
+}
+function updateWarp(dt) {
+  const w = S.warp; if (!w) return false;
+  const t = clock - w.t0, a = S.actor, P = S.W.portalNext, sc = Sim.scaleOf(S.profile.level);
+  const sm = (a0, a1, x) => { const q = Math.min(1, Math.max(0, (x - a0) / (a1 - a0))); return q * q * (3 - 2 * q); };
+  const px = P.x, py = P.y + 1.8, pz = P.z;
+  const k = sm(1.4, 5.4, t), kk = Math.pow(k, 2.2), sp = (1 - kk) * 2.8 * sc, an = kk * 20;      // сначала «упирается», потом тянет всё быстрее
+  const dx = px - w.start.x, dz = pz - w.start.z, len = Math.hypot(dx, dz) || 1, nx = -dz / len, nz = dx / len;
+  const x = w.start.x + dx * kk + (nx * Math.cos(an) * sp), z = w.start.z + dz * kk + (nz * Math.cos(an) * sp);
+  const y = w.start.y + (py - w.start.y) * kk + Math.sin(an) * sp * 0.8 + Math.sin(Math.min(1, k * 1.6) * Math.PI) * 1.2 * sc;
+  a.group.position.set(x, y, z);
+  // притяжение воронки: тело вытягивается вдоль направления к порталу, сжимается поперёк, кувыркается и уменьшается
+  const yaw = Math.atan2(dx, dz), str = 1 + 2.6 * k * k, sq = Math.max(0.3, 1 - 0.68 * Math.pow(k, 1.4)), shr = Math.max(0.03, 1 - 0.97 * Math.pow(k, 1.25));
+  const struggle = (1 - k) * Math.min(1, t / 0.6) * (t < 1.6 ? 1 : 0.35);
+  a.group.rotation.set(Math.sin(t * 7) * 0.12 * struggle - 0.35 * k, yaw, an * 0.8 + Math.sin(t * 5) * 0.1 * struggle);
+  a.group.scale.set(w.s0 * shr * sq, w.s0 * shr * sq, w.s0 * shr * str);
+  if (t > 0.3 && t < 5.6 && clock - w.spT > 0.04) {
+    w.spT = clock;
+    if (t < 3.2) burst(w.start.x, w.start.y + 0.25, w.start.z, 0xcbb98a, 3, 2.2);                                   // пыль и листья срываются с земли
+    burst(x, y, z, 0x9be37a, 3, 2.5);
+    for (let j = 0; j < 3; j++) { const ang = an * 0.5 + j * 2.094 + t * 6, r = (1.2 + 6.5 * (1 - k)) * sc; burst(px + nx * Math.cos(ang) * r, py + Math.sin(ang) * r * 0.85, pz + nz * Math.cos(ang) * r, j % 2 ? 0xbff7ff : 0x9be37a, 2, 1.8); }   // спираль воронки
+    if (t > 1.4) burst(px, py, pz, 0xffffff, 2, 6);
+  }
+  if (t > 0.4 && !w.r1) { w.r1 = true; ring(px, py - 0.6, pz, 0x9be37a, 5, 1.0); }
+  if (t > 2.4 && !w.r2) { w.r2 = true; ring(px, py - 0.6, pz, 0xbff7ff, 8, 1.1); }
+  if (t > 0.4 && t < 5.6) S.camShake = Math.max(S.camShake || 0, 0.03 + 0.28 * k * k);
+  // камера: сбоку, затем следует за динозавром к порталу
+  const cax = (w.start.x + px) / 2, caz = (w.start.z + pz) / 2, base = Math.atan2(dx, dz) + Math.PI / 2;
+  const camT = new THREE.Vector3(cax + Math.sin(base) * (10 + sc * 4) * (1 - 0.5 * k), Math.max(w.start.y, py) + 2.4 + sc, caz + Math.cos(base) * (10 + sc * 4) * (1 - 0.5 * k));
+  const gy = S.W.heightAt(camT.x, camT.z) + 1; if (camT.y < gy) camT.y = gy;
+  _tmpCam.position.copy(camT);
+  const look = _bcv.set(x * (0.55 + 0.35 * k) + cax * (0.45 - 0.35 * k), (y + py) / 2, z * (0.55 + 0.35 * k) + caz * (0.45 - 0.35 * k)); _tmpCam.lookAt(look); _tmpCam.rotateZ(0.32 * k * Math.sin(an * 0.25 + 0.6));      // камера слегка кренится вместе с воронкой
+  if (S.camShake > 0.01) { const s = S.camShake; _tmpCam.position.x += (Math.random() - 0.5) * s; _tmpCam.position.y += (Math.random() - 0.5) * s; S.camShake *= Math.pow(0.1, dt); }
+  camera.position.copy(_tmpCam.position); camera.quaternion.copy(_tmpCam.quaternion); camera.fov = 50 + 30 * sm(3.2, 5.6, t); camera.updateProjectionMatrix();
+  w.pose = { pos: _tmpCam.position.clone(), q: _tmpCam.quaternion.clone() };
+  if (t > 5.0 && !w.flash) { w.flash = true; warpFlash(true, 700); Audio.sfx('boom'); }
+  if (t > 5.8 && !w.sent) { w.sent = true; a.group.visible = false; if (S.conn) S.conn.send({ t: 'story', k: 'cine' }); S.conn && S.conn.send({ t: 'warp' }); }
+  if (t >= w.dur || w.end) endWarp();
+  return true;
+}
+function skipCine() { if (S && S.bc && clock - S.bc.t0 > 1.2) S.bc.end = true; if (S && S.warp && clock - S.warp.t0 > 1.0 && clock - S.warp.t0 < 5.8) S.warp.t0 = clock - 5.7; }
+window.addEventListener('pointerdown', skipCine); window.addEventListener('keydown', e => { if (e.code === 'Space' || e.code === 'Escape' || e.code === 'Enter') skipCine(); });
+
 // ---------------------------------------------------------------- камера
 let camDist = 8, camShakeT = 0;
+let guardEl = null;
+function guardHint(on) {
+  if (!guardEl) { guardEl = document.createElement('div'); guardEl.style.cssText = 'position:fixed;left:50%;top:14%;transform:translateX(-50%);padding:8px 18px;border-radius:14px;background:rgba(20,60,110,.78);border:2px solid #6ad0ff;color:#e8f6ff;font:600 17px system-ui,sans-serif;z-index:30;pointer-events:none;box-shadow:0 0 18px rgba(106,208,255,.55);display:none;text-align:center'; document.body.appendChild(guardEl); }
+  if (on) guardEl.textContent = T('guard_on');
+  guardEl.style.display = on ? 'block' : 'none';
+}
 function placeCamera(dt, px, py, pz, now) {
   const sc = Sim.scaleOf(S.profile.level), me = S.me;
-  let dist = (4.2 + sc * 3.4) * input.zoom * (me.fly ? 1.25 : 1) * (S.bs && S.bs.st === 'fight' ? 1.4 : 1);
-  const tx = px, ty = py + 1.3 * sc, tz = pz, cp = Math.cos(input.pitch), dx = Math.sin(input.yaw) * cp, dy = Math.sin(input.pitch), dz = Math.cos(input.yaw) * cp;
+  let dist = (4.2 + sc * 3.4) * input.zoom * (me.fly ? 1.25 : me.clm ? 1.35 : 1) * (S.bs && S.bs.st === 'fight' ? 1.4 : 1);
+  const tx = px, ty = py + (me.clm ? 2.2 : 1.3) * sc, tz = pz, cp = Math.cos(input.pitch), dx = Math.sin(input.yaw) * cp, dy = Math.sin(input.pitch), dz = Math.cos(input.yaw) * cp;
   let d = dist;
   for (let k = 1; k <= 10; k++) {
     const t = k / 10 * dist, x = tx + dx * t, y = ty + dy * t, z = tz + dz * t;
     let hit = S.W.heightAt(x, z) + 0.45 > y;
-    if (!hit) { const near = Sim.obstaclesNear(S.W, x, z, 2.5); for (let i = 0; i < near.length; i++) { const o = near[i]; if (o.kind !== 'tree' && o.kind !== 'rock' && o.kind !== 'stone') continue; if (Math.hypot(o.x - x, o.z - z) < o.r + 0.25 && y < o.y + (o.h || 3)) { hit = true; break; } } }
+    if (!hit) { const near = Sim.obstaclesNear(S.W, x, z, 2.5); for (let i = 0; i < near.length; i++) { const o = near[i]; if ((o.kind !== 'tree' || me.clm) && o.kind !== 'rock' && o.kind !== 'stone') continue; if (Math.hypot(o.x - x, o.z - z) < o.r + 0.25 && y < o.y + (o.h || 3)) { hit = true; break; } } }
     if (hit) { d = Math.max(1.4, (k - 1) / 10 * dist); break; }
   }
   camDist += (d - camDist) * Math.min(1, dt * (d < camDist ? 25 : 3));
@@ -1177,7 +1352,7 @@ function placeCamera(dt, px, py, pz, now) {
 // ---------------------------------------------------------------- фиксированный шаг (25 Гц): ввод → предсказание → сервер
 function fixedStep() {
   if (!S.alive) return;
-  const du = S.du, frozen = (du && du.st !== 'fight') || (S.hatch && !S.hatch.done) || !!S.coro;
+  const du = S.du, frozen = (du && du.st !== 'fight') || (S.hatch && !S.hatch.done) || !!S.coro || !!S.bc || !!S.warp;
   const raw = readInput(), c = frozen ? { f: 0, s: 0, yaw: raw.yaw, pitch: raw.pitch, jump: false, down: false, sprint: false } : raw;
   S.seq++; c.q = S.seq;
   S.prev = { x: S.me.x, y: S.me.y, z: S.me.z };
@@ -1201,7 +1376,7 @@ function surfFix(x, y, z) {
 // на поверхности воды динозавр качается на волнах и никогда не торчит над водой
 function waveY(x, y, z, water, sc, aq) {
   if (!water || !S.world.waveAt) return y;
-  const W = S.W, wv = S.world.waveAt(x, z), off = aq ? 1.15 * sc - 0.15 : 0.55 + 0.25 * sc, k = clamp(1 - (W.waterY - y - off) / 1.6, 0, 1);   // у поверхности — качается на волнах, глубже — волны затухают
+  const W = S.W, wv = S.world.waveAt(x, z), off = aq ? 1.15 * sc - 0.15 : 0.12 + 0.08 * sc, k = clamp(1 - (W.waterY - y - off) / 1.6, 0, 1);   // у поверхности — качается на волнах, глубже — волны затухают
   return Math.min(y + wv * k, W.waterY + wv - off);
 }
 function updateActors(dt, t, now) {
@@ -1210,14 +1385,22 @@ function updateActors(dt, t, now) {
   const k = clamp(S.acc / DT, 0, 1), pv = S.prev || me;
   S.off.x *= Math.pow(0.0001, dt); S.off.y *= Math.pow(0.0001, dt); S.off.z *= Math.pow(0.0001, dt);
   const x = pv.x + (me.x - pv.x) * k + S.off.x, y = pv.y + (me.y - pv.y) * k + S.off.y, z = pv.z + (me.z - pv.z) * k + S.off.z;
-  if (S.lastPos) { const v = Math.hypot(x - S.lastPos.x, z - S.lastPos.z) / Math.max(dt, 1e-3); S.speed += (clamp(v / 6, 0, 1.6) - S.speed) * Math.min(1, dt * 12); }
+  if (S.lastPos) { const v = Math.hypot(x - S.lastPos.x, z - S.lastPos.z) / Math.max(dt, 1e-3); { const tv = clamp(v / 6, 0, 1.6); S.speed += (tv - S.speed) * Math.min(1, dt * (tv < S.speed ? 30 : 12)); if (tv < 0.01 && S.speed < 0.03) S.speed = 0; } }
   S.lastPos = { x, z };
   const water = W.isWater(me.x, me.z) && me.y < W.waterY + 0.35 && !me.fly && !me.clm;
+  if (!S.warp) a.group.rotation.set(0, 0, 0);      // после портала не оставаться под наклоном
   a.update(x, waveY(x, y, z, water, Sim.scaleOf(S.profile.level), CONFIG.isAqua(S.profile.cls)), z, me.face, S.speed, t, dt, { fly: !!me.fly, swim: water, climb: !!me.clm, guard: !!me.grd, run: !!S.running && S.speed > 0.3, vy: me.vy });
+  { const sc0 = Sim.scaleOf(S.profile.level), aq0 = CONFIG.isAqua(S.profile.cls);
+    if (S.alive && !S.hatch) {
+      footSound(S, x, z, sc0 * 1.1, !me.fly && !me.clm && Math.abs(me.vy || 0) < 2, water && !aq0 ? true : false);
+      if (water && !S.wasWater) Audio.sfx(sc0 > 1 ? 'splash_big' : 'splash', null);
+      if (aq0 && water && S.speed > 0.3 && Math.random() < dt * 1.2) Audio.sfx('bubble', null);
+    }
+    S.wasWater = water; }
   const dead = !S.alive; a.dino.rotation.z = dead ? 1.45 : 0; a.dino.position.y = (dead ? 0.35 : 0) + (S.world.nestLift ? S.world.nestLift(x, z) : 0) + surfFix(x, y, z);
   a.group.visible = true; a.dino.visible = true; a.tag.visible = true; { const k = clamp(camDist / 8, 0.5, 1.5); a.tag.scale.set(3.6 * k, 0.9 * k, 1); }
   if (S.hatch) hatchPose(a); else if (a.dino.userData.hatchFix) { a.dino.userData.hatchFix = false; }
-  shieldFx(a, false); ownShieldRing(a, (S.mp && S.mp.sh > 0) || !!me.grd, t);   // свой щит — кольцо на земле: сфера вокруг камеры превращалась в «табличку»
+  guardHint(!!me.grd && S.alive); shieldFx(a, false); ownShieldRing(a, !!(S.mp && S.mp.sh > 0) || !!me.grd, t);   // свой щит — кольцо на земле: сфера вокруг камеры превращалась в «табличку»
   S.px = x; S.py = y; S.pz = z;
   trN = 0; trAdd(x, z, (S.me.fly || S.W.isWater(x, z) ? 0 : 0.8 + 1.5 * Sim.scaleOf(S.profile.level)), 1);
   // след за своим динозавром: трава поднимается не сразу, а за пару секунд
@@ -1233,6 +1416,7 @@ function updateActors(dt, t, now) {
     p.actor.group.visible = !hidden;
     const water2 = !an.fly && W.isWater(_s.x, _s.z) && _s.y < W.waterY + 0.35;
     p.actor.update(_s.x, waveY(_s.x, _s.y, _s.z, an.swim || water2, Sim.scaleOf(p.actor.level), CONFIG.isAqua(p.actor.cls)), _s.z, _s.f, clamp(p.speed / 6, 0, 1.6), t, dt, { fly: an.fly, swim: an.swim || water2, climb: an.climb, guard: an.guard });
+    if (!(fl & F.DEAD) && dd < 55) footSound(p, _s.x, _s.z, Sim.scaleOf(p.info.level || 1) * 1.1, !an.fly && !an.climb, water2 && !CONFIG.isAqua(p.actor.cls));
     if ((fl & F.ATK) && !(p.prevFlags & F.ATK)) p.actor.dino.userData.bite = 1;
     p.prevFlags = fl;
     const d = !!(fl & F.DEAD); p.actor.dino.rotation.z = d ? 1.45 : 0; p.actor.dino.position.y = (d ? 0.35 : 0) + (an.fly ? 0 : surfFix(_s.x, _s.y, _s.z));
@@ -1283,6 +1467,7 @@ function updateEnts(dt, t, now) {
     if (e.boss) trAdd(_s.x, _s.z, 1 + (e.def.size || 3) * 1.2, 0); else if (e.arch && !e.arch.fly && !e.arch.water && !e.arch.tiny) trAdd(_s.x, _s.z, 0.6 + e.arch.size * 1.6, 0);
     if (e.lastPos) { const v = Math.hypot(_s.x - e.lastPos.x, _s.z - e.lastPos.z) / Math.max(dt, 1e-3); e.speed += (clamp(v / (e.boss ? 4.5 : 6), 0, 1.6) - e.speed) * Math.min(1, dt * 8); }
     e.lastPos = { x: _s.x, z: _s.z };
+    if (dd < 60 && !(e.flags & 16)) { if (e.boss) { if (!(e.flags & 64)) footSound(e, _s.x, _s.z, 1.3 + (e.def.size || 3) * 0.5, !(e.def.fly), false, 22); } else if (e.arch && !e.arch.fly && !e.arch.water && !e.arch.tiny) footSound(e, _s.x, _s.z, e.arch.size * 0.8, true, false); }
     if (e.boss) animateBoss(e.model, t + e.animT, e.speed, dt, { burrow: !!(e.flags & 64), roar: false });
     else animateEnemy(e.model, t + e.animT, e.speed, dt, e.flags & 1, e.arch && e.arch.fly, ((e.arch && e.arch.speed) || 180) / 180);
     if (e.boss && (e.flags & 64)) e.model.position.y = -2.6 * e.def.size / 3; else if (e.boss) e.model.position.y = 0;
@@ -1297,6 +1482,7 @@ function updateEnts(dt, t, now) {
     if (e.olOn && now > e.olUntil) { e.olOn = false; e.olY = false; setOutline(e.model, false); }
     if (!e.olOn) { const yel = e === nearE; if (yel && !e.olY) { e.olY = true; setOutline(e.model, true, 0xffd23a); } else if (!yel && e.olY) { e.olY = false; setOutline(e.model, false); } }
     e.bar.visible = !e.boss && dd < (S.W.ocean ? 70 : 48) && (e.hp < e.mhp || aggro); if (e.bar.visible) { e.bar.setFill(e.mhp > 0 ? e.hp / e.mhp : 1); e.bar.quaternion.copy(camera.quaternion); const bk = clamp(dd / 14, 0.8, 2.6); e.bar.scale.set(bk, bk, 1); }
+    { const tk = e.tag.scale.y / 0.9; e.tag.position.y = e.bar.visible ? Math.max(e.tagY + 0.5, e.bar.position.y + 0.2 * e.bar.scale.y + 0.45 * tk + 0.08) : e.tagY + 0.5; }   // здоровье не залезает на название: подпись поднимается над полоской
     // чутьё: метки добычи и врагов сквозь рельеф
     if (S.sense && !e.boss && dd < S.sense && dd > 9) {
       if (!e.mark) { e.mark = new THREE.Sprite(new THREE.SpriteMaterial({ map: markTex, depthTest: false, transparent: true, opacity: 0.9 })); e.mark.scale.set(0.9, 0.9, 1); e.mark.renderOrder = 15; g.add(e.mark); }
@@ -1317,7 +1503,7 @@ function friendMark(g, x, y, r, info, bot, rot) {
 }
 const miniCv = $('mini-cv'), miniCtx = miniCv.getContext('2d');
 function drawMinimap() {
-  const g = miniCtx, N = miniCv.width, c = N / 2, R = 130, k = c / R, w = S.world, me = S.me;
+  const g = miniCtx, N = miniCv.width, c = N / 2, R = 160, k = c / R, w = S.world, me = S.me;
   g.clearRect(0, 0, N, N); g.save(); g.beginPath(); g.arc(c, c, c, 0, TWO_PI); g.clip(); g.fillStyle = '#0a1410'; g.fillRect(0, 0, N, N);
   g.translate(c, c); g.rotate(input.yaw);
   const size = w.mapSize; g.drawImage(w.minimap, -(S.px + size / 2) * k, -(S.pz + size / 2) * k, size * k, size * k);
@@ -1382,7 +1568,7 @@ function drawBigMap() {
   }
   const sr = Math.max(60, S.sense || 0);
   for (const e of S.ents.values()) {
-    if (e.boss) continue; const p = e.group.position, d = Math.hypot(p.x - S.px, p.z - S.pz); if (d > sr || !e.arch) continue;
+    if (e.boss || !e.arch) continue; const p = e.group.position;   // все враги, которые знает клиент (сервер шлёт в радиусе AOI)
     dot(p.x, p.z, (e.flags & 16) ? '#9be37a' : e.arch.role === 'hostile' ? '#ff5a4a' : e.arch.role === 'herd' ? '#ffd35a' : '#8cff7a', 3.2);
   }
   for (const p of S.players.values()) { const q = p.actor.group.position; friendMark(g, P(q.x), P(q.z), 11, p.info, p.info.bot, 0); }
@@ -1416,6 +1602,13 @@ function updateHud(now, dt) {
   if (S.abBtns) for (const a of S.abBtns) {
     let frac = 0; if (a.slot === 'e') frac = mp.cd[1] / (a.cd || 1); else if (a.slot === 'q') frac = mp.cd[2] / (a.cd || 1); else if (a.slot === 'x') { frac = 1 - mp.ul / 100; const rdy = mp.ul >= 100; a.b.classList.toggle('ult-ready', rdy); a.b.classList.toggle('ult-on', mp.ut > 0); } else if (a.slot === 'atk') frac = mp.cd[0] / (CONFIG.CLASSES[pr.cls].atkCd || 0.5);
     a.el.style.height = clamp(frac, 0, 1) * 100 + '%';
+    { // числовой таймер: секунды до готовности (для ульты — проценты заряда или секунды действия)
+      let rem = 0, txt = '';
+      if (a.slot === 'e') rem = mp.cd[1]; else if (a.slot === 'q') rem = mp.cd[2]; else if (a.slot === 'atk') rem = mp.cd[0];
+      if (a.slot === 'x') txt = mp.ut > 0 ? mp.ut + T('sec_short') : (mp.ul >= 100 ? '' : Math.floor(mp.ul) + '%');
+      else if (rem > 0.05) txt = rem >= 10 ? String(Math.ceil(rem)) : rem.toFixed(1);
+      if (a.ct && a.ct._t !== txt) { a.ct._t = txt; a.ct.textContent = txt; }
+    }
   }
   // босс
   const bb = $('bossbar'), bs = S.bs;
@@ -1474,6 +1667,7 @@ function autoQuality(dt) {
 let last = performance.now(), clock = 0;
 const _errSeen = new Set();
 function safe(fn, a, b, c) { try { fn(a, b, c); } catch (e) { const k = fn.name + ':' + e.message; if (!_errSeen.has(k)) { _errSeen.add(k); console.error(k, e); } } }
+let lastEnv = 0;
 function frame(nowMs) {
   requestAnimationFrame(frame);
   const rawDt = (nowMs - last) / 1000, dt = Math.min(0.05, rawDt); last = nowMs; clock += dt;
@@ -1488,7 +1682,8 @@ function frame(nowMs) {
   safe(updateFx, dt);
   if (S.hatch) updateHatch(dt);
   updateRevive(dt); secretsFx(dt); updateNestDeco();
-  const cc = S.coro ? updateCoro(dt) : false;
+  if (S.decor) { S.decor.sync(S, S.world, S.profile); S.decor.update(clock); }
+  const cc = S.coro ? updateCoro(dt) : S.bc ? updateBcine(dt) : S.warp ? updateWarp(dt) : false;
   const hc = cc ? true : S.hatch ? hatchCamera(dt) : false;
   if (hc !== true) {
     { const sp = !S.alive ? spectateTarget() : null; if (sp) placeCamera(dt, sp.x, sp.y, sp.z, now); else placeCamera(dt, S.px, S.py, S.pz, now); }
@@ -1496,10 +1691,13 @@ function frame(nowMs) {
   }
   if (S.coroBlend && S.coroBlend.pos) { const cb = S.coroBlend; cb.t += dt; const e = Math.min(1, cb.t / 0.8), k = e * e * (3 - 2 * e); _cp.copy(camera.position); _cq.copy(camera.quaternion); camera.position.lerpVectors(cb.pos, _cp, k); camera.quaternion.slerpQuaternions(cb.q, _cq, k); if (e >= 1) S.coroBlend = null; }
   flushTramplers();
+  { const f = _lf.set(0, 0, -1).applyQuaternion(camera.quaternion), l = Math.hypot(f.x, f.z) || 1; Audio.listener(S.px, S.pz, -f.z / l, f.x / l); }
   S.world.update(camera.position, { x: S.px, y: S.py, z: S.pz }, clock, dt, S.tod, S.wx);
   if (S.foodMeshes) for (const f of S.foodMeshes) { f.rotation.y += dt * 1.2; const fx = f.userData.fx; if (fx) { const q = Math.sin(clock * 3 + f.position.x), r = 1 + 0.18 * q; if (!fx.rg) { fx.glow.material.opacity = 0.3 + 0.15 * q; continue; } fx.rg.scale.set(r, r, 1); fx.glow.material.opacity = 0.45 + 0.2 * q; fx.spark.position.y = 1.5 + 0.2 * Math.sin(clock * 2.2 + f.position.z); fx.spark.material.opacity = 0.6 + 0.3 * q; } }
+  if (now - lastEnv > 0.3) { lastEnv = now; const W = S.W, cy = camera.position.y;
+    Audio.setEnv({ under: !!(W.ocean ? cy < W.waterY - 0.15 : (W.isWater(camera.position.x, camera.position.z) && cy < W.waterY - 0.15)), rain: !W.ocean && S.biome !== 'volcano' && S.wx > 0.45 ? Math.min(1, (S.wx - 0.35) * 1.6) : 0, night: S.tod < 0.22 || S.tod > 0.78, wind: S.wx > 0.6 ? 1.6 : 1 }); }
   if (now - lastHud > 0.1) { lastHud = now; tutUpdate(); updateHud(nowMs, dt); drawMinimap(); drawBigMap(); }
-  renderer.render(scene, camera);
+  if (!Story.busy()) renderer.render(scene, camera);   // во время полноэкранного ролика 3D-сцену не рисуем
 }
 
 // ---------------------------------------------------------------- связка с интерфейсом
@@ -1527,7 +1725,7 @@ const ctl = {
   setQuality(q) { qualityPref = q; try { localStorage.setItem('dino_q', q); } catch (e) { /* ignore */ } if (q !== 'auto') qualityName = q; else { qualityName = IS_TOUCH ? 'med' : 'high'; aqDowngraded = false; } applyRenderQuality(); },
   getQuality: () => qualityPref,
   setSens(v) { sens = v; try { localStorage.setItem('dino_sens', String(v)); } catch (e) { /* ignore */ } }, getSens: () => sens,
-  audio: Audio, IS_TOUCH, isTouch: IS_TOUCH,
+  audio: Audio, story: Story, tempMax: boostStart, boostEnd, boostOn: () => !!(S && S.boost), canBoost: () => !!(S && S.conn && S.conn.player && !S.conn.online), IS_TOUCH, isTouch: IS_TOUCH,
   rebuildHud() { if (S && S.welcomed) { buildAbilityBar(); } }
 };
 $('menubtn').addEventListener('click', () => { Audio.init(); UI.openPause(); });
@@ -1538,6 +1736,7 @@ $('menubtn').addEventListener('touchstart', e => { e.stopPropagation(); }, { pas
   scene = menu3d.scene;
   try {
     await Profile.restore();
+    Story.init({ Audio, send: (m) => { if (S && S.conn) S.conn.send(m); }, pause: (on) => { if (S && S.welcomed) { ctl.setPanelOpen(!!on); } }, alive: () => !!(S && S.welcomed && !S.ending), coroActive: () => !!(S && (S.coro || S.bc || S.warp)), banner: (t, ms) => UI.banner(t, ms), getEnding: () => (S && S.profile && S.profile.ending) || '', onEnding: (id) => { if (S) { S.profile.ending = id; if (S.actor) S.actor.set({ end: id }); } } });
     UI.init(ctl);
     UI.applyLang();
     UI.showMenu();
@@ -1546,5 +1745,5 @@ $('menubtn').addEventListener('touchstart', e => { e.stopPropagation(); }, { pas
   $('loading').style.display = 'none';
   requestAnimationFrame(frame);
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => { /* офлайн-кэш необязателен */ });
-  window.__dino = { startCoro, get coro() { return S && S.coro; }, buildEnemy, animateEnemy, get S() { return S; }, get clock() { return clock; }, ctl, THREE, foodMesh, scene, renderer, Profile, input, camera, menu3d, menuSetDino };      // для отладки и автотестов
+  window.__dino = { Story, startCoro, startBcine, startWarp, get coro() { return S && S.coro; }, buildEnemy, animateEnemy, get S() { return S; }, get clock() { return clock; }, ctl, THREE, foodMesh, scene, renderer, Profile, input, camera, menu3d, menuSetDino };      // для отладки и автотестов
 })();
