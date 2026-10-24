@@ -794,7 +794,7 @@
   function enemyScale(lv) { return { hp: 1 + 0.12 * (lv - 1), dmg: 1 + 0.08 * (lv - 1) }; }   // 1.5: враги заметно крепче с уровнем
   // награда опыта за победу над врагом уровня lv игроком уровня plv
   function xpReward(arch, lv, plv) {
-    var base = (8 + lv * 7) * (arch.xp || 1) * (CF.XP_KILL_MULT || 1);
+    var base = CF.xpForLevel(Math.max(1, lv)) / (7 + 0.6 * lv) * (arch.xp || 1);      // ~7+0.6·ур. однотипных побед на уровень: 1→10 ≈ 45 мин, 1→20 ≈ 2 ч, 1→30 ≈ 4 ч
     var diff = plv - lv;
     var k = diff <= 2 ? 1 : Math.max(0.15, 1 - (diff - 2) * 0.12);
     return Math.max(1, Math.round(base * k));

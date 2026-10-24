@@ -484,7 +484,7 @@
   RP.consume = function (p, kind) {
     var v = FOOD_VAL[kind] || FOOD_VAL.plant;
     p.food = Math.min(CF.FOOD_MAX, p.food + v[0]); p.hp = Math.min(p.stats.hp, p.hp + v[2] * (1 + p.profile.level * 0.15));
-    if (!p.bot) { p.profile.stats.eaten = (p.profile.stats.eaten | 0) + 1; this.questProgress(p, 'eat', 1); this.rareFind(p); this.gainXp(p, kind === 'plant' ? Math.round(5 + p.profile.level * 1.2 + CF.xpForLevel(p.profile.level) * 0.09) : v[1] + Math.floor(p.profile.level * 0.3)); }   // растения: опыт растёт с уровнем (~30 кустов на уровень)
+    if (!p.bot) { p.profile.stats.eaten = (p.profile.stats.eaten | 0) + 1; this.questProgress(p, 'eat', 1); this.rareFind(p); this.gainXp(p, kind === 'plant' ? Math.max(3, Math.round(CF.xpForLevel(p.profile.level) / (20 + p.profile.level))) : v[1] + Math.floor(p.profile.level * 0.3)); }   // растения: опыт растёт с уровнем (~30 кустов на уровень)
     this.events.push(['eat', p.id, kind]);
   };
   RP.initPlants = function () {
