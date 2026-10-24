@@ -25,7 +25,6 @@ export function connectLocal(o, h) {
   hub = new Core.Hub({ onSave(p) { if (p && p.profile && !p.bot) h.onSave && h.onSave(p.profile); } });
   const conn = {
     online: false,
-    player() { return fake.player; },
     send(obj) { if (fake.player && !closed) hub.onMessage(fake.player, obj); },
     close() {
       if (closed) return; closed = true; clearInterval(timer);

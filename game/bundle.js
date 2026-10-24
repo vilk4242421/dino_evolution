@@ -6527,7 +6527,6 @@ function connectLocal(o, h) {
   hub = new Core.Hub({ onSave(p) { if (p && p.profile && !p.bot) h.onSave && h.onSave(p.profile); } });
   const conn = {
     online: false,
-    player() { return fake.player; },
     send(obj) { if (fake.player && !closed) hub.onMessage(fake.player, obj); },
     close() {
       if (closed) return; closed = true; clearInterval(timer);
@@ -7110,14 +7109,12 @@ function openPause() {
     <div class="grid2"><button id="ps-about">🦖 ${T('about_dino')}</button><button id="ps-chg" ${S.room.mode === 'duel' || S.room.mode === 'rush' ? 'disabled' : ''}>🔄 ${T('change_dino')}</button></div>
     <div class="grid2"><button id="ps-evo">${T('evolution')}</button>${S.o && !S.o.online ? '' : `<button id="ps-pl">${T('players')}</button>`}<button id="ps-ach">${T('achievements')}</button><button id="ps-set">${T('settings')}</button><button id="ps-nest">🪺 ${T('nest')}</button><button id="ps-shop">🏪 ${T('shop')}</button>${S.o && !S.o.online ? `<button id="ps-story">${ctl.story.tr('storyBtn')}</button>` : ''}</div>
     <div class="grid2"><button id="ps-q">📅 ${T('quests')}</button><button id="ps-wd">🚪 ${T('wardrobe')}</button>${S.o && !S.o.online ? '' : `<button id="ps-story">${ctl.story.tr('storyBtn')}</button>`}</div>
-    ${ctl.canBoost && ctl.canBoost() ? `<button id="ps-max">${ctl.boostOn() ? '↩ Вернуть мой настоящий уровень' : '⚡ Максимальный уровень (временно)'}</button>` : ''}
     ${S.room.mode === 'rush' || S.room.mode === 'duel' ? '' : `<button id="ps-loc">🗺 ${T('locations_btn')}</button>`}
     <button class="red" id="ps-exit">${T('to_menu')}</button>`, root => {
     $('ps-resume').onclick = panelClose; $('ps-about').onclick = openAbout; $('ps-chg').onclick = openChange; $('ps-evo').onclick = () => openEvo(); if ($('ps-pl')) $('ps-pl').onclick = openPlayers; $('ps-ach').onclick = openAch; $('ps-nest').onclick = openNest; $('ps-wd').onclick = () => openWardrobe(); $('ps-shop').onclick = () => openShop(); $('ps-set').onclick = openSettings; $('ps-q').onclick = openQuests;
     $('ps-exit').onclick = () => { closePanelState(); $('panel').classList.remove('on'); ctl.leave(); };
     $('ps-story').onclick = openStory;
     if ($('ps-loc')) $('ps-loc').onclick = openLocations;
-    if ($('ps-max')) $('ps-max').onclick = () => { if (ctl.boostOn()) ctl.boostEnd(); else ctl.tempMax(); panelClose(); };
   });
 }
 function openLocations() {
@@ -7434,37 +7431,6 @@ function readInput() {
 // ---------------------------------------------------------------- состояние сессии
 let S = null;
 
-// ---- временный максимальный уровень (только одиночная игра): сохранение всегда пишет настоящий уровень
-function boostFix(p) {
-  const b = S && S.boost; if (!b || !p) return p;
-  const c = JSON.parse(JSON.stringify(p)); c.level = b.lv; c.totalXp = b.tx; c.xp = b.xp;
-  if (c.slots && c.cls && c.slots[c.cls]) { c.slots[c.cls].level = b.lv; c.slots[c.cls].totalXp = b.tx; c.slots[c.cls].xp = b.xp; }
-  return c;
-}
-function boostApply(lv, tx, xp) {
-  const pl = S.conn.player && S.conn.player(); if (!pl) return;
-  const pr = pl.profile; pr.level = lv; pr.totalXp = tx; pr.xp = xp;
-  if (pr.slots && pl.cls && pr.slots[pl.cls]) { pr.slots[pl.cls].level = lv; pr.slots[pl.cls].totalXp = tx; pr.slots[pl.cls].xp = xp; }
-  if (S.profile) { S.profile.level = lv; S.profile.totalXp = tx; S.profile.xp = xp; S.stats = Sim.statsFor(S.profile.cls, lv, S.profile.evo); }
-  pl.room.refreshStats(pl); pl.hp = pl.stats.hp;
-  pl.room.broadcast({ t: 'upd', p: { id: pl.id, level: lv } });
-  if (S.actor && S.actor.set) S.actor.set({ level: lv });
-}
-function boostEnd() {
-  const b = S && S.boost; if (!b) return; S.boost = null;
-  try { localStorage.removeItem('dino_maxlv'); } catch (e) { /* ignore */ }
-  try { boostApply(b.lv, b.tx, b.xp); } catch (e) { console.error(e); }
-  UI.banner('↩ Твой настоящий уровень возвращён: ' + b.lv, 3500);
-}
-function boostStart(quiet) {
-  if (!S || !S.conn || !S.conn.player || S.conn.online || S.boost) return false;
-  const pl = S.conn.player(); if (!pl) return false; const pr = pl.profile;
-  S.boost = { lv: pr.level, tx: pr.totalXp, xp: pr.xp };
-  try { localStorage.setItem('dino_maxlv', '1'); } catch (e) { /* ignore */ }
-  boostApply(CONFIG.MAX_LEVEL, CONFIG.cumXp(CONFIG.MAX_LEVEL), 0);
-  if (!quiet) UI.banner('⚡ Максимальный уровень ' + CONFIG.MAX_LEVEL + ' включён', 3500);
-  return true;
-}
 const prefersRu = () => window.I18N.lang === 'ru';
 function newSession(o) {
   return {
@@ -7488,7 +7454,7 @@ function startSession(o) {
   const h = {
     onmsg: m => { if (S === mine) handleMsg(m); },
     onclose: reason => { if (S !== mine || mine.ending) return; failSession(reason); },
-    onSave: p => { Profile.saveLocal(boostFix(p)); }
+    onSave: p => { Profile.saveLocal(p); }
   };
   if (o.online) S.conn = connectOnline({ token: Profile.state.token, biome: o.biome, cls: o.cls, mode: o.mode, code: o.code }, h);
   else S.conn = connectLocal({ profile: JSON.parse(JSON.stringify(prof)), biome: o.biome, cls: o.cls, mode: o.mode }, h);
@@ -7602,7 +7568,7 @@ function onWelcome(m) {
   else { if (S.o.hatch) { ctl.pendingHatch = null; } fade(false, 900); if (inDuel) { Audio.setScene('duel'); } else if (first) UI.banner(TN(CONFIG.BIOME[m.room.biome].n), 2600); }
   Audio.sfx('portal');
   if (first) setTimeout(() => { if (S && S.welcomed && !S.ending) sw.after(); }, 3000);
-  try { if (localStorage.getItem('dino_maxlv') === '1') setTimeout(() => { if (S && S.welcomed && !S.boost) boostStart(true); }, 400); } catch (e) { /* ignore */ }
+  try { localStorage.removeItem('dino_maxlv'); } catch (e) { /* ignore */ }      // остаток старого режима
   if (S.o.online) S.pingT = setInterval(() => { if (S && S.conn) S.conn.send({ t: 'ping', n: performance.now() }); }, 4000);
   $('respawn').classList.remove('on');
 }
@@ -7611,9 +7577,8 @@ function showLogin(l) {   // награда за вход в новый день
   UI.banner('🔥 ' + T('streak_n', { n: l.streak }) + ' · +' + l.coins + ' 🪙' + (l.cos ? ' · 🎁 ' + TN(CONFIG.COSMETICS[l.cos].n) : ''), 4600); Audio.sfx('coin');
 }
 function onProfile(p, silent) {
-  if (S.boost) { S.boost.lv = p.level; S.boost.tx = p.totalXp; S.boost.xp = p.xp; p = Object.assign({}, p, { level: CONFIG.MAX_LEVEL, totalXp: CONFIG.cumXp(CONFIG.MAX_LEVEL), xp: 0 }); }
   const old = S.profile; S.profile = Sim.fixProfile(p);
-  if (S.o.online) Profile.setServerProfile(p); else Profile.saveLocal(boostFix(S.profile));
+  if (S.o.online) Profile.setServerProfile(p); else Profile.saveLocal(S.profile);
   S.stats = Sim.statsFor(S.profile.cls, S.profile.level, S.profile.evo);
   S.sense = S.stats.sense || 0;
   if (old && S.actor && old.cls === S.profile.cls && CONFIG.stageIndex(S.profile.level) > CONFIG.stageIndex(old.level) && !silent) {
@@ -8954,7 +8919,7 @@ const ctl = {
   setQuality(q) { qualityPref = q; try { localStorage.setItem('dino_q', q); } catch (e) { /* ignore */ } if (q !== 'auto') qualityName = q; else { qualityName = IS_TOUCH ? 'med' : 'high'; aqDowngraded = false; } applyRenderQuality(); },
   getQuality: () => qualityPref,
   setSens(v) { sens = v; try { localStorage.setItem('dino_sens', String(v)); } catch (e) { /* ignore */ } }, getSens: () => sens,
-  audio: Audio, story: Story, tempMax: boostStart, boostEnd, boostOn: () => !!(S && S.boost), canBoost: () => !!(S && S.conn && S.conn.player && !S.conn.online), IS_TOUCH, isTouch: IS_TOUCH,
+  audio: Audio, story: Story, IS_TOUCH, isTouch: IS_TOUCH,
   rebuildHud() { if (S && S.welcomed) { buildAbilityBar(); } }
 };
 $('menubtn').addEventListener('click', () => { Audio.init(); UI.openPause(); });

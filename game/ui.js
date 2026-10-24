@@ -556,14 +556,12 @@ function openPause() {
     <div class="grid2"><button id="ps-about">🦖 ${T('about_dino')}</button><button id="ps-chg" ${S.room.mode === 'duel' || S.room.mode === 'rush' ? 'disabled' : ''}>🔄 ${T('change_dino')}</button></div>
     <div class="grid2"><button id="ps-evo">${T('evolution')}</button>${S.o && !S.o.online ? '' : `<button id="ps-pl">${T('players')}</button>`}<button id="ps-ach">${T('achievements')}</button><button id="ps-set">${T('settings')}</button><button id="ps-nest">🪺 ${T('nest')}</button><button id="ps-shop">🏪 ${T('shop')}</button>${S.o && !S.o.online ? `<button id="ps-story">${ctl.story.tr('storyBtn')}</button>` : ''}</div>
     <div class="grid2"><button id="ps-q">📅 ${T('quests')}</button><button id="ps-wd">🚪 ${T('wardrobe')}</button>${S.o && !S.o.online ? '' : `<button id="ps-story">${ctl.story.tr('storyBtn')}</button>`}</div>
-    ${ctl.canBoost && ctl.canBoost() ? `<button id="ps-max">${ctl.boostOn() ? '↩ Вернуть мой настоящий уровень' : '⚡ Максимальный уровень (временно)'}</button>` : ''}
     ${S.room.mode === 'rush' || S.room.mode === 'duel' ? '' : `<button id="ps-loc">🗺 ${T('locations_btn')}</button>`}
     <button class="red" id="ps-exit">${T('to_menu')}</button>`, root => {
     $('ps-resume').onclick = panelClose; $('ps-about').onclick = openAbout; $('ps-chg').onclick = openChange; $('ps-evo').onclick = () => openEvo(); if ($('ps-pl')) $('ps-pl').onclick = openPlayers; $('ps-ach').onclick = openAch; $('ps-nest').onclick = openNest; $('ps-wd').onclick = () => openWardrobe(); $('ps-shop').onclick = () => openShop(); $('ps-set').onclick = openSettings; $('ps-q').onclick = openQuests;
     $('ps-exit').onclick = () => { closePanelState(); $('panel').classList.remove('on'); ctl.leave(); };
     $('ps-story').onclick = openStory;
     if ($('ps-loc')) $('ps-loc').onclick = openLocations;
-    if ($('ps-max')) $('ps-max').onclick = () => { if (ctl.boostOn()) ctl.boostEnd(); else ctl.tempMax(); panelClose(); };
   });
 }
 function openLocations() {
