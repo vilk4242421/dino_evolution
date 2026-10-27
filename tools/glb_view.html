@@ -1,0 +1,48 @@
+<!doctype html><meta charset="utf-8"><title>glb view</title><body style="margin:0;background:#334"><canvas id=c width=1400 height=840></canvas>
+<!-- Проверка tools/trike_glb.py: мини-загрузчик GLB (сетка, скелет, анимации) на three.js. Не часть игры. -->
+<script type="importmap">{"imports":{"three":"../game/vendor/three.module.js"}}</script>
+<script type="module">
+import * as THREE from 'three';
+const q = new URLSearchParams(location.search);
+const buf = await (await fetch(q.get('f'))).arrayBuffer(), dv = new DataView(buf);
+const jl = dv.getUint32(12, true), gl = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 20, jl))), bo = 20 + jl + 8;
+const CT = { 5126: Float32Array, 5123: Uint16Array, 5125: Uint32Array, 5121: Uint8Array }, NC = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4, MAT4: 16 };
+const acc = (i) => { const a = gl.accessors[i], v = gl.bufferViews[a.bufferView], T = CT[a.componentType]; return new T(buf.slice(bo + v.byteOffset + (a.byteOffset || 0), bo + v.byteOffset + (a.byteOffset || 0) + a.count * NC[a.type] * T.BYTES_PER_ELEMENT)); };
+const tex = async (i) => { const im = gl.images[gl.textures[i].source], v = gl.bufferViews[im.bufferView]; const bl = new Blob([new Uint8Array(buf, bo + v.byteOffset, v.byteLength)], { type: im.mimeType }); const bmp = await createImageBitmap(bl, { imageOrientation: 'none' }); const t = new THREE.Texture(bmp); t.flipY = false; t.needsUpdate = true; return t; };
+const objs = gl.nodes.map((n) => { const o = gl.skins[0].joints.includes(gl.nodes.indexOf(n)) ? new THREE.Bone() : new THREE.Group(); o.name = n.name; if (n.translation) o.position.fromArray(n.translation); if (n.rotation) o.quaternion.fromArray(n.rotation); if (n.scale) o.scale.fromArray(n.scale); return o; });
+gl.nodes.forEach((n, i) => (n.children || []).forEach((c) => objs[i].add(objs[c])));
+const skin = gl.skins[0], bones = skin.joints.map((j) => objs[j]), ibm = acc(skin.inverseBindMatrices);
+const inv = bones.map((b, k) => new THREE.Matrix4().fromArray(ibm, k * 16));
+const T0 = await tex(0), T1 = await tex(1), T2 = await tex(2); T0.colorSpace = THREE.SRGBColorSpace;
+const meshNode = gl.nodes.findIndex((n) => n.mesh !== undefined);
+for (const p of gl.meshes[0].primitives) {
+  const g = new THREE.BufferGeometry(), at = p.attributes;
+  g.setAttribute('position', new THREE.BufferAttribute(acc(at.POSITION), 3)); g.setAttribute('normal', new THREE.BufferAttribute(acc(at.NORMAL), 3));
+  if (at.TEXCOORD_0 !== undefined) g.setAttribute('uv', new THREE.BufferAttribute(acc(at.TEXCOORD_0), 2));
+  if (at.COLOR_0 !== undefined) g.setAttribute('color', new THREE.BufferAttribute(acc(at.COLOR_0), 3));
+  g.setAttribute('skinIndex', new THREE.BufferAttribute(acc(at.JOINTS_0), 4)); g.setAttribute('skinWeight', new THREE.BufferAttribute(acc(at.WEIGHTS_0), 4));
+  g.setIndex(new THREE.BufferAttribute(acc(p.indices), 1));
+  const m = gl.materials[p.material], pb = m.pbrMetallicRoughness;
+  let mat;
+  if (m.extensions && m.extensions.KHR_materials_unlit) mat = new THREE.MeshBasicMaterial({ vertexColors: true });
+  else mat = new THREE.MeshStandardMaterial({ vertexColors: at.COLOR_0 !== undefined, roughness: pb.roughnessFactor, metalness: pb.metallicFactor, map: pb.baseColorTexture ? T0 : null, normalMap: m.normalTexture ? T1 : null, roughnessMap: pb.metallicRoughnessTexture ? T2 : null, aoMap: m.occlusionTexture ? T2 : null });
+  if (m.normalTexture) mat.normalScale.set(m.normalTexture.scale, m.normalTexture.scale);
+  const sm = new THREE.SkinnedMesh(g, mat); sm.castShadow = true; objs[meshNode].add(sm); sm.bind(new THREE.Skeleton(bones, inv), new THREE.Matrix4());
+  sm.frustumCulled = false;
+}
+const root = objs[0];
+const sc = new THREE.Scene(); sc.background = new THREE.Color(0x7a9ab0); sc.add(root);
+const gr = new THREE.Mesh(new THREE.PlaneGeometry(60, 60), new THREE.MeshStandardMaterial({ color: 0x6b8a4a })); gr.rotation.x = -Math.PI / 2; gr.receiveShadow = true; sc.add(gr);
+sc.add(new THREE.HemisphereLight(0xdfefff, 0x556644, 1.2)); const dl = new THREE.DirectionalLight(0xfff4e0, 2.6); dl.position.set(4, 8, 5); dl.castShadow = true; sc.add(dl);
+const r = new THREE.WebGLRenderer({ canvas: document.getElementById('c'), antialias: true }); r.shadowMap.enabled = true; r.setScissorTest(true);
+// анимация
+const an = gl.animations.find((a) => a.name === q.get('clip'));
+const mixer = new THREE.AnimationMixer(root);
+if (an) { const tracks = an.channels.map((c) => { const s = an.samplers[c.sampler], o = objs[c.target.node], path = c.target.path; const T = path === 'rotation' ? THREE.QuaternionKeyframeTrack : THREE.VectorKeyframeTrack; return new T(o.uuid + '.' + ({ rotation: 'quaternion', translation: 'position', scale: 'scale' })[path], Array.from(acc(s.input)), Array.from(acc(s.output))); });
+  const clip = new THREE.AnimationClip(an.name, -1, tracks); mixer.clipAction(clip).play(); mixer.update(+(q.get('t') || 0)); }
+root.updateMatrixWorld(true);
+const views = JSON.parse(q.get('views') || '[[8,1.2,0,0,0.8,-0.6],[-8,1.2,0,0,0.8,-0.6],[0.01,1.5,8,0,0.8,0],[0.01,1.5,-8,0,0.8,0],[0.01,9,0.01,0,0,-0.6],[5,2.5,5,0,0.7,-0.4]]');
+const W = 466, H = 420; views.forEach((v, i) => { const cam = new THREE.PerspectiveCamera(34, W / H, 0.05, 100); cam.position.set(v[0], v[1], v[2]); if (i == 4) cam.up.set(0, 0, 1); cam.lookAt(v[3], v[4], v[5]); const x = (i % 3) * W, y = i < 3 ? H : 0; r.setViewport(x, y, W, H); r.setScissor(x, y, W, H); r.render(sc, cam); });
+window.__info = JSON.stringify({ anims: gl.animations.map((a) => a.name), prims: gl.meshes[0].primitives.length, joints: skin.joints.length });
+document.title = 'done';
+</script>

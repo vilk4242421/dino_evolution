@@ -1,0 +1,892 @@
+/* Dino Evolution — общие правила и физика (UMD). Подключается и на клиенте, и на сервере (и в офлайн-режиме).
+   Всё здесь детерминировано: один и тот же ввод даёт один и тот же результат, поэтому клиент предсказывает своё движение.
+   Содержит: генерацию 6 биомов по карте высот, коллизии, ходьбу/плавание/полёт/лазание, характеристики из класса и эволюции. */
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory(require('./config.js'));
+  else root.Sim = factory(root.CONFIG);
+})(typeof self !== 'undefined' ? self : this, function (CONFIG) {
+  'use strict';
+  var CF = CONFIG;
+
+  function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
+  function smooth(a, b, x) { var t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); }
+  function lerp(a, b, t) { return a + (b - a) * t; }
+  function wrap(a) { while (a > Math.PI) a -= 6.283185307; while (a < -Math.PI) a += 6.283185307; return a; }
+
+  function mulberry32(a) {
+    return function () {
+      a |= 0; a = a + 0x6D2B79F5 | 0;
+      var t = Math.imul(a ^ a >>> 15, 1 | a);
+      t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
+  }
+  function hash2(ix, iz, seed) {
+    var h = Math.imul(ix | 0, 374761393) ^ Math.imul(iz | 0, 668265263) ^ Math.imul(seed | 0, 1442695041);
+    h = Math.imul(h ^ (h >>> 13), 1274126177);
+    h ^= h >>> 16;
+    return (h >>> 0) / 4294967296;
+  }
+  function vnoise(x, z, seed) {
+    var ix = Math.floor(x), iz = Math.floor(z), fx = x - ix, fz = z - iz;
+    var u = fx * fx * (3 - 2 * fx), v = fz * fz * (3 - 2 * fz);
+    var a = hash2(ix, iz, seed), b = hash2(ix + 1, iz, seed), c = hash2(ix, iz + 1, seed), d = hash2(ix + 1, iz + 1, seed);
+    return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
+  }
+  function fbm(x, z, seed, oct) {
+    var s = 0, a = 0.5, f = 1, n = 0;
+    for (var i = 0; i < oct; i++) { s += a * vnoise(x * f, z * f, seed + i * 17); n += a; a *= 0.5; f *= 2; }
+    return s / n;
+  }
+
+  // ======================================================================== БИОМЫ
+  var HALF = CF.MAP_SIZE / 2, ARENA = CF.ARENA_R;
+  // nest — желаемая точка гнезда; waterY — уровень жидкости (вода/лава)
+  var DEF = {
+    forest:   { waterY: -1.5, arenaY: 2.5, nest: [-190, -150] },
+    snow:     { waterY: -1.5, arenaY: 3.0, nest: [170, 160] },
+    mountain: { waterY: -1.5, arenaY: 4.0, nest: [-180, 170] },
+    desert:   { waterY: -2.0, arenaY: 3.0, nest: [190, -170] },
+    swamp:    { waterY: 0.0,  arenaY: 2.2, nest: [-170, -180] },
+    volcano:  { waterY: -1.5, arenaY: 3.5, nest: [180, 170] },
+    // океан: уровень воды 0, арена босса — подводное плато на глубине 4.5 м, гнездо — на песчаном островке
+    reef:     { waterY: 0, arenaY: -20, nest: [-185, -160], ocean: true },
+    kelp:     { waterY: 0, arenaY: -24, nest: [175, -170], ocean: true },
+    arctic:   { waterY: 0, arenaY: -24, nest: [-175, 175], ocean: true },
+    vents:    { waterY: 0, arenaY: -27, nest: [185, 170], ocean: true },
+    abyss:    { waterY: 0, arenaY: -36, nest: [-180, -175], ocean: true }
+  };
+
+  // ---------- рельеф морского дна ----------
+  // острова, айсберги, курильщики — списком (их же рисует клиент)
+  function oceanFeatures(id, seed) {
+    var r = mulberry32(seed + 313), F = { islands: [], bergs: [], vents: [], spires: [], caves: [], peaks: [] }, i, a, d;
+    var put = function (list, n, rmin, rmax, minD) {
+      for (var k = 0; k < n * 20 && list.length < n; k++) {
+        a = r() * 6.283; d = 70 + r() * (HALF - 110);
+        var x = Math.cos(a) * d, z = Math.sin(a) * d, rr = rmin + r() * (rmax - rmin), ok = true;
+        for (var j = 0; j < list.length; j++) if (Math.hypot(list[j].x - x, list[j].z - z) < list[j].r + rr + (minD || 12)) { ok = false; break; }
+        if (ok) list.push({ x: x, z: z, r: rr, v: r() });
+      }
+    };
+    if (id === 'reef') put(F.islands, 6, 8, 16, 30);
+    if (id === 'arctic') put(F.bergs, 22, 7, 18, 10);
+    if (id === 'vents') put(F.vents, 26, 3.5, 5.5, 14);
+    if (id === 'abyss' || id === 'kelp') put(F.spires, id === 'abyss' ? 30 : 18, 3, 7, 10);
+    // подводные горы трёх размеров (низкие, средние, высокие), стоят отдельно друг от друга — без длинных хребтов
+    for (var kp = 0; kp < 900 && F.peaks.length < 26; kp++) {
+      a = r() * 6.283; d = 80 + r() * (HALF - 120);
+      var px = Math.cos(a) * d, pz = Math.sin(a) * d, pv = (F.peaks.length % 3) / 3 + r() / 3, pr = 9 + r() * 16 + (pv < 0.34 ? 4 : 0), pok = true;
+      for (var jp = 0; jp < F.peaks.length; jp++) if (Math.hypot(F.peaks[jp].x - px, F.peaks[jp].z - pz) < (F.peaks[jp].r + pr) * 1.9 + 14) { pok = false; break; }
+      if (pok) F.peaks.push({ x: px, z: pz, r: pr, v: pv });
+    }                                                    // подводные горы разной высоты: от холмов до вершин почти у поверхности
+    // сквозные пещеры: подводный скальный массив с туннелем по оси (две стены + каменный свод, рисует клиент)
+    var CAVE_F = { reef: -26, kelp: -42, arctic: -46, vents: -58, abyss: -92 }, nc = { reef: 10, kelp: 12, arctic: 12, vents: 12, abyss: 14 }[id] || 10, ndef = DEF[id];
+    for (var kc = 0; kc < 4000 && F.caves.length < nc; kc++) {
+      a = r() * 6.283; d = 90 + r() * (HALF - 190);
+      var cx = Math.cos(a) * d, cz = Math.sin(a) * d, L = 34 + r() * 14, ok2 = Math.hypot(cx - ndef.nest[0], cz - ndef.nest[1]) > 120;
+      for (var jc = 0; ok2 && jc < F.caves.length; jc++) if (Math.hypot(F.caves[jc].x - cx, F.caves[jc].z - cz) < 52) ok2 = false;
+      if (ok2) F.caves.push({ x: cx, z: cz, a: r() * 3.1416, L: L, w: 7 + r() * 3.5, f: CAVE_F[id], H: Math.min(22 + r() * 26, -5 - CAVE_F[id]), rb: 10 + r() * 3 });
+    }
+    return F;
+  }
+  function oceanBase(id, F, seed, x, z, def) {
+    var h, i, o, d;
+    if (id === 'reef') {
+      h = -8 + (fbm(x / 120, z / 120, seed, 4) - 0.5) * 7;
+      var rr = 1 - Math.abs(fbm(x / 38, z / 38, seed + 21, 3) * 2 - 1);                // гряды кораллов почти до поверхности
+      h += smooth(0.72, 0.96, rr) * 3.0;
+      for (i = 0; i < F.islands.length; i++) { o = F.islands[i]; d = Math.sqrt((x - o.x) * (x - o.x) + (z - o.z) * (z - o.z)); if (d < o.r * 2.2) h = Math.max(h, lerp(h, 1.4 + o.v * 0.8, 1 - smooth(o.r * 0.6, o.r * 2.2, d))); }
+    } else if (id === 'kelp') {
+      h = -13 + (fbm(x / 90, z / 90, seed, 4) - 0.5) * 9 + (fbm(x / 24, z / 24, seed + 11, 2) - 0.5) * 2;
+      var kr = 1 - Math.abs(fbm(x / 60, z / 60, seed + 31, 3) * 2 - 1); h += smooth(0.7, 0.95, kr) * 2.6;      // скальные гряды
+    } else if (id === 'arctic') {
+      h = -12 + (fbm(x / 100, z / 100, seed, 4) - 0.5) * 7;
+      for (i = 0; i < F.bergs.length; i++) { o = F.bergs[i]; d = Math.sqrt((x - o.x) * (x - o.x) + (z - o.z) * (z - o.z)); if (d < o.r * 1.25) { var top = 2.2 + o.v * 3 + (fbm(x / 9, z / 9, seed + i, 2) - 0.5) * 1.6; h = Math.max(h, lerp(h, top, 1 - smooth(o.r * 0.85, o.r * 1.25, d))); } }
+    } else if (id === 'vents') {
+      h = -16 + (fbm(x / 110, z / 110, seed, 4) - 0.5) * 9 + (fbm(x / 26, z / 26, seed + 11, 3) - 0.5) * 3;
+      var cv = Math.abs(vnoise(x / 90 + 2.2, z / 90 - 6.6, seed + 5) - 0.5); h -= (1 - smooth(0, 0.09, cv)) * 7;   // разломы
+      for (i = 0; i < F.vents.length; i++) { o = F.vents[i]; d = Math.sqrt((x - o.x) * (x - o.x) + (z - o.z) * (z - o.z)); if (d < o.r * 2) h += (1 - smooth(0, o.r * 2, d)) * (3 + o.v * 2); }
+    } else {
+      h = -24 + (fbm(x / 120, z / 120, seed, 4) - 0.5) * 8;
+      var ca = Math.abs(vnoise(x / 110 + 4.1, z / 110 + 1.3, seed + 5) - 0.5); h -= (1 - smooth(0, 0.1, ca)) * 14;   // жёлоб
+    }
+    if (h < 0) h *= ({ reef: 5.2, kelp: 5.4, arctic: 5.3, vents: 4.6, abyss: 4.6 }[id] || 3.4) * (0.78 + 0.55 * fbm(x / 300, z / 300, seed + 90, 3));       // глубина океана: до ~40–100 м
+    for (i = 0; i < F.spires.length; i++) { o = F.spires[i]; d = Math.sqrt((x - o.x) * (x - o.x) + (z - o.z) * (z - o.z)); if (d < o.r * 1.6) h += (1 - smooth(o.r * 0.4, o.r * 1.6, d)) * (id === 'abyss' ? 24 : 12) * (0.4 + o.v * 1.4); }
+    for (i = 0; F.peaks && i < F.peaks.length; i++) {      // подводные горы: куполом с гладкой, скруглённой вершиной; высоты сильно разные (от холмов до вершин у поверхности), в целом ниже прежних
+      o = F.peaks[i]; d = Math.sqrt((x - o.x) * (x - o.x) + (z - o.z) * (z - o.z)); var PR = o.r * 2.2;
+      if (d < PR) {
+        var ps = 1 - (d / PR) * (d / PR), fl = { reef: -31, kelp: -52, arctic: -56, vents: -72, abyss: -115 }[id] || -40, fr = o.v < 0.34 ? 0.25 + o.v / 0.34 * 0.15 : o.v < 0.67 ? 0.5 + (o.v - 0.34) / 0.33 * 0.18 : 0.8 + (o.v - 0.67) / 0.33 * 0.15, top = Math.min(-4, fl * (1 - fr)), pw = Math.pow(ps, 1.5) * (0.94 + 0.06 * fbm(x / 40, z / 40, seed + 90 + i, 2));
+        if (top > h) h += (top - h) * pw;
+      }
+    }
+    for (i = 0; F.caves && i < F.caves.length; i++) {
+      o = F.caves[i]; var cdx = x - o.x, cdz = z - o.z; if (cdx * cdx + cdz * cdz > 70 * 70) continue;
+      var cu = Math.abs(cdx * Math.cos(o.a) + cdz * Math.sin(o.a)), cv = Math.abs(-cdx * Math.sin(o.a) + cdz * Math.cos(o.a));
+      var cenv = 1 - smooth(o.L / 2 + 0.5, o.L / 2 + 5.5, cu);
+      var cR = o.w + 12, cwall = 0, cdm = 0;      // холм над туннелем — это каменная оболочка в world.js (купол до земли); рельеф вокруг не поднимаем, чтобы не было щели между аркой и склоном
+      var ctop = o.f + o.H * (0.97 + 0.06 * vnoise(x / 9, z / 9, seed + 400 + i)) * cdm;
+      if (cenv > 0 && cwall > 0) h = Math.max(h, lerp(h, ctop, cenv * cwall));
+      var cfl = (1 - smooth(o.w + 2.6, o.w + 3.2, cv)) * (1 - smooth(o.L / 2 + 3, o.L / 2 + 10, cu));      // ровное дно туннеля
+      if (cfl > 0) h = lerp(h, o.f, cfl);
+    }
+    // островок с гнездом
+    var di = Math.sqrt((x - def.nest[0]) * (x - def.nest[0]) + (z - def.nest[1]) * (z - def.nest[1]));
+    if (di < 62) { var ih = 2.4 + (fbm(x / 8, z / 8, seed + 77, 2) - 0.5) * 0.6; h = Math.max(h, lerp(h, ih, 1 - smooth(10, 62, di))); }
+    return h;
+  }
+
+  function makeHeight(id, def, seed) {
+    var oases = [], OF = def.ocean ? oceanFeatures(id, seed) : null;
+    if (id === 'desert') {
+      var orng = mulberry32(seed + 99);
+      for (var i = 0; i < 5; i++) {
+        var a = orng() * 6.283, d = 90 + orng() * 190;
+        oases.push({ x: Math.cos(a) * d, z: Math.sin(a) * d, r: 22 + orng() * 14 });
+      }
+    }
+    var fn = function (x, z) {
+      var h;
+      if (OF) {
+        h = oceanBase(id, OF, seed, x, z, def);
+      } else if (id === 'forest') {
+        h = (fbm(x / 140, z / 140, seed, 4) - 0.5) * 26 + 3.4;
+        h += (fbm(x / 30, z / 30, seed + 11, 2) - 0.5) * 3;
+        var c = Math.abs(vnoise(x / 95 + 13.7, z / 95 - 4.2, seed + 5) - 0.5);        // ручьи
+        h -= (1 - smooth(0, 0.075, c)) * 4.6;   // ширина ~10 м: сетка ландшафта (2.5 м) должна её показать
+      } else if (id === 'snow') {
+        h = (fbm(x / 150, z / 150, seed, 4) - 0.5) * 18 + 3.4;
+        h += (fbm(x / 22, z / 22, seed + 11, 2) - 0.5) * 2.4;
+        var cs = Math.abs(vnoise(x / 120 + 5.1, z / 120 + 9.9, seed + 5) - 0.5);       // замёрзшие озёра и проруби
+        h -= (1 - smooth(0, 0.07, cs)) * 5;
+      } else if (id === 'mountain') {
+        var r = 1 - Math.abs(fbm(x / 110, z / 110, seed, 4) * 2 - 1);                  // гребни
+        h = r * r * 52 - 4 + (fbm(x / 38, z / 38, seed + 11, 3) - 0.5) * 7;
+        var cm = Math.abs(vnoise(x / 130 + 3.3, z / 130 + 8.8, seed + 5) - 0.5);        // ущелья с реками
+        h -= (1 - smooth(0, 0.075, cm)) * 11;
+      } else if (id === 'desert') {
+        var dn = fbm(x / 160, z / 160, seed, 3);
+        h = 4 + (dn - 0.5) * 8 + Math.sin(x * 0.045 + dn * 6) * 3.2 + Math.sin((x + z) * 0.03 + 1.7) * 2.2 + (fbm(x / 26, z / 26, seed + 11, 2) - 0.5) * 1.6;
+        for (var o = 0; o < oases.length; o++) {
+          var od = Math.hypot(x - oases[o].x, z - oases[o].z);
+          h -= (1 - smooth(oases[o].r * 0.35, oases[o].r, od)) * 9.5;
+        }
+      } else if (id === 'swamp') {
+        h = 0.55 + (fbm(x / 60, z / 60, seed, 4) - 0.5) * 7.5 + (fbm(x / 20, z / 20, seed + 11, 2) - 0.5) * 1.4;
+      } else {   // volcano
+        h = 6 + (fbm(x / 130, z / 130, seed, 4) - 0.5) * 30 + (fbm(x / 28, z / 28, seed + 11, 3) - 0.5) * 4;
+        var cv = Math.abs(vnoise(x / 80 + 2.2, z / 80 - 6.6, seed + 5) - 0.5);          // лавовые реки
+        h -= (1 - smooth(0, 0.085, cv)) * 13;
+      }
+      var d2 = Math.sqrt(x * x + z * z);                                                  // арена босса
+      var k = 1 - smooth(ARENA, ARENA + 18, d2);
+      h = h * (1 - k) + def.arenaY * k;
+      var m = Math.max(Math.abs(x), Math.abs(z));                                         // горы по краю карты
+      if (OF) h = lerp(h, Math.max(h, -3), smooth(HALF - 60, HALF - 12, m));                // у океана — риф-барьер под водой
+      else h += smooth(HALF - 70, HALF - 12, m) * 30;
+      return h;
+    };
+    fn.features = OF;
+    return fn;
+  }
+
+  // ======================================================================== МИР
+  var CELL = 16, OFF = HALF + 16, STRIDE = 64, cache = {};
+  function cellKey(ix, iz) { return ix * STRIDE + iz; }
+  function addObstacle(W, o) {
+    W.obstacles.push(o);
+    var k = cellKey(Math.floor((o.x + OFF) / CELL), Math.floor((o.z + OFF) / CELL));
+    (W.grid[k] || (W.grid[k] = [])).push(o);
+  }
+  var _empty = [];
+  function obstaclesNear(W, x, z, r) {
+    var out = null;
+    var x0 = Math.floor((x - r + OFF) / CELL), x1 = Math.floor((x + r + OFF) / CELL);
+    var z0 = Math.floor((z - r + OFF) / CELL), z1 = Math.floor((z + r + OFF) / CELL);
+    for (var ix = x0; ix <= x1; ix++) for (var iz = z0; iz <= z1; iz++) {
+      var cell = W.grid[cellKey(ix, iz)];
+      if (cell) { if (!out) out = []; for (var i = 0; i < cell.length; i++) out.push(cell[i]); }
+    }
+    return out || _empty;
+  }
+
+  var TREE_H = { broad: 6.5, pine: 7.5, cactus: 3.6, mangrove: 5.2, burnt: 5.5 };
+  var TREE_R = { broad: 0.5, pine: 0.45, cactus: 0.55, mangrove: 0.6, burnt: 0.45 };
+
+  function getWorld(biome) {
+    if (cache[biome]) return cache[biome];
+    if (biome === 'duel') return (cache.duel = makeDuelWorld());
+    var B = CF.BIOME[biome] ? biome : 'forest';
+    var cfg = CF.BIOME[B], def = DEF[B];
+    var heightRaw = makeHeight(B, def, cfg.seed), lava = cfg.liquid === 'lava';
+    // лава — твёрдая «поверхность» (по ней можно бежать, но она жжёт); вода остаётся водой
+    var heightAt = lava ? function (x, z) { var h = heightRaw(x, z); return h < def.waterY ? def.waterY - 0.05 : h; } : heightRaw;
+    var W = {
+      biome: B, cfg: cfg, def: def, heightAt: heightAt, heightRaw: heightRaw, waterY: def.waterY, lava: lava, liquid: cfg.liquid,
+      half: HALF, arena: { x: 0, z: 0, r: ARENA }, trees: [], rocks: [], stones: [], obstacles: [], grid: {}, duel: false,
+      ocean: !!def.ocean, features: heightRaw.features || null
+    };
+    W.slopeAt = function (x, z) {
+      return (Math.abs(heightAt(x + 1, z) - heightAt(x - 1, z)) + Math.abs(heightAt(x, z + 1) - heightAt(x, z - 1))) / 2;
+    };
+    W.caveAt = function (x, z) {
+      var C = W.features && W.features.caves; if (!C) return null;
+      for (var i = 0; i < C.length; i++) {
+        var o = C[i], dx = x - o.x, dz = z - o.z; if (dx * dx + dz * dz > o.L * o.L) continue;
+        if (Math.abs(dx * Math.cos(o.a) + dz * Math.sin(o.a)) < o.L / 2 && Math.abs(-dx * Math.sin(o.a) + dz * Math.cos(o.a)) < o.w + 6.5) return o;
+      }
+      return null;
+    };
+    // толщина каменного свода над туннелем (совпадает с оболочкой в world.js): rb — низ (арка), rt — верх (купол); у торцов сходится в нож
+    W.caveRoof = function (x, z) {
+      var C = W.features && W.features.caves; if (!C) return null;
+      for (var i = 0; i < C.length; i++) {
+        var o = C[i], dx = x - o.x, dz = z - o.z, hl = o.L / 2 + 6; if (dx * dx + dz * dz > (hl + 14) * (hl + 14)) continue;
+        var u = Math.abs(dx * Math.cos(o.a) + dz * Math.sin(o.a)), v = Math.abs(-dx * Math.sin(o.a) + dz * Math.cos(o.a)), aw = o.w + 3; if (u >= hl || v >= aw + 0.5) continue;
+        var arch = o.f + aw * 1.12 * Math.sqrt(Math.max(0, 1 - (v / aw) * (v / aw))), cR = o.w + 12, dome = o.f + o.H * Math.sqrt(Math.max(0, 1 - (v / cR) * (v / cR)));
+        var eT = smooth(o.L / 2 + 0.5, hl, u), cl = smooth(hl - 3.5, hl, u), rt = dome * (1 - eT) + (arch + 2.8) * eT; rt = rt * (1 - cl) + (arch + 0.05) * cl;
+        return { rb: arch, rt: Math.max(rt, arch + 0.05) };
+      }
+      return null;
+    };
+    // внутри ли породы свода (толща между аркой и куполом + узкая щель у стены): сквозь неё нельзя плыть
+    W.caveSolid = function (x, y, z) {
+      var C = W.features && W.features.caves; if (!C) return false;
+      for (var i = 0; i < C.length; i++) {
+        var o = C[i], dx = x - o.x, dz = z - o.z, hl = o.L / 2 + 6, cR = o.w + 12; if (dx * dx + dz * dz > (hl + 14) * (hl + 14)) continue;
+        var u = Math.abs(dx * Math.cos(o.a) + dz * Math.sin(o.a)), v = Math.abs(-dx * Math.sin(o.a) + dz * Math.cos(o.a)), aw = o.w + 3; if (u >= hl || v >= cR) continue;
+        var arch = o.f + aw * 1.12 * Math.sqrt(Math.max(0, 1 - (v / aw) * (v / aw))), dome = o.f + o.H * Math.sqrt(Math.max(0, 1 - (v / cR) * (v / cR))), lo, rt;
+        if (v < aw) { lo = arch - 0.3; var eT = smooth(o.L / 2 + 0.5, hl, u), cl = smooth(hl - 3.5, hl, u); rt = dome * (1 - eT) + (arch + 2.8) * eT; rt = rt * (1 - cl) + (arch + 0.05) * cl; }
+        else { lo = o.f - 8; var eo = smooth(o.L / 2 + 0.5, o.L / 2 + 5.5, u); rt = dome * (1 - eo) + (o.f + 0.2) * eo; }
+        if (y > lo && y < rt) return true;
+      }
+      return false;
+    };
+    W.isWater = function (x, z) { return !lava && heightAt(x, z) < W.waterY; };
+    W.isDeep = function (x, z) { return !lava && heightAt(x, z) < W.waterY - 0.9; };
+    W.isLava = function (x, z) { return lava && heightRaw(x, z) < W.waterY; };
+    // сугробы замедляют, ядовитая топь жжёт
+    W.slowAt = function (x, z) {
+      if (B === 'kelp') return vnoise(x / 30, z / 30, cfg.seed + 31) > 0.62 ? 0.8 : 1;    // густые заросли ламинарии
+      if (B !== 'snow') return 1;
+      return vnoise(x / 24, z / 24, cfg.seed + 31) > 0.66 ? 0.62 : 1;
+    };
+    // жар у чёрных курильщиков: ближе 7 м к трубе и ниже её верхушки + 6 м
+    W.ventAt = function (x, z, y) {
+      if (!W.features || !W.features.vents.length) return 0;
+      var v = W.features.vents, best = 0;
+      for (var i = 0; i < v.length; i++) { var d = Math.hypot(x - v[i].x, z - v[i].z); if (d < 7) best = Math.max(best, 1 - d / 7); }
+      return best;
+    };
+    W.bogAt = function (x, z) {
+      if (B !== 'swamp') return false;
+      return vnoise(x / 20, z / 20, cfg.seed + 41) > 0.7 && heightAt(x, z) > W.waterY - 0.6;
+    };
+
+    // гнездо: ближайшая ровная сухая точка рядом с желаемой
+    var nest = null;
+    for (var rad = 0; rad < 140 && !nest; rad += 4) {
+      for (var a = 0; a < 12 && !nest; a++) {
+        var nx = def.nest[0] + Math.cos(a / 12 * 6.2832) * rad, nz = def.nest[1] + Math.sin(a / 12 * 6.2832) * rad;
+        var nh = heightAt(nx, nz);
+        if (nh > W.waterY + 1.6 && W.slopeAt(nx, nz) < 0.3 && Math.abs(nx) < HALF - 80 && Math.abs(nz) < HALF - 80 && !(lava && W.isLava(nx, nz))) nest = { x: nx, z: nz, y: nh };
+      }
+    }
+    W.nest = nest || { x: def.nest[0], z: def.nest[1], y: heightAt(def.nest[0], def.nest[1]) };
+    // гнездо стоит на ровной площадке: рельеф вокруг плавно выравнивается до его высоты (одинаково на сервере и в браузере)
+    var NF = W.nest, baseH = heightAt;
+    heightAt = function (x, z) {
+      var h = baseH(x, z), dd = Math.hypot(x - NF.x, z - NF.z);
+      if (dd < 22) { var kk = 1 - smooth(12, 22, dd); h = h * (1 - kk) + NF.y * kk; }
+      return h;
+    };
+    W.heightAt = heightAt;
+
+    // порталы у входов на арену: вход к боссу — ближе к гнезду, выход в следующий биом — напротив
+    var na = Math.round(Math.atan2(W.nest.z, W.nest.x) / (Math.PI / 2)) * (Math.PI / 2);
+    W.portalIn = { x: Math.cos(na) * (ARENA + 7), z: Math.sin(na) * (ARENA + 7), ang: na };
+    W.portalNext = { x: Math.cos(na + Math.PI) * (ARENA + 7), z: Math.sin(na + Math.PI) * (ARENA + 7), ang: na + Math.PI };
+    W.portalIn.y = heightAt(W.portalIn.x, W.portalIn.z); W.portalNext.y = heightAt(W.portalNext.x, W.portalNext.z);
+    // порталы стоят на ровных площадках (иначе на склоне одна колонна висит, другая утоплена): рельеф вокруг выравнивается до высоты портала
+    var PF = [W.portalIn, W.portalNext], baseH2 = heightAt;
+    heightAt = function (x, z) {
+      var h = baseH2(x, z);
+      for (var q = 0; q < 2; q++) { var dd = Math.hypot(x - PF[q].x, z - PF[q].z); if (dd < 12) { var kk = 1 - smooth(6, 12, dd); h = h * (1 - kk) + PF[q].y * kk; } }
+      return h;
+    };
+    W.heightAt = heightAt;
+    // камни арены (20 штук, 4 прохода)
+    for (var i = 0; i < 20; i++) {
+      if (i % 5 === 0) continue;
+      var ang = i / 20 * 6.2832, sx = Math.cos(ang) * (ARENA + 1), sz = Math.sin(ang) * (ARENA + 1);
+      var st = { x: sx, z: sz, y: heightAt(sx, sz), r: 1.5, s: 1, rot: ang, kind: 'stone', h: 5 };
+      W.stones.push(st); if (!W.ocean) addObstacle(W, st);              // под водой над камнями проплывают
+    }
+
+    var rng = mulberry32(cfg.seed * 7 + 3);
+    var tstyle = cfg.treeStyle, TR = TREE_R[tstyle] || 0.5;
+    for (var tries = 0; tries < 30000 && W.trees.length < cfg.trees; tries++) {
+      var x = (rng() * 2 - 1) * (HALF - 14), z = (rng() * 2 - 1) * (HALF - 14);
+      var h = heightAt(x, z);
+      if (h < W.waterY + 0.7 || W.slopeAt(x, z) > 0.8) continue;
+      if (lava && W.isLava(x, z)) continue;
+      if (Math.hypot(x, z) < ARENA + 12 || Math.hypot(x - W.nest.x, z - W.nest.z) < 15) continue;
+      if (Math.hypot(x - W.portalIn.x, z - W.portalIn.z) < 7 || Math.hypot(x - W.portalNext.x, z - W.portalNext.z) < 7) continue;
+      var dens = vnoise(x / 48, z / 48, cfg.seed + 7);
+      if (rng() > smooth(0.25, 0.7, dens) * 0.92 + 0.05) continue;
+      var near = obstaclesNear(W, x, z, 3.5), ok = true;
+      for (var j = 0; j < near.length; j++) { if (Math.hypot(near[j].x - x, near[j].z - z) < 3.2) { ok = false; break; } }
+      if (!ok) continue;
+      var s = 0.8 + rng() * 0.9;
+      var tr = { x: x, z: z, y: h, s: s, r: TR * s, rot: rng() * 6.28, v: rng(), kind: 'tree', h: (TREE_H[tstyle] || 6) * s };
+      W.trees.push(tr); addObstacle(W, tr);
+    }
+    for (var rt = 0; rt < 6000 && W.rocks.length < cfg.rocks; rt++) {
+      var rx = (rng() * 2 - 1) * (HALF - 14), rz = (rng() * 2 - 1) * (HALF - 14);
+      var rh = heightAt(rx, rz);
+      if ((!W.ocean && rh < W.waterY - 0.2) || (lava && W.isLava(rx, rz)) || Math.hypot(rx - W.nest.x, rz - W.nest.z) < 13) continue;
+      if (Math.hypot(rx, rz) < ARENA + 8) continue;
+      if (Math.hypot(rx - W.portalIn.x, rz - W.portalIn.z) < 6 || Math.hypot(rx - W.portalNext.x, rz - W.portalNext.z) < 6) continue;
+      var rs = 0.7 + rng() * 1.8;
+      var rk = { x: rx, z: rz, y: rh, s: rs, r: 0.6 * rs, rot: rng() * 6.28, v: rng(), kind: 'rock', h: 1.4 * rs };
+      if (!W.ocean) { var wet = false; for (var q = 0; q < 8 && !wet; q++) { var qa = q / 8 * 6.2832; if (heightAt(rx + Math.cos(qa) * rk.r, rz + Math.sin(qa) * rk.r) < W.waterY + 0.05) wet = true; } if (wet) continue; }   // валун у самой воды уходил под воду, а столкновение оставалось — невидимый блок
+      W.rocks.push(rk); if (!W.ocean) addObstacle(W, rk);
+    }
+    // ближайшее дерево, на которое можно залезть
+    W.treeNear = function (x, z, maxD) {
+      var near = obstaclesNear(W, x, z, maxD + 2), best = null, bd = 1e9;
+      for (var i = 0; i < near.length; i++) {
+        var o = near[i]; if (o.kind !== 'tree' || tstyle === 'cactus') continue;
+        var d = Math.hypot(o.x - x, o.z - z) - o.r;
+        if (d < maxD && d < bd) { bd = d; best = o; }
+      }
+      return best;
+    };
+    W.randomLand = function (r, minFromNest) {
+      for (var k = 0; k < 60; k++) {
+        var px = (r() * 2 - 1) * (HALF - 40), pz = (r() * 2 - 1) * (HALF - 40);
+        var ph = heightAt(px, pz);
+        if (ph < W.waterY + 0.8 || (lava && W.isLava(px, pz)) || W.slopeAt(px, pz) > 0.7) continue;
+        if (Math.hypot(px, pz) < ARENA + 6) continue;
+        if (minFromNest && Math.hypot(px - W.nest.x, pz - W.nest.z) < minFromNest) continue;
+        var nb = obstaclesNear(W, px, pz, 2), blocked = false;
+        for (var j = 0; j < nb.length; j++) if (Math.hypot(nb[j].x - px, nb[j].z - pz) < nb[j].r + 1.2) { blocked = true; break; }
+        if (!blocked) return { x: px, z: pz, y: ph };
+      }
+      return { x: W.nest.x + 8, z: W.nest.z, y: W.nest.y };
+    };
+    W.randomWater = function (r) {
+      for (var k = 0; k < 200; k++) {
+        var px = (r() * 2 - 1) * (HALF - 30), pz = (r() * 2 - 1) * (HALF - 30);
+        if (W.isDeep(px, pz) && Math.hypot(px, pz) > ARENA + 6) return { x: px, z: pz, y: heightAt(px, pz) };
+      }
+      return null;
+    };
+    cache[B] = W;
+    return W;
+  }
+
+  // круглая арена дуэли: плоская, без препятствий
+  function makeDuelWorld() {
+    var W = {
+      biome: 'duel', cfg: null, def: { waterY: -50, arenaY: 0, nest: [0, 0] }, heightAt: function () { return 0; }, heightRaw: function () { return 0; },
+      waterY: -50, lava: false, liquid: 'water', half: 60, arena: { x: 0, z: 0, r: CF.DUEL_R }, trees: [], rocks: [], stones: [], obstacles: [], grid: {}, duel: true,
+      nest: { x: 0, z: 0, y: 0 }
+    };
+    W.slopeAt = function () { return 0; }; W.isWater = W.isDeep = W.isLava = function () { return false; };
+    W.slowAt = function () { return 1; }; W.bogAt = function () { return false; };
+    W.treeNear = function () { return null; };
+    for (var i = 0; i < 24; i++) {
+      var a = i / 24 * 6.2832, st = { x: Math.cos(a) * (CF.DUEL_R + 1.5), z: Math.sin(a) * (CF.DUEL_R + 1.5), y: 0, r: 1.5, s: 1, rot: a, kind: 'stone', h: 5 };
+      W.stones.push(st);
+    }
+    return W;
+  }
+
+  // ======================================================================== ХАРАКТЕРИСТИКИ
+  // размер растёт ступенями: при 10, 20 и 30 уровне динозавр заметно вырастает (плюс плавный рост внутри ступени)
+  var STAGE_SCALE = [1, 1.3, 1.6, 1.85];
+  function scaleOf(level) {
+    var l = clamp(level | 0 || 1, 1, CF.MAX_LEVEL);
+    return 0.36 * Math.pow(1.9 / 0.36, Math.pow((l - 1) / (CF.MAX_LEVEL - 1), 0.9));   // плавный рост: 0.36 на 1 уровне → 1.9 на 30
+  }
+  // характеристики из класса, уровня и эволюции (evo: {ветка: ранг}); одинаково считаются на клиенте и сервере
+  function statsFor(cls, level, evo) {
+    var c = CF.CLASSES[cls] || CF.CLASSES.carn;
+    level = clamp(level | 0 || 1, 1, CF.MAX_LEVEL);
+    var fx = CF.evoTotals(cls, evo || {}), e = function (k) { return clamp(fx[k] | 0, 0, 5); }, v = function (k) { return fx[k] || 0; };
+    var sc = scaleOf(level);
+    var lg = (level - 1) * (1 + 0.035 * (level - 1)), hpMult = (1 + c.hpPerLevel * lg) * (1 + v('hp') / 100 + (cls === 'herb' ? 0.10 * e('mass') : 0));
+    var dmgMult = (1 + c.dmgPerLevel * lg) * (1 + v('dmg') / 100);
+    var aq = CF.isAqua(cls), sprintMult = c.sprint || CF.SPRINT_MULT, gl = aq ? e('gills') * 0.15 : 0, spd = 1 + v('speed') / 100;
+    if (c.dodge) fx.dodge = (fx.dodge || 0) + c.dodge;
+    var hp = Math.round(c.hp * hpMult);
+    // ranks — ступени способностей классов (их читают механики рывка, засады, топота, полёта, разряда…)
+    var ranks = {}; ['pounce', 'ambush', 'roar', 'mass', 'herd', 'climb', 'wings', 'talons', 'altitude', 'screech', 'fins', 'lungs', 'gills', 'rise', 'shock', 'rend', 'scent'].forEach(function (k) { ranks[k] = e(k); });
+    var st = {
+      sprintMult: sprintMult, noSprint: !!c.noSprint,
+      cls: cls, level: level, hp: hp, speed: c.speed * spd, dmg: c.dmg * dmgMult,
+      scale: sc, radius: 0.5 * sc + 0.1, reach: c.reach * (0.45 + sc * 0.62) + 0.3, atkCd: c.atkCd, ranks: ranks, fx: fx,
+      regen: (CF.REGEN_BASE + CF.REGEN_PCT * hp) + v('regen') * (1 + level * 0.08),
+      armor: Math.min(0.55, (v('armor') + (c.armor || 0)) / 100), resist: Math.min(1, v('resist') / 100),
+      sense: v('sense') ? Math.round(v('sense')) : 0, stealth: Math.min(0.8, v('stealth') / 100),
+      stamRegen: 1 + v('stamina') / 100, foodMult: Math.max(0.4, 1 - v('foodSave') / 100),
+      swimSpd: (aq ? c.waterSpeed * (1 + 0.08 * e('fins')) : c.speed) * spd,
+      surf: CF.surfK(cls), aqua: aq, landStam: aq ? 0.5 + 0.5 * gl : 1, landDmg: aq ? 0.75 + 0.25 * gl : 1,
+      breathMax: CF.BREATH_MAX * (1 + lungBonus(v('lungs'))),
+      flySpd: c.speed * 1.12 * (1 + 0.05 * e('wings')) * spd, flyDrain: CF.FLY_DRAIN * (1 - 0.1 * e('wings')),
+      freeSoar: e('wings') >= 4, canClimb: cls === 'herb' && e('climb') >= 1
+    };
+    return st;
+  }
+
+  // ======================================================================== СОСТОЯНИЕ ИГРОКА
+  function newPlayer(W, x, z) {
+    return { x: x, y: W.heightAt(x, z), z: z, vy: 0, onGround: true, face: 0, stam: CF.STAM_MAX, fly: 0, clm: 0, grd: 0, dsh: 0, dvx: 0, dvz: 0, dvy: 0, stun: 0, slow: 1, lock: 0, ca: 0 };
+  }
+  var FIELDS = ['x', 'y', 'z', 'vy', 'face', 'stam', 'dsh', 'dvx', 'dvz', 'dvy', 'stun', 'slow'];
+  function exportState(p) {
+    var o = { og: p.onGround ? 1 : 0, fly: p.fly | 0, clm: p.clm | 0, grd: p.grd | 0, lock: p.lock | 0, ca: p.ca || 0 };
+    for (var i = 0; i < FIELDS.length; i++) o[FIELDS[i]] = p[FIELDS[i]];
+    return o;
+  }
+  function importState(p, s) {
+    for (var i = 0; i < FIELDS.length; i++) if (s[FIELDS[i]] !== undefined) p[FIELDS[i]] = s[FIELDS[i]];
+    p.onGround = !!s.og; p.fly = s.fly | 0; p.clm = s.clm | 0; p.grd = s.grd | 0; p.lock = s.lock | 0; p.ca = s.ca || 0;
+  }
+  function cleanInput(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    var f = +raw.f, s = +raw.s, yaw = +raw.yaw, q = raw.q | 0;
+    if (!isFinite(f) || !isFinite(s) || !isFinite(yaw) || q <= 0) return null;
+    var pt = +raw.pt; if (!isFinite(pt)) pt = 0.3;
+    return { q: q, f: clamp(f, -1, 1), s: clamp(s, -1, 1), yaw: yaw % 6.2832, pitch: clamp(pt, -0.6, 1.3), jump: !!raw.j, down: !!raw.d, sprint: !!raw.sp };
+  }
+
+  var _r = { x: 0, z: 0 };
+  function resolve(W, x, z, r) {
+    if (W.obstacles.length) {
+      for (var k = 0; k < 2; k++) {
+        var near = obstaclesNear(W, x, z, r + 3);
+        for (var i = 0; i < near.length; i++) {
+          var o = near[i], dx = x - o.x, dz = z - o.z, d = Math.sqrt(dx * dx + dz * dz), m = o.r + r;
+          if (d < m) {
+            if (d < 1e-4) { dx = 1; dz = 0; d = 1; }
+            x = o.x + dx / d * m; z = o.z + dz / d * m;
+          }
+        }
+      }
+    }
+    var lim = W.half - 4;
+    _r.x = clamp(x, -lim, lim); _r.z = clamp(z, -lim, lim);
+    return _r;
+  }
+  function applyLock(W, p) {
+    var d = Math.sqrt(p.x * p.x + p.z * p.z);
+    if (W.duel) { var lim = CF.DUEL_R - 1.2; if (d > lim) { p.x *= lim / d; p.z *= lim / d; } return; }
+    if (p.lock === 1) { var l1 = ARENA - 1.6; if (d > l1) { p.x *= l1 / d; p.z *= l1 / d; } }
+    else if (p.lock === 2) { var l2 = ARENA + 2.2; if (d < l2) { if (d < 1e-3) { p.x = l2; } else { p.x *= l2 / d; p.z *= l2 / d; } } }
+  }
+
+  // Один фиксированный шаг физики. p — состояние, inp — очищенный ввод, st — statsFor().
+  function step(p, inp, dt, W, st) {
+    var f = clamp(+inp.f || 0, -1, 1), s = clamp(+inp.s || 0, -1, 1), jump = !!inp.jump, down = !!inp.down, sprint = !!inp.sprint;
+    if (p.stun > 0) { p.stun = Math.max(0, p.stun - dt); f = 0; s = 0; jump = false; down = false; sprint = false; }
+    var l = Math.sqrt(f * f + s * s);
+    if (l > 1) { f /= l; s /= l; l = 1; }
+    var moving = l > 0.05;
+    var yaw = +inp.yaw || 0, sy = Math.sin(yaw), cy = Math.cos(yaw);
+    var dx = -sy * f + cy * s, dz = -cy * f - sy * s;
+    var ground = W.heightAt(p.x, p.z);
+    var deep = ground < W.waterY - 0.9 && !W.lava, aqua = !!st.aqua;
+    var inWater = ground < W.waterY && !W.lava;
+    var slow = (p.slow || 1) * W.slowAt(p.x, p.z);
+    if (st.noSprint) sprint = false;                                    // летающий не бегает вообще
+    if (aqua && !inWater) sprint = false;                               // на суше водный только ползёт: без рывка
+
+    if (p.clm) { p.vy = 0; p.onGround = false; p.stam = Math.min(CF.STAM_MAX, p.stam + CF.STAM_REGEN * (st.stamRegen || 1) * 1.6 * dt); return p; }   // на дереве отдыхаем: выносливость быстро восстанавливается           // на дереве: стоим (позицию задаёт сервер)
+    if (p.grd) { moving = false; }                                    // защитная стойка: не двигаемся
+
+    var speed, swimMode = false, flying = !!p.fly;
+    if (flying) {
+      speed = st.flySpd * CF.SPEED_SCALE;
+    } else if (inWater && aqua) {
+      speed = st.swimSpd * CF.SPEED_SCALE; swimMode = deep; if (sprint && p.stam > 1) speed *= CF.SPRINT_MULT;
+    } else {
+      speed = st.speed * CF.SPEED_SCALE;
+      if (inWater) speed *= (deep ? 0.55 : 0.8);
+      if (sprint && moving && p.stam > 1) speed *= st.sprintMult;
+    }
+    speed *= slow;
+    var sprinting = sprint && moving && p.stam > 1 && !p.grd;
+
+    // выносливость
+    var maxStam = aqua && !inWater ? CF.STAM_MAX * st.landStam : CF.STAM_MAX;
+    if (flying) {
+      var drain = 0;
+      if (jump && p.stam > 1) drain += st.flyDrain; else if (!st.freeSoar) drain += st.flyDrain * 0.3;
+      if (sprint && moving) drain += CF.STAM_DRAIN * 0.5;
+      p.stam = Math.max(0, p.stam - drain * dt);
+    } else if (sprinting) {
+      p.stam = Math.max(0, p.stam - CF.STAM_DRAIN * dt);
+    } else {
+      p.stam = Math.min(maxStam, p.stam + CF.STAM_REGEN * (st.stamRegen || 1) * dt * (moving ? 0.6 : 1) * (aqua && !inWater ? st.landStam : 1));
+    }
+    if (p.stam > maxStam) p.stam = Math.max(maxStam, p.stam - 20 * dt);
+
+    // горизонталь
+    var ox = p.x, oz = p.z, mvx = 0, mvz = 0;
+    if (p.dsh > 0) {                                                  // рывок/таран/пикирование: движение задано сервером
+      p.dsh = Math.max(0, p.dsh - dt); mvx = p.dvx; mvz = p.dvz;
+    } else if (moving) { mvx = dx * speed; mvz = dz * speed; }
+    else if (flying) { mvx = Math.sin(p.face) * st.flySpd * CF.SPEED_SCALE * 0.38; mvz = Math.cos(p.face) * st.flySpd * CF.SPEED_SCALE * 0.38; }
+    if (mvx !== 0 || mvz !== 0) {
+      var nx = ox + mvx * dt, nz = oz + mvz * dt;
+      var r = resolve(W, nx, nz, st.radius), cx = r.x, cz = r.z;
+      if (!flying && p.onGround && W.heightAt(cx, cz) - p.y > 0.55) {  // слишком крутой подъём — скользим по осям
+        var r1 = resolve(W, nx, oz, st.radius), ax = r1.x, az = r1.z, okX = W.heightAt(ax, az) - p.y <= 0.55;
+        var r2 = resolve(W, ox, nz, st.radius), bx = r2.x, bz = r2.z, okZ = W.heightAt(bx, bz) - p.y <= 0.55;
+        if (okX) { cx = ax; cz = az; } else if (okZ) { cx = bx; cz = bz; } else { cx = ox; cz = oz; }
+      }
+      if (swimMode && (W.caveSolid || true)) {                         // под водой: стены холмов и порода свода не пропускают (раньше «выталкивало» наверх или пускало внутрь)
+        var blk = function (qx, qz) { return (W.caveSolid && W.caveSolid(qx, p.y, qz)) || W.heightAt(qx, qz) - p.y > 0.8; };
+        if (blk(cx, cz) && !blk(ox, oz)) {
+          if (!blk(nx, oz)) { var r3 = resolve(W, nx, oz, st.radius); cx = r3.x; cz = r3.z; if (blk(cx, cz)) { cx = ox; cz = oz; } }
+          else if (!blk(ox, nz)) { var r4 = resolve(W, ox, nz, st.radius); cx = r4.x; cz = r4.z; if (blk(cx, cz)) { cx = ox; cz = oz; } }
+          else { cx = ox; cz = oz; }
+        }
+      }
+      p.x = cx; p.z = cz;
+      if (moving && p.dsh <= 0 || flying && moving) {
+        var tf = Math.atan2(dx, dz);
+        p.face = wrap(p.face + wrap(tf - p.face) * Math.min(1, 12 * dt));
+      } else if (p.dsh > 0) { p.face = Math.atan2(p.dvx, p.dvz); }
+    }
+    if (p.lock || W.duel) applyLock(W, p);
+
+    // вертикаль
+    ground = W.heightAt(p.x, p.z);
+    deep = ground < W.waterY - 0.9 && !W.lava;
+    if (flying) {
+      var tv;
+      if (jump && p.stam > 1) tv = CF.FLY_ASCEND; else if (down) tv = -CF.FLY_DIVE; else tv = -(st.freeSoar ? 0.5 : CF.FLY_SINK);
+      if (p.stam <= 1) tv = Math.min(tv, -5);
+      if (p.dsh > 0 && p.dvy !== undefined) tv = p.dvy;
+      p.vy += (tv - p.vy) * Math.min(1, 6 * dt);
+      p.y += p.vy * dt;
+      var ceil = ground + CF.FLY_MAX_ALT; if (p.y > ceil) { p.y = ceil; if (p.vy > 0) p.vy = 0; }
+      if (!W.lava && ground < W.waterY - 0.3 && p.y < W.waterY + 0.25) {       // летающий не ныряет: коснулся воды — приводняется и дальше плывёт по поверхности (F или пробел — взлететь снова)
+        if (p.vy <= 0.5 && !(jump && p.stam > 1)) { p.fly = 0; p.y = W.waterY - 0.1; p.vy = 0; } else { p.y = Math.max(p.y, W.waterY + 0.05); }
+      }
+      p.onGround = false;
+      if (p.y <= ground + 0.02) {                                       // посадка
+        p.y = ground; p.vy = 0; p.onGround = true; p.fly = 0;
+      }
+    } else if (swimMode) {
+      // глубина — куда хочет игрок: «Вверх»/«Вниз» или плыть вперёд туда, куда смотрит камера (камера вниз — ныряем);
+      // без ввода динозавр держит текущую глубину
+      var tvs = 0, pitch = inp.pitch !== undefined ? +inp.pitch : 0.3;
+      if (jump) tvs = CF.SWIM_VERT * (1 + (st.swimSpd / 240 - 1)); else if (down) tvs = -CF.SWIM_VERT;
+      else if (moving && f > 0.05) { var tilt = clamp((pitch - 0.3) * 2.0, -1, 1); if (Math.abs(tilt) > 0.12) tvs = -tilt * speed * 0.8 * f; }
+      if (tvs > 0 && st.ranks && st.ranks.rise) tvs *= 1 + 0.3 * st.ranks.rise;      // «Быстрое всплытие»
+      p.vy += (tvs - p.vy) * Math.min(1, (tvs === 0 ? 10 : 5) * dt);      // отпустил — быстро останавливается на своей глубине
+      var pyPrev = p.y; p.y += p.vy * dt;
+      var top = W.waterY + 0.15 - (st.surf || 1.15) * (st.scale || 1), bot = ground + 0.5;   // спина у поверхности, а не весь динозавр над водой
+      if (p.y > top) { p.y = top; p.vy = 0; }
+      if (p.y < bot) { p.y = bot; p.vy = 0; }
+      var cvr = W.caveRoof && W.caveRoof(p.x, p.z);                      // каменный свод пещеры: нельзя нырнуть сквозь него ни сверху, ни снизу
+      if (cvr && cvr.rt - cvr.rb > 0.5) {
+        if (p.y > (cvr.rb + cvr.rt) / 2) { if (p.y < cvr.rt) { p.y = cvr.rt; if (p.vy < 0) p.vy = 0; } } else if (p.y > cvr.rb - 0.4) { p.y = cvr.rb - 0.4; if (p.vy > 0) p.vy = 0; }
+      }
+      if (W.caveSolid && W.caveSolid(p.x, p.y, p.z) && !W.caveSolid(p.x, pyPrev, p.z)) { p.y = pyPrev; p.vy = 0; }      // порода свода не пускает и по вертикали
+      p.onGround = false;
+    } else if (deep) {                                                  // не морской: плывёт по поверхности
+      var target = W.waterY - 0.12 - 0.08 * st.scale;
+      p.y += (target - p.y) * Math.min(1, 6 * dt);
+      p.vy = 0; p.onGround = false;
+    } else {
+      if (jump && p.onGround && !p.grd) { p.vy = CF.JUMP_V; p.onGround = false; }
+      p.vy -= CF.GRAVITY * dt;
+      p.y += p.vy * dt;
+      if (p.y <= ground) { p.y = ground; p.vy = 0; p.onGround = true; } else if (p.y > ground + 0.02) p.onGround = false;
+    }
+    return p;
+  }
+
+
+  // ======================================================================== ЕЖЕДНЕВНЫЕ ЗАДАНИЯ
+  function fixDaily(d) {
+    var o = { day: 0, streak: 0, best: 0, q: [], bonus: 0 };
+    if (!d || typeof d !== 'object') return o;
+    o.day = Math.max(0, d.day | 0); o.streak = clamp(d.streak | 0, 0, 9999); o.best = clamp(d.best | 0, 0, 9999); o.bonus = d.bonus ? 1 : 0;
+    if (Array.isArray(d.q)) d.q.slice(0, 4).forEach(function (x) {
+      if (x && CF.QUESTS[x.id]) o.q.push({ id: x.id, n: Math.max(1, x.n | 0), h: Math.max(0, x.h | 0), done: x.done ? 1 : 0 });
+    });
+    return o;
+  }
+  // номер игрового дня (смена в 00:00 по Москве)
+  function dayNum(ms) { return Math.floor((ms + 3 * 3600000) / 86400000); }
+  function pickQuests(day, lv) {
+    var seed = (day * 2654435761) >>> 0;
+    var rnd = function () { seed = (seed + 0x6D2B79F5) >>> 0; var t = seed; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+    var first = rnd() < 0.5 ? 'kill' : 'killh', ids = [first, 'eat'], pool = ['play'];
+    if (lv >= CF.QUESTS.boss.minLv) pool.push('boss'); else pool.push(first === 'kill' ? 'killh' : 'kill');
+    ids.push(pool[(rnd() * pool.length) | 0]);
+    return ids.map(function (id) { return { id: id, n: CF.QUESTS[id].n(lv), h: 0, done: 0 }; });
+  }
+  // смена дня: новые задания, серия входов и награда за вход. Возвращает {streak, coins, cos} при новом дне (иначе null); coins/cos уже начислены
+  function dailyRoll(pr, now) {
+    var d = pr.daily = fixDaily(pr.daily), today = dayNum(now || Date.now());
+    if (d.day === today || today < d.day) return null;
+    var cont = d.day === today - 1;
+    d.streak = cont ? d.streak + 1 : 1; d.best = Math.max(d.best, d.streak); d.day = today; d.bonus = 0;
+    d.q = pickQuests(today, pr.level | 0);
+    var coins = CF.STREAK_COINS * Math.min(d.streak, 7), cos = '';
+    if (d.streak % 7 === 0) {
+      var ids = Object.keys(CF.COSMETICS).filter(function (k) { return CF.COSMETICS[k].price; }).sort(function (a, b) { return CF.COSMETICS[a].price - CF.COSMETICS[b].price; });
+      for (var i = 0; i < ids.length; i++) if (pr.cosmetics.indexOf(ids[i]) < 0) { cos = ids[i]; break; }
+      if (cos) pr.cosmetics.push(cos); else coins += 200;
+    }
+    pr.coins += coins; pr.stats.coinsEarned = (pr.stats.coinsEarned || 0) + coins;
+    return { streak: d.streak, coins: coins, cos: cos };
+  }
+  // прогресс по заданию; возвращает список завершённых [{i, id, coins, all}] (монеты начисляет вызывающий)
+  function questAdd(pr, type, n) {
+    var d = pr.daily = fixDaily(pr.daily), out = [];
+    for (var i = 0; i < d.q.length; i++) {
+      var x = d.q[i]; if (x.id !== type || x.done) continue;
+      x.h = Math.min(x.n, x.h + n);
+      if (x.h >= x.n) { x.done = 1; out.push({ i: i, id: x.id, coins: CF.QUESTS[x.id].coins, all: false }); }
+    }
+    if (out.length && !d.bonus && d.q.every(function (z) { return z.done; })) { d.bonus = 1; out[out.length - 1].all = true; }
+    return out;
+  }
+
+  // ======================================================================== ПРОФИЛЬ
+  function defaultProfile(name) {
+    return {
+      name: name || '', color: 0, cls: null, hatched: false,
+      level: 1, xp: 0, totalXp: 0, evo: {}, kings: [], kingAt: {}, cosmetics: [], cosmetic: '', pets: [], pet: '', codes: [], claimed: [], titles: [], title: '', patc: '', rfx: '', morph: '', eggskin: '', mats: { bone: 0, hide: 0 }, trophies: {}, elo: 1000, dw: 0, dl: 0, season: '', nest: { items: [], put: [] },
+      coins: 0, playTime: 0, wins: 0, biome: 'forest', savedAt: 0,
+      daily: { day: 0, streak: 0, best: 0, q: [], bonus: 0 }, tut: 0,     // ежедневные задания и серия входов
+      slots: {}, seen: [],          // slots — сохранённый прогресс других типов; seen — победённые виды (бестиарий)
+      stats: { kills: 0, deaths: 0, bosses: 0, eaten: 0, tourney: 0, rush: 0, coinsEarned: 0, ults: 0, quests: 0 }
+    };
+  }
+
+
+
+  // ---------- промокоды: в исходниках только хэши; каждый код — один раз на профиль ----------
+  var PROMOS = { '1n9etfo-hf2tw1': { id: 'molotkov62', coins: 100000 }, 'n7magz-wpfb0t': { id: 'sea30', coins: 1000, sea30: true }, '1gj92dv-1l1gum4': { id: 'land_all', coins: 500, landAll: true } };
+  function codeHash(str) {
+    function h(seed) { var x = seed >>> 0; for (var i = 0; i < str.length; i++) { x ^= str.charCodeAt(i); x = Math.imul(x, 16777619) >>> 0; x = (x ^ (x >>> 13)) >>> 0; } return x.toString(36); }
+    return h(2166136261) + '-' + h(305419896);
+  }
+  // промокод «Океан30»: 30 уровень у всех морских классов, все океаны открыты (последний — без победы над боссом)
+  function maxSea(pr) {
+    var seaKings = CF.OCEANS.slice(0, -1), tx = CF.cumXp(CF.MAX_LEVEL);
+    CF.TYPES.sea.forEach(function (cls) {
+      var q = { level: CF.MAX_LEVEL, totalXp: tx, xp: 0, evo: {}, kings: seaKings.slice(), kingAt: {} };
+      if (pr.cls === cls) { q.evo = pr.evo || {}; pr.level = q.level; pr.totalXp = q.totalXp; pr.xp = 0; pr.kings = q.kings; pr.kingAt = pr.kingAt || {}; }
+      else { var old = pr.slots && pr.slots[cls]; if (old) q.evo = old.evo || {}; pr.slots = pr.slots || {}; pr.slots[cls] = q; }
+    });
+  }
+  // промокод «Суша»: все миры суши открыты у каждого сухопутного класса (последний — без победы над боссом); уровни не меняются
+  function openLand(pr) {
+    var kk = CF.BIOMES.slice(0, -1), add = function (q) { var s = (q.kings || []).slice(); kk.forEach(function (b) { if (s.indexOf(b) < 0) s.push(b); }); q.kings = s; q.kingAt = q.kingAt || {}; };
+    CF.TYPES.land.forEach(function (cls) { if (pr.cls === cls) add(pr); else { var q = pr.slots && pr.slots[cls]; if (q) add(q); } });
+  }
+  function redeem(pr, raw) {
+    var code = String(raw || '').trim().slice(0, 40), pm = PROMOS[codeHash(code)];
+    if (!pm) return { ok: false, err: 'bad_code' };
+    if (pr.codes.indexOf(pm.id) >= 0) return { ok: false, err: 'used_code' };
+    if (pm.sea30) maxSea(pr);
+    if (pm.landAll) openLand(pr);
+    pr.codes.push(pm.id); pr.coins += pm.coins; pr.stats.coinsEarned = (pr.stats.coinsEarned || 0) + pm.coins;
+    return { ok: true, field: 'coins', coins: pm.coins };
+  }
+
+  // ---------- магазин: чистые операции над профилем (используются и в игре, и в главном меню, и на сервере) ----------
+  // возвращает { ok, err, changed: [поля] }
+  function shopOp(pr, op, a) {
+    a = a || {};
+    var id = typeof a.id === 'string' ? a.id : '', c, f, fail = function (e) { return { ok: false, err: e }; };
+    if (!pr || !pr.hatched) return fail('no_char');
+    if (op === 'redeem') return redeem(pr, a.code);
+    if (op === 'buy') {
+      c = CF.COSMETICS[id]; if (!c || !c.price || pr.cosmetics.indexOf(id) >= 0) return fail('bad');
+      if (pr.coins < c.price) return fail('coins');
+      pr.coins -= c.price; pr.cosmetics.push(id); pr[CF.SLOT_FIELD[CF.cosSlot(id)]] = id; return { ok: true, field: CF.SLOT_FIELD[CF.cosSlot(id)] };
+    }
+    if (op === 'craft') {
+      c = CF.COSMETICS[id]; if (!c || !c.craft || pr.cosmetics.indexOf(id) >= 0) return fail('bad');
+      if (pr.mats.bone < (c.craft.bone | 0) || pr.mats.hide < (c.craft.hide | 0)) return fail('mats');
+      pr.mats.bone -= c.craft.bone | 0; pr.mats.hide -= c.craft.hide | 0; pr.cosmetics.push(id); pr.stats.crafted = (pr.stats.crafted | 0) + 1;
+      pr[CF.SLOT_FIELD[CF.cosSlot(id)]] = id; return { ok: true, field: CF.SLOT_FIELD[CF.cosSlot(id)] };
+    }
+    if (op === 'equip') {
+      f = id ? CF.SLOT_FIELD[CF.cosSlot(id)] : CF.SLOT_FIELD[a.slot || 'hat']; if (!f) return fail('bad');
+      if (id && pr.cosmetics.indexOf(id) < 0) return fail('bad');
+      pr[f] = id; return { ok: true, field: f };
+    }
+    if (op === 'buypet') {
+      c = CF.PETS[id]; if (!c || pr.pets.indexOf(id) >= 0) return fail('bad');
+      if (pr.coins < c.price) return fail('coins');
+      pr.coins -= c.price; pr.pets.push(id); pr.pet = id; return { ok: true, field: 'pet' };
+    }
+    if (op === 'setpet') { if (id && pr.pets.indexOf(id) < 0) return fail('bad'); pr.pet = id; return { ok: true, field: 'pet' }; }
+    if (op === 'setcolor') { var i = a.i | 0; if (i < 0 || i >= CF.COLORS.length) return fail('bad'); pr.color = i; return { ok: true, field: 'color' }; }
+    if (op === 'nestbuy') {
+      c = CF.NEST_ITEMS[id]; if (!c || c.shopHidden || pr.nest.items.indexOf(id) >= 0) return fail('bad');
+      if (c.craft) {
+        if (pr.mats.bone < (c.craft.bone | 0) || pr.mats.hide < (c.craft.hide | 0)) return fail('mats');
+        pr.mats.bone -= c.craft.bone | 0; pr.mats.hide -= c.craft.hide | 0; pr.stats.crafted = (pr.stats.crafted | 0) + 1;
+      } else { if (pr.coins < c.price) return fail('coins'); pr.coins -= c.price; }
+      pr.nest.items.push(id); if (pr.nest.put.length < CF.NEST_MAX) pr.nest.put.push(id);
+      return { ok: true, field: 'nest' };
+    }
+    if (op === 'nestput') {
+      var list = Array.isArray(a.put) ? a.put : [], out = [];
+      list.forEach(function (x) { if (typeof x === 'string' && out.indexOf(x) < 0 && CF.nestOwned(pr, x) && out.length < CF.NEST_MAX) out.push(x); });
+      pr.nest.put = out; return { ok: true, field: 'nest' };
+    }
+    return fail('bad');
+  }
+
+  // рейтинг Elo: возвращает новые рейтинги победителя и проигравшего
+  function eloUpdate(rw, rl) {
+    var e = 1 / (1 + Math.pow(10, (rl - rw) / 400)), d = Math.round(CF.ELO_K * (1 - e));
+    return { w: rw + Math.max(1, d), l: Math.max(0, rl - Math.max(1, d)), d: Math.max(1, d) };
+  }
+  // смена сезона: награда по лиге итогового рейтинга, рейтинг сжимается к 1000
+  function seasonRoll(pr, now) {
+    var id = CF.seasonId(now);
+    if (!pr.season) { pr.season = id; return null; }
+    if (pr.season === id) return null;
+    var out = null, played = (pr.dw | 0) + (pr.dl | 0) > 0;
+    if (played) {
+      var lg = CF.leagueOf(pr.elo), r = lg.reward;
+      pr.coins += r.c; pr.stats.coinsEarned = (pr.stats.coinsEarned || 0) + r.c;
+      if (r.cos && pr.cosmetics.indexOf(r.cos) < 0) pr.cosmetics.push(r.cos);
+      if (r.title && pr.titles.indexOf(r.title) < 0) { pr.titles.push(r.title); if (!pr.title) pr.title = r.title; }
+      out = { league: lg.id, elo: pr.elo, coins: r.c, cos: r.cos || '', title: r.title || '', season: pr.season };
+    }
+    pr.elo = Math.round(1000 + (pr.elo - 1000) / 2); pr.season = id; pr.dw = 0; pr.dl = 0;
+    return out;
+  }
+  function fixProfile(p) {
+    var d = defaultProfile('');
+    p = Object.assign(d, p || {});
+    p.stats = Object.assign(defaultProfile('').stats, p.stats || {});
+    if (!p.evo || typeof p.evo !== 'object') p.evo = {};
+    p.evo = CF.evoClean(p.evo);             // старая эволюция (до деревьев) сбрасывается — очки возвращаются
+    if (!Array.isArray(p.kings)) p.kings = [];
+    if (!p.story || typeof p.story !== 'object' || Array.isArray(p.story)) p.story = {};
+    if (p.ending !== 'lord' && p.ending !== 'keeper') p.ending = '';
+    if (!p.kingAt || typeof p.kingAt !== 'object') p.kingAt = {};
+    if (!Array.isArray(p.cosmetics)) p.cosmetics = [];
+    // убранные из игры следы: покупка возвращается монетами
+    var LEG = { t_dust: 150, t_sparks: 300, t_stars: 450, t_embers: 0, m_harlequin: 900, m_galaxy: 1000, m_candy: 800, m_camo: 800 };
+    if (Array.isArray(p.cosmetics)) p.cosmetics = p.cosmetics.filter(function (x) { if (LEG[x] !== undefined && !CF.COSMETICS[x]) { p.coins = (+p.coins || 0) + LEG[x]; return false; } return true; });
+    delete p.trail;
+    if (!Array.isArray(p.codes)) p.codes = []; p.codes = p.codes.filter(function (x) { return typeof x === 'string'; }).slice(0, 50);
+    if (!Array.isArray(p.claimed)) p.claimed = []; if (!Array.isArray(p.titles)) p.titles = [];
+    if (p.titles.indexOf('king') >= 0) { if (CF.worldKings(p, 'land') >= 6 && p.titles.indexOf('landking') < 0) p.titles.push('landking'); if (p.title === 'king') p.title = CF.worldKings(p, 'land') >= 6 ? 'landking' : ''; }      // старый титул «Король биома» заменён на «Король суши»
+    p.titles = p.titles.filter(function (x) { return CF.TITLES[x]; }); if (!p.title || p.titles.indexOf(p.title) < 0) p.title = '';
+    ['patc', 'rfx', 'morph', 'eggskin'].forEach(function (f) { if (typeof p[f] !== 'string' || (p[f] && p.cosmetics.indexOf(p[f]) < 0)) p[f] = ''; });
+    if (typeof p.cosmetic !== 'string' || (p.cosmetic && p.cosmetics.indexOf(p.cosmetic) < 0)) p.cosmetic = '';
+    if (!p.mats || typeof p.mats !== 'object') p.mats = {}; p.mats = { bone: Math.max(0, p.mats.bone | 0), hide: Math.max(0, p.mats.hide | 0) };
+    if (!p.trophies || typeof p.trophies !== 'object') p.trophies = {};
+    p.elo = Math.max(0, Math.min(4000, +p.elo || 1000)); p.dw = Math.max(0, p.dw | 0); p.dl = Math.max(0, p.dl | 0); if (typeof p.season !== 'string') p.season = '';
+    if (!p.nest || typeof p.nest !== 'object') p.nest = {}; if (!Array.isArray(p.nest.items)) p.nest.items = []; if (!Array.isArray(p.nest.put)) p.nest.put = [];
+    p.nest.items = p.nest.items.filter(function (x, i, a) { return CF.NEST_ITEMS[x] && a.indexOf(x) === i; });
+    p.nest.put = p.nest.put.filter(function (x, i, a) { return (CF.nestOwned(p, x) || (x.indexOf('tr_') === 0 && CF.nestItem(x))) && a.indexOf(x) === i; }).slice(0, CF.NEST_MAX);
+    if (!Array.isArray(p.pets)) p.pets = []; p.pets = p.pets.filter(function (x) { return CF.PETS[x]; });
+    if (!p.pet || p.pets.indexOf(p.pet) < 0) p.pet = '';
+    if (p.cls === 'aqua') p.cls = 'mosa';                  // старый морской динозавр стал мозазавром
+    if (p.cls && !CF.CLASSES[p.cls]) p.cls = 'carn';
+    var sl = {};
+    if (p.slots && typeof p.slots === 'object') for (var k in p.slots) {
+      var q = p.slots[k], key = k === 'aqua' ? 'mosa' : k;
+      if (!CF.CLASSES[key] || !q || typeof q !== 'object' || key === p.cls) continue;
+      var lv = clamp(q.level | 0 || 1, 1, CF.MAX_LEVEL);
+      var tx = Math.max(CF.cumXp(lv), +q.totalXp || 0);
+      var all = CF.BIOMES.concat(CF.OCEANS), ks = (Array.isArray(q.kings) ? q.kings : []).filter(function (b, i, a) { return all.indexOf(b) >= 0 && a.indexOf(b) === i; }), kat = {}; ks.forEach(function (b) { kat[b] = +(q.kingAt && q.kingAt[b]) || 0; });
+      sl[key] = { level: lv, totalXp: tx, xp: Math.max(0, Math.min(tx - CF.cumXp(lv), +q.xp || 0)), evo: CF.evoClean(q.evo || {}), kings: ks, kingAt: kat };
+    }
+    p.slots = sl;
+    p.daily = fixDaily(p.daily); p.tut = p.tut ? 1 : 0;
+    p.seen = (Array.isArray(p.seen) ? p.seen : []).filter(function (id, i, a) { return CF.ENEMIES[id] && a.indexOf(id) === i; }).slice(0, 120);
+    return p;
+  }
+  // переключить активный тип (хищный / травоядный / летающий / морские): прогресс прежнего типа сохраняется, у нового — свой. Возвращает 'same' | 'switch' | 'new' | 'bad'
+  function bestLevel(p) { var b = p.cls ? (p.level | 0) : 0, s = p.slots || {}; for (var k in s) if (s[k] && (s[k].level | 0) > b) b = s[k].level | 0; return b; }
+  function typeUnlocked(p, cls) { var m = CF.TYPE_MIN_LV && CF.TYPE_MIN_LV[cls]; return !m || p.cls === cls || bestLevel(p) >= m; }
+  function switchType(p, cls) {
+    if (!CF.CLASSES[cls]) return 'bad';
+    if (!typeUnlocked(p, cls)) return 'locked';
+    if (p.cls === cls) return 'same';
+    var slots = Object.assign({}, p.slots || {});
+    if (p.cls) slots[p.cls] = { level: p.level, totalXp: p.totalXp, xp: p.xp, evo: p.evo || {}, kings: (p.kings || []).slice(), kingAt: Object.assign({}, p.kingAt || {}) };
+    var q = slots[cls], isNew = !q;
+    delete slots[cls];
+    p.slots = slots; p.cls = cls;
+    p.level = q ? q.level : 1; p.totalXp = q ? q.totalXp : 0; p.xp = q ? q.xp : 0; p.evo = q ? CF.evoClean(q.evo) : {};
+    p.kings = q && q.kings ? q.kings.slice() : []; p.kingAt = q && q.kingAt ? Object.assign({}, q.kingAt) : {};
+    return isNew ? 'new' : 'switch';
+  }
+  // уровень типа (для меню): у активного — из профиля, у остальных — из сохранённого слота
+  function typeLevel(p, cls) { if (p.cls === cls) return p.level; var q = p.slots && p.slots[cls]; return q ? q.level : 0; }
+  // сколько биомов открыто игроку (индекс последнего доступного + 1)
+  // у каждого мира (суша / океан) своя цепочка: следующая локация открывается после босса предыдущей
+  function unlockedBiomes(p, w) { var l = CF.worldList(w || 'land'); return Math.min(l.length, CF.worldKings(p, w || 'land') + 1); }
+  // океан открыт только после всей суши (6 королей); тем, кто уже играл морскими типами, — остаётся (чтобы не отнимать прогресс)
+  function landDone(p) {
+    if (!p) return false; if (p.landDone) return true;
+    if (CF.worldKings(p, 'land') >= CF.BIOMES.length || CF.worldKings(p, 'sea') > 0) return true;
+    var T = (CF.TYPES && CF.TYPES.sea) || []; for (var i = 0; i < T.length; i++) if (typeLevel(p, T[i]) > 0) return true;
+    return false;
+  }
+  function canEnterBiome(p, biome) {
+    var w = CF.worldOf(biome), i = CF.worldList(w).indexOf(biome);
+    if (i < 0) return false;
+    if (w === 'sea' && !landDone(p)) return false;
+    return i < unlockedBiomes(p, w);
+  }
+  // подходит ли тип биому: наземные — на сушу, морские — в океан
+  function typeFits(cls, biome) { return CF.clsWorld(cls) === CF.worldOf(biome); }
+  function isLord(p) { return CF.worldKings(p, 'land') >= CF.BIOMES.length; }
+  function homeBiome(p, cls) { return CF.isAqua(cls || (p && p.cls)) ? CF.OCEANS[0] : CF.BIOMES[0]; }
+
+  // ======================================================================== ВРАГИ (общие формулы)
+  // враги 1–3 уровней были слишком мелкими: крупнее, чтобы их было видно и удобно бить
+  // лёгкие: каждый узел из 3 ступеней даёт +25%, +30%, +35% к запасу воздуха
+  function lungBonus(n) { var t = 0, inc = [0.25, 0.30, 0.35]; for (var i = 0; i < Math.min(9, n | 0); i++) t += inc[i % 3]; return t; }
+  function enemySizeMul(lv) { lv = lv | 0; return lv < 10 ? 0.62 + 0.38 * Math.max(0, lv - 1) / 9 : 1 + Math.min(20, lv - 10) * 0.012; }   // чем выше уровень, тем крупнее враг
+  // поправка по уровню врага (подобрана расчётом: при половине прокачки игрок убивает типичного врага примерно в 0,2× → 0,5× времени, за которое тот убьёт игрока)
+  var ENEMY_K = [1.483, 1.483, 1.483, 1.483, 1.483, 1.429, 1.382, 1.308, 1.276, 1.253, 1.248, 1.202, 1.165, 1.1, 1.06, 1.053, 1.041, 1.038, 1.078, 1.042, 1.004, 1.035, 1.042, 1.036, 1.047, 1.05, 1.043, 1.042, 1.014, 1.02];
+  function enemyScale(lv) { var a = Math.min(lv - 1, 9), b = Math.max(0, lv - 10), kk = ENEMY_K[Math.max(0, Math.min(29, (lv | 0) - 1))]; var bb = Math.min(20, b); return { hp: (1 + 0.12 * a + 0.09 * b) * (1 - 0.027 * bb) * kk, dmg: (1 + 0.08 * a + 0.05 * b) * (1 - 0.0125 * bb) * kk }; }   // после 10 ур. рост силы врагов мягче: игрок 30 ур. справляется с врагами 27 ур.   // 1.5: враги заметно крепче с уровнем
+  // награда опыта за победу над врагом уровня lv игроком уровня plv
+  // Единая шкала: на своём уровне нужно ~killsPerLevel побед над врагом такого же уровня (в любом биоме), поэтому в поздних биомах
+  // награда растёт вместе с уровнем и не «застревает». Враг сильнее игрока — бонус, слабее — награда падает.
+  function killsPerLevel(lv) { return 5 + 0.35 * Math.max(1, lv); }      // 1 ур. ≈ 5, 10 ≈ 8,5, 20 ≈ 12, 30 ≈ 15,5 побед на уровень
+  function xpReward(arch, lv, plv) {
+    var base = CF.xpForLevel(Math.max(1, lv)) / killsPerLevel(lv) * (arch.xp || 1);
+    var diff = plv - lv;
+    var k = diff < 0 ? Math.min(1.5, 1 + 0.12 * -diff) : diff <= 2 ? 1 : Math.max(0.2, 1 - (diff - 2) * 0.1);
+    return Math.max(1, Math.round(base * k));
+  }
+  // доли уровня за разные источники (для любых режимов и биомов): еда, находки
+  // доля находок падает с уровнем (на высоких нужно больше жемчужин): 1 ур. — 100%, 30 ур. — 60% базовой доли
+  function findShare(plv, share) { return share * (1 - 0.4 * (Math.max(1, Math.min(30, plv)) - 1) / 29); }
+  function xpShare(plv, share) { return Math.max(1, Math.round(CF.xpForLevel(Math.max(1, plv)) * share)); }
+
+  return {
+    CONFIG: CF, clamp: clamp, smooth: smooth, lerp: lerp, wrap: wrap, mulberry32: mulberry32, vnoise: vnoise, fbm: fbm,
+    getWorld: getWorld, obstaclesNear: obstaclesNear, DEF: DEF,
+    step: step, newPlayer: newPlayer, exportState: exportState, importState: importState, applyLock: applyLock, resolve: resolve,
+    cleanInput: cleanInput, statsFor: statsFor, scaleOf: scaleOf,
+    shopOp: shopOp, eloUpdate: eloUpdate, seasonRoll: seasonRoll, dailyRoll: dailyRoll, questAdd: questAdd, fixDaily: fixDaily, dayNum: dayNum,
+    defaultProfile: defaultProfile, fixProfile: fixProfile, unlockedBiomes: unlockedBiomes, canEnterBiome: canEnterBiome, landDone: landDone, typeFits: typeFits, switchType: switchType, typeUnlocked: typeUnlocked, typeLevel: typeLevel, isLord: isLord, homeBiome: homeBiome,
+    enemyScale: enemyScale, enemySizeMul: enemySizeMul, xpReward: xpReward, xpShare: xpShare, findShare: findShare, killsPerLevel: killsPerLevel, TREE_H: TREE_H
+  };
+});
