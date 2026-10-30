@@ -270,7 +270,7 @@ export function buildWorld(scene, biomeId, opts) {
   const skyTop = col3(isDuel ? 0x2b3a5a : cfg.sky[0]), skyBot = col3(isDuel ? 0x8aa0c0 : cfg.sky[1]);
   const CLOUD = { forest: [0.5, 0xffffff], snow: [0.62, 0xf2f6fa], mountain: [0.55, 0xffffff], desert: [0.22, 0xfff4e4], swamp: [0.66, 0xd8e0d0], volcano: [0.72, 0x6a4a40],
     reef: [0.5, 0xffffff], kelp: [0.5, 0xffffff], arctic: [0.6, 0xf0f6fa], vents: [0.55, 0xe8eef2], abyss: [0.62, 0xc8d4e4], duel: [0.45, 0xffffff] }[W.biome] || [0.5, 0xffffff];
-  const skyU = { top: { value: skyTop.clone() }, bot: { value: skyBot.clone() }, sunDir: { value: new THREE.Vector3(0, 1, 0) }, sunCol: { value: col3(isDuel ? 0xfff1d6 : cfg.sun) }, night: { value: 0 },
+  const skyU = { top: { value: skyTop.clone() }, bot: { value: skyBot.clone() }, sunDir: { value: new THREE.Vector3(0, 1, 0) }, sunCol: { value: col3(isDuel ? 0xfff1d6 : cfg.sun) }, night: { value: 0 }, mid: { value: skyBot.clone() }, moonDir: { value: new THREE.Vector3(0, -1, 0) }, moonVis: { value: 0 }, tw: { value: 0 },
     uTime: { value: 0 }, uCover: { value: CLOUD[0] }, uCloudC: { value: col3(CLOUD[1]) }, uOct: { value: 5 } };
   scene.background = skyBot.clone();
   scene.fog = new THREE.Fog(skyBot.getHex(), 60, 260);
@@ -279,19 +279,31 @@ export function buildWorld(scene, biomeId, opts) {
     vertexShader: 'varying vec3 vP; void main(){ vP = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
     // небо: рассеяние у горизонта, ореол солнца и объёмные облака — плотность из шума, подсветка со стороны солнца,
     // тёмное «брюхо», серебристый край на просвет, облака плывут и тают у горизонта
-    fragmentShader: `uniform vec3 top; uniform vec3 bot; uniform vec3 sunDir; uniform vec3 sunCol; uniform float night; uniform float uTime; uniform float uCover; uniform vec3 uCloudC; uniform float uOct; varying vec3 vP;
+    fragmentShader: `uniform vec3 top; uniform vec3 bot; uniform vec3 sunDir; uniform vec3 sunCol; uniform float night; uniform vec3 mid; uniform vec3 moonDir; uniform float moonVis; uniform float tw; uniform float uTime; uniform float uCover; uniform vec3 uCloudC; uniform float uOct; varying vec3 vP;
       float h31(vec3 p){ p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
       float h21(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
       float vn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f); return mix(mix(h21(i), h21(i + vec2(1, 0)), f.x), mix(h21(i + vec2(0, 1)), h21(i + vec2(1, 1)), f.x), f.y); }
       float fbm(vec2 p){ float s = 0.0, a = 0.5; for (int i = 0; i < 6; i++) { if (float(i) >= uOct) break; s += a * vn(p); p = p * 2.03 + vec2(1.7, 9.2); a *= 0.5; } return s; }
       float dens(vec2 p){ float d = fbm(p) - (1.0 - uCover) * 0.6 - 0.16; return smoothstep(0.0, 0.32, d); }
       void main(){ vec3 d = normalize(vP); float h = d.y; vec3 sd = normalize(sunDir);
-        vec3 c = mix(bot, top, smoothstep(-0.05, 0.65, h));
+        vec3 c = mix(bot, mid, smoothstep(-0.05, 0.32, h)); c = mix(c, top, smoothstep(0.18, 0.78, h));      // горизонт → середина → зенит (на закате — золото, оранжевый, багрянец, лиловый)
         float mu = max(dot(d, sd), 0.0);
-        c += sunCol * (pow(mu, 900.0) * 1.8 + pow(mu, 12.0) * 0.2 + pow(mu, 3.0) * 0.06) * (1.0 - night);
+        c += sunCol * (pow(mu, 900.0) * 1.8 + pow(mu, 60.0) * 0.35 * (1.0 + tw) + pow(mu, 12.0) * 0.2 + pow(mu, 3.0) * 0.06) * (1.0 - night);
+        c += sunCol * tw * pow(mu, 2.2) * exp(-max(h, 0.0) * 3.2) * 0.55;                                   // зарево у горизонта в сторону солнца
+        c = mix(c, c * vec3(1.0, 0.86, 0.92) + vec3(0.07, 0.02, 0.05) * tw, tw * smoothstep(0.0, 0.5, 1.0 - mu) * 0.5 * smoothstep(0.5, 0.0, h));   // розоватый пояс на противоположной стороне
+        vec3 mdn = normalize(moonDir); float mm = dot(d, mdn);
         c = mix(c, bot * 1.08, pow(1.0 - max(h, 0.0), 6.0) * 0.5);            // дымка у горизонта
         vec3 g = floor(d * 140.0); float st = step(0.9965, h31(g)) * smoothstep(0.05, 0.4, h);
-        c += vec3(st) * night * (1.0 - uCover * 0.6);
+        c += vec3(st) * night * (1.0 - uCover * 0.6) * (1.0 - clamp(pow(max(mm, 0.0), 40.0) * 3.0, 0.0, 1.0));
+        if (moonVis > 0.001 && mm > 0.9) {       // луна: диск с «морями» и затемнением к краю, холодное свечение вокруг
+          vec3 tg = normalize(cross(vec3(0.0, 1.0, 0.0), mdn)), bg = cross(mdn, tg); vec2 q = vec2(dot(d, tg), dot(d, bg)) / 0.05; float r = length(q);
+          float disc = smoothstep(1.0, 0.94, r) * smoothstep(-0.03, 0.05, h);
+          float sea = fbm(q * 2.4 + 3.1) * 0.55 + fbm(q * 6.0) * 0.18;
+          vec3 mc = vec3(0.93, 0.95, 1.0) * (0.84 - sea * 0.42) * (0.78 + 0.22 * sqrt(max(1.0 - r * r, 0.0)));
+          float cl = 1.0 - uCover * 0.45;
+          c = mix(c, mc * 1.15, disc * moonVis * cl);
+          c += vec3(0.55, 0.68, 1.0) * (pow(max(mm, 0.0), 260.0) * 0.5 + pow(max(mm, 0.0), 40.0) * 0.11) * moonVis * cl * smoothstep(-0.05, 0.1, h);
+        }
         if (h > 0.0) {
           vec2 uv = d.xz / (h + 0.12) * 0.38 + vec2(uTime * 0.006, uTime * 0.0025);
           float de = dens(uv);
@@ -897,24 +909,70 @@ export function buildWorld(scene, biomeId, opts) {
   applyQuality('high');
 
   // ---------- каждый кадр ----------
-  const sunV = new THREE.Vector3(), tmpA = new THREE.Color(), tmpB = new THREE.Color(), nightTop = col3(0x070d1c), nightBot = col3(0x101a30);
-  const fogBase = skyBot.clone();
-  function setTime(tod) {
-    const ang = (tod - 0.25) * Math.PI * 2, elev = Math.sin(ang), dayK = Math.min(1, Math.max(0, (elev + 0.12) / 0.4));
+  // ---- суточный свет: закат, сумерки, ночь с луной. Всё считается один раз при смене времени суток (tod), кадр только копирует готовые цвета.
+  // Один источник направленного света (с тенями): днём — солнце, ночью — луна; смена происходит при нулевой яркости обоих, поэтому без «скачка» теней.
+  const sunV = new THREE.Vector3(), moonV = new THREE.Vector3(), lightV = new THREE.Vector3(), tmpA = new THREE.Color(), tmpB = new THREE.Color(), tmpM = new THREE.Color(), tmpS = new THREE.Color(), tmpL = new THREE.Color();
+  const nightTop = col3(0x0e1c3e), nightBot = col3(0x1c2d52), nightMid = col3(0x142547), moonLight = col3(0xb4c9ff);
+  const SW = W.biome === 'volcano' ? 0.35 : 0.9;                 // насколько небо этого биома окрашивается закатом (у вулкана своё зарево)
+  const K = (e, hz, tp, mid, sunc, sunI, hemI, gl) => ({ e, hz: col3(hz), tp: col3(tp), mid: col3(mid), sun: col3(sunc), sunI, hemI, gl });
+  // ключи по высоте солнца: день → золото → оранжевый → багрянец → лиловый → синие сумерки → ночь
+  const KEYS = [K(0.5, 0, 0, 0, 0, 1.35, 0.9, 0), K(0.3, 0xf7d98e, 0x5f8fd0, 0xd9c79a, 0xffdfa6, 1.2, 0.8, 0.25), K(0.14, 0xffa347, 0x4a62a8, 0xe08a62, 0xffa850, 0.9, 0.62, 0.7),
+    K(0.03, 0xe5493a, 0x3a3f86, 0xa8496e, 0xff6a38, 0.55, 0.46, 1.0), K(-0.06, 0x8f3f78, 0x232d64, 0x4b3a7a, 0xc0507a, 0.22, 0.5, 0.6), K(-0.14, 0x34497f, 0x111a3c, 0x1e2d58, 0x6a7ab0, 0.0, 0.62, 0.15),
+    K(-0.3, 0, 0, 0, 0, 0, 0.78, 0)];
+  const baseSun = col3(isDuel ? 0xfff1d6 : cfg.sun), baseHemS = col3(isDuel ? 0xdff0ff : cfg.hemi[0]), baseHemG = col3(isDuel ? 0x4a5a6a : cfg.hemi[1]), nightHemS = col3(0x9db3ea), nightHemG = col3(0x232f55);
+  const nz = W.biome === 'volcano' ? 0.55 : 1;
+  let lastTod = -9, cHz = new THREE.Color(), cTp = new THREE.Color(), cMid = new THREE.Color(), cSun = new THREE.Color(), cHs = new THREE.Color(), cHg = new THREE.Color(), cLt = new THREE.Color();
+  let vSunI = 1.35, vHemI = 0.9, vLightI = 1.35, vNk = 0, vTw = 0, vMoon = 0, vShN = 0.06;
+  const sstep = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+  function recompute(tod) {
+    const ang = (tod - 0.25) * Math.PI * 2, elev = Math.sin(ang), dayK = sstep(-0.12, 0.28, elev);
     sunV.set(Math.cos(ang) * 0.8, elev, 0.35).normalize();
-    skyU.sunDir.value.copy(sunV);
-    const nk = W.biome === 'volcano' ? (1 - dayK) * 0.55 : 1 - dayK;       // у вулкана ночью не бывает совсем темно
-    tmpA.copy(skyTop).lerp(nightTop, nk); tmpB.copy(skyBot).lerp(nightBot, nk);
-    // у горизонта на рассвете/закате тёплый оттенок
-    const dusk = Math.max(0, 1 - Math.abs(elev) * 5) * (W.biome === 'volcano' ? 0.2 : 0.6);
-    tmpB.lerp(col3(0xff9a5a), dusk * 0.5);
-    skyU.top.value.copy(tmpA); skyU.bot.value.copy(tmpB); skyU.night.value = nk;
-    scene.background.copy(tmpB); scene.fog.color.copy(tmpB);
-    hemi.intensity = 0.28 + 0.62 * dayK; sun.intensity = 0.15 + 1.3 * dayK; lastDay = dayK;
-    sunV.y = Math.max(sunV.y, 0.25);       // тени остаются даже ночью (лунный свет)
-    return sunV;
+    moonV.set(-sunV.x, -sunV.y + 0.06, -sunV.z).normalize();                // луна напротив солнца
+    skyU.sunDir.value.copy(sunV); skyU.moonDir.value.copy(moonV);
+    // сегмент ключей
+    let i = 0; while (i < KEYS.length - 2 && elev < KEYS[i + 1].e) i++;
+    const A = KEYS[i], B = KEYS[i + 1], t = sstep(0, 1, Math.min(1, Math.max(0, (A.e - elev) / (A.e - B.e))));
+    // горизонт/зенит/середина: ключи закатной палитры смешиваются с цветами биома (вес SW), ночь — с общей ночной палитрой
+    const blendBase = (nm, base, out) => {
+      const ca = A.e >= 0.5 ? base : A.e <= -0.3 ? (nm === 'hz' ? nightBot : nm === 'tp' ? nightTop : nightMid) : tmpL.copy(base).lerp(A[nm], SW);
+      const ra = tmpA.copy(ca);
+      const cb = B.e >= 0.5 ? base : B.e <= -0.3 ? (nm === 'hz' ? nightBot : nm === 'tp' ? nightTop : nightMid) : tmpL.copy(base).lerp(B[nm], SW);
+      out.copy(ra).lerp(cb, t);
+    };
+    const baseMid = tmpM.copy(skyTop).lerp(skyBot, 0.45);
+    blendBase('hz', skyBot, cHz); blendBase('tp', skyTop, cTp); blendBase('mid', baseMid, cMid);
+    // ночью у вулкана не бывает совсем темно
+    if (nz < 1) { const nkv = 1 - dayK; cHz.lerp(skyBot, nkv * (1 - nz)); cTp.lerp(skyTop, nkv * (1 - nz) * 0.5); }
+    // цвет и сила солнечного света
+    { const ca = A.e >= 0.5 ? baseSun : tmpS.copy(baseSun).lerp(A.sun, SW); tmpA.copy(ca); const cb = B.e >= 0.5 ? baseSun : tmpS.copy(baseSun).lerp(B.sun, SW); cSun.copy(tmpA).lerp(cb, t); }
+    vSunI = A.sunI + (B.sunI - A.sunI) * t; vHemI = A.hemI + (B.hemI - A.hemI) * t; vTw = (A.gl + (B.gl - A.gl) * t) * SW;
+    // полусфера: днём цвета биома, ночью холодное серебристо-синее
+    const nkk = 1 - dayK; cHs.copy(baseHemS).lerp(nightHemS, nkk); cHg.copy(baseHemG).lerp(nightHemG, nkk);
+    if (nz < 1) { cHs.lerp(baseHemS, nkk * (1 - nz)); cHg.lerp(baseHemG, nkk * (1 - nz)); }
+    // луна: видна и светит ночью; к нулю у перехода солнце↔луна (elev ≈ −0.14)
+    const moonI = 1.0 * sstep(-0.14, -0.3, elev); vMoon = sstep(0.1, -0.12, elev);
+    vNk = nz < 1 ? nkk * nz : nkk;
+    if (vSunI >= moonI && elev > -0.14) { lightV.copy(sunV); if (lightV.y < 0.11) { lightV.y = 0.11; lightV.normalize(); } cLt.copy(cSun); vLightI = vSunI; }
+    else { lightV.copy(moonV); if (lightV.y < 0.4) { lightV.y = 0.4; lightV.normalize(); } cLt.copy(moonLight); vLightI = moonI; }
+    vShN = 0.05 + 0.11 * (1 - Math.min(1, lightV.y / 0.55));          // у низкого солнца — больший нормальный сдвиг тени (против полос на склонах)
+    lastDay = dayK;
   }
-  const sunOffset = new THREE.Vector3(60, 90, 40);
+  function setTime(tod) {
+    if (Math.abs(tod - lastTod) > 0.0002) { lastTod = tod; recompute(tod); }
+    skyU.top.value.copy(cTp); skyU.bot.value.copy(cHz); skyU.mid.value.copy(cMid); skyU.night.value = vNk; skyU.moonVis.value = vMoon; skyU.tw.value = vTw; skyU.sunCol.value.copy(cSun);
+    scene.background.copy(cHz); scene.fog.color.copy(cHz);
+    hemi.color.copy(cHs); hemi.groundColor.copy(cHg); hemi.intensity = vHemI; sun.color.copy(cLt); sun.intensity = vLightI; sun.shadow.normalBias = vShN;
+    return lightV;
+  }
+  // цель теневой камеры привязана к сетке текселей карты теней: тени не «плывут» и не мерцают, когда игрок идёт
+  const shR = new THREE.Vector3(), shU = new THREE.Vector3(), shUp = new THREE.Vector3(0, 1, 0);
+  function snapShadow(f, d) {
+    const hs = sun.shadow.camera.right, tex = (2 * hs) / (sun.shadow.mapSize.x || 2048);
+    shR.crossVectors(shUp, d).normalize(); shU.crossVectors(d, shR);
+    const a = Math.round(f.x * shR.x / tex + f.y * shR.y / tex + f.z * shR.z / tex) * tex, b = Math.round((f.x * shU.x + f.y * shU.y + f.z * shU.z) / tex) * tex, c = f.x * d.x + f.y * d.y + f.z * d.z;
+    sun.target.position.set(shR.x * a + shU.x * b + d.x * c, shR.y * a + shU.y * b + d.y * c, shR.z * a + shU.z * b + d.z * c);
+    sun.position.copy(sun.target.position).addScaledVector(d, 110); sun.updateMatrixWorld(); sun.target.updateMatrixWorld();
+  }
   // под водой: туман цвета толщи воды, ближе и темнее с глубиной; небо не видно
   const deepC = col3(cfg.deep || 0x1f6a84), uwC = new THREE.Color(), blackC = col3(0x02060c); let lastDay = 1, underNow = false;
   function underwater(cam) {
@@ -932,8 +990,7 @@ export function buildWorld(scene, biomeId, opts) {
   function update(cam, focus, t, dt, tod, wx, view) {
     sky.position.copy(cam); skyU.uTime.value = t; skyU.uCover.value = Math.min(0.92, CLOUD[0] + (wx || 0) * 0.3); skyU.uOct.value = Q.name === 'low' ? 3 : Q.name === 'med' ? 4 : 5;
     const dir = setTime(tod == null ? 0.4 : tod);
-    sunOffset.copy(dir).multiplyScalar(110);
-    sun.target.position.set(focus.x, focus.y, focus.z); sun.position.copy(sun.target.position).add(sunOffset);
+    snapShadow(focus, dir);
     const fogK = (cfg.fog || 1) * (1 - 0.35 * (wx || 0));
     scene.fog.far = Math.max(70, Q.view * fogK); scene.fog.near = scene.fog.far * 0.3;
     underwater(cam); causU.uTime.value = t;

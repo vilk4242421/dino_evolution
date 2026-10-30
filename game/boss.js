@@ -18,7 +18,9 @@
     var st = Sim.statsFor(CF.OCEANS.indexOf(biome) >= 0 ? 'mosa' : 'carn', req, {});
     var dps = st.dmg / st.atkCd * 2, sw = 0, sd = 0;
     def.attacks.forEach(function (a) { var w = a.wt || 1; sw += w; sd += w * (a.dmg || 0); });
-    return { hp: Math.round(dps * BOSS_TUNE.time / 50) * 50, dmgK: BOSS_TUNE.hit * st.hp / Math.max(1, sd / Math.max(1, sw)) };
+    // сила суши растёт плавно с уровнем открытия (подобрано симуляцией боёв: HP ×1.2→4.8, урон ×1.5→0.9)
+    var p = Math.min(1, Math.max(0, (req - 10) / 20)), land = CF.OCEANS.indexOf(biome) < 0, hk = land ? 1.2 + 3.6 * p : 1, dk = land ? (1.5 - 0.6 * p) * ({ snow: 0.7, mountain: 0.85, desert: 0.5, swamp: 0.5, volcano: 0.65 }[biome] || 1) : 1;
+    return { hp: Math.round(dps * BOSS_TUNE.time * hk / 50) * 50, dmgK: BOSS_TUNE.hit * dk * st.hp / Math.max(1, sd / Math.max(1, sw)) };
   };
   RP.makeBoss = function (bossId, mult) {
     var def = CF.BOSSES[bossId], W = this.W, nm = this.mode === 'rush' ? null : this.bossNorm(bossId, this.biome), hp0 = nm ? nm.hp : def.hp;
@@ -151,9 +153,10 @@
   };
   RP.bossSummon = function (b, archId, n, delay) {
     var self = this, arch = ARCH[archId];
+    if (arch.water && !this.W.ocean) { arch = ARCH.croc; archId = 'croc'; }       // водные помощники на суше появлялись под землёй — вместо них наземный вид
     for (var i = 0; i < n; i++) {
       var a = this.rng() * 6.283, d = 8 + this.rng() * 6, x = Math.cos(a) * d, z = Math.sin(a) * d;
-      var lv = arch.lv[0];
+      var req = CF.BOSS_LEVEL[this.biome] || arch.lv[0], lv = clamp(req - 2, arch.lv[0], arch.lv[1]);     // помощники — по уровню, на котором открывается босс
       var m = this.makeEnt(arch, x, z, lv, { team: 'e', hpMult: 0.5, dmgMult: 0.6 });
       m.boss = false; m.fromBoss = true; m.target = null; m.home = { x: 0, z: 0 };
       m.xpNone = true;

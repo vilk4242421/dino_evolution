@@ -364,7 +364,7 @@ console.log('16. Ульты');
   ok(!e || pa.ult >= CONFIG_ULT_HIT(), 'удар копит заряд ульты');
   pa.ult = 100; rm.action(pa, { a: 'x' }); ok(pa.ultT > rm.t, 'ярость зверя включила таймер');
 }
-function CONFIG_ULT_HIT() { return 4; }
+function CONFIG_ULT_HIT() { return 2.8; }
 
 console.log('17. Питомцы');
 {

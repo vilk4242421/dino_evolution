@@ -144,7 +144,7 @@
     var maxT = CF.cumXp(CF.MAX_LEVEL);
     var before = pr.level;
     if (p.stats && p.stats.fx.xp) amount *= 1 + p.stats.fx.xp / 100;
-    if (pr.pet === 'firefly') amount *= 1.1;
+    if (pr.pet === 'firefly') amount *= 1.05;
     pr.totalXp = Math.min(maxT, pr.totalXp + Math.round(amount));
     var lv = CF.levelFromTotal(pr.totalXp);
     if (lv > pr.level) {
@@ -341,12 +341,12 @@
     if (dst.kind === 'p' && dst.gone) return 0;
     if (!o.force && !this.hostile(src, dst)) return 0;
     var amount = raw;
-    if (src.kind === 'p' && src.buffK === 'dmg' && src.buffT > this.t) amount *= 1.25;
-    if (src.kind === 'p' && src.scentT > this.t) { var dmh = dst.mhp || (dst.stats && dst.stats.hp) || 0; if (dmh && dst.hp < dmh * 0.5) amount *= 1.3 + 0.05 * (src.stats.ranks.scent | 0); }   // нюх крови: бьёт раненых сильнее
-    if (src.kind === 'p' && src.ultT > this.t) amount *= src.ultMul;     // золотой плод: +25% урона
+    if (src && src.kind === 'p' && src.buffK === 'dmg' && src.buffT > this.t) amount *= 1.25;
+    if (src && src.kind === 'p' && src.scentT > this.t) { var dmh = dst.mhp || (dst.stats && dst.stats.hp) || 0; if (dmh && dst.hp < dmh * 0.5) amount *= 1.3 + 0.05 * (src.stats.ranks.scent | 0); }   // нюх крови: бьёт раненых сильнее
+    if (src && src.kind === 'p' && src.ultT > this.t) amount *= src.ultMul;     // золотой плод: +25% урона
     // баланс по уровням: боец выше уровнем бьёт заметно сильнее, ниже — намного слабее (1 ур. против 4 ур. = ×0.36 урона)
     var sl = this.lvOf(src), dl = this.lvOf(dst);
-    if (!o.force && src.kind === 'p' && dst.kind === 'e' && sl && dl && dl - sl >= CF.maxLvUp(dst)) { this.events.push(['h', dst.id, 0, 4]); return 0; }   // враг на 2+ уровня выше — не победить
+    if (!o.force && src && src.kind === 'p' && dst.kind === 'e' && sl && dl && dl - sl >= CF.maxLvUp(dst)) { this.events.push(['h', dst.id, 0, 4]); return 0; }   // враг на 2+ уровня выше — не победить
     if (sl && dl && !o.force) amount *= CF.lvFactor(sl, dl);
     // босс: чем выше уровень игрока относительно требуемого, тем легче бой (и наоборот)
     if (!o.force && this.mode !== 'duel') {
@@ -488,7 +488,7 @@
   RP.consume = function (p, kind, elv, exk) {
     var v = FOOD_VAL[kind] || FOOD_VAL.plant;
     p.food = Math.min(CF.FOOD_MAX, p.food + v[0]); p.hp = Math.min(p.stats.hp, p.hp + v[2] * (1 + p.profile.level * 0.15));
-    if (!p.bot) { p.profile.stats.eaten = (p.profile.stats.eaten | 0) + 1; this.questProgress(p, 'eat', 1); this.rareFind(p); this.gainXp(p, kind === 'plant' ? Math.max(3, Math.round(CF.xpForLevel(p.profile.level) / (20 + p.profile.level))) : Math.max(v[1], Math.round(Sim.xpReward({ xp: elv ? exk || 1 : 1 }, elv || p.profile.level, p.profile.level) * (elv ? 0.4 : 0.5)))); }   // растения: опыт растёт с уровнем (~30 кустов на уровень)
+    if (!p.bot) { p.profile.stats.eaten = (p.profile.stats.eaten | 0) + 1; this.questProgress(p, 'eat', 1); this.rareFind(p); this.gainXp(p, kind === 'plant' ? Math.max(3, Math.round(CF.xpBase(p.profile.level) / (20 + p.profile.level))) : Math.max(v[1], Math.round(Sim.xpReward({ xp: elv ? exk || 1 : 1 }, elv || p.profile.level, p.profile.level) * (elv ? 0.4 : 0.5)))); }   // растения: опыт растёт с уровнем (~30 кустов на уровень)
     this.events.push(['eat', p.id, kind]);
   };
   RP.initPlants = function () {

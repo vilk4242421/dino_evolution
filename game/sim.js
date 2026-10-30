@@ -870,7 +870,7 @@
   // награда растёт вместе с уровнем и не «застревает». Враг сильнее игрока — бонус, слабее — награда падает.
   function killsPerLevel(lv) { return 5 + 0.35 * Math.max(1, lv); }      // 1 ур. ≈ 5, 10 ≈ 8,5, 20 ≈ 12, 30 ≈ 15,5 побед на уровень
   function xpReward(arch, lv, plv) {
-    var base = CF.xpForLevel(Math.max(1, lv)) / killsPerLevel(lv) * (arch.xp || 1);
+    var base = CF.xpBase(Math.max(1, lv)) / killsPerLevel(lv) * (arch.xp || 1);
     var diff = plv - lv;
     var k = diff < 0 ? Math.min(1.5, 1 + 0.12 * -diff) : diff <= 2 ? 1 : Math.max(0.2, 1 - (diff - 2) * 0.1);
     return Math.max(1, Math.round(base * k));
@@ -878,7 +878,7 @@
   // доли уровня за разные источники (для любых режимов и биомов): еда, находки
   // доля находок падает с уровнем (на высоких нужно больше жемчужин): 1 ур. — 100%, 30 ур. — 60% базовой доли
   function findShare(plv, share) { return share * (1 - 0.4 * (Math.max(1, Math.min(30, plv)) - 1) / 29); }
-  function xpShare(plv, share) { return Math.max(1, Math.round(CF.xpForLevel(Math.max(1, plv)) * share)); }
+  function xpShare(plv, share) { return Math.max(1, Math.round(CF.xpBase(Math.max(1, plv)) * share)); }
 
   return {
     CONFIG: CF, clamp: clamp, smooth: smooth, lerp: lerp, wrap: wrap, mulberry32: mulberry32, vnoise: vnoise, fbm: fbm,

@@ -85,7 +85,7 @@ export const UI = {
   toast(msg, ms) { const t = $('toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(toastT); toastT = setTimeout(() => { t.style.display = 'none'; }, ms || 2600); },
   banner(msg, ms) { const b = $('banner'); b.textContent = msg; b.classList.add('on'); clearTimeout(bannerT); bannerT = setTimeout(() => b.classList.remove('on'), ms || 2200); },
   note(msg) { const n = document.createElement('div'); n.textContent = msg; $('notes').appendChild(n); setTimeout(() => n.remove(), 4600); while ($('notes').children.length > 5) $('notes').firstChild.remove(); },
-  closeAll, showMenu, openAbout, openChange, openEvo, openShop, openAch, openLeaders, openSettings, openPause, openPlayers, duelRequest,
+  closeAll, showMenu, openSea, openAbout, openChange, openEvo, openShop, openAch, openLeaders, openSettings, openPause, openPlayers, duelRequest,
   refreshOpen() { if (openName && openRender) openRender(); }
 };
 
@@ -147,10 +147,12 @@ async function authGo(reg) {
 }
 
 // ---------------------------------------------------------------- выбор биома и режима
+let forceWorld = null;
+function openSea(online) { forceWorld = 'sea'; openPlayPanel(!!online); }      // экран «Куда отправимся?» сразу на океане
 function openPlayPanel(online, codeFocus, soloMode) {
   const prof = online ? P.state.profile : P.state.local;
   // 1) игрок сам выбирает режим (суша / океан), 2) тип в этом режиме (у каждого типа свой уровень и эволюция), 3) локацию
-  let world = CONFIG.worldOf(prof.biome), cls = prof.cls;
+  let world = forceWorld || CONFIG.worldOf(prof.biome), cls = prof.cls; forceWorld = null;
   const bestType = w => { let b = null, bl = 0; for (const t of CONFIG.TYPES[w]) { const l = Sim.typeLevel(prof, t); if (l > bl) { bl = l; b = t; } } return b || CONFIG.TYPES[w][0]; };
   if (CONFIG.clsWorld(cls) !== world) cls = bestType(world);
   const landOk = Sim.landDone(prof), vp = () => Object.assign({}, prof, { kings: CONFIG.typeKings(prof, cls), landDone: landOk });      // у каждого типа динозавра своё прохождение

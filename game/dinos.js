@@ -26,6 +26,7 @@ import { CRN } from './crn.js';
 import { MOS } from './mos.js';
 import { PLIO } from './plio.js';
 import { SCP } from './scp.js';
+import { LZD } from './lzd.js';
 const CONFIG = window.CONFIG, Sim = window.Sim;
 const V3 = THREE.Vector3;
 const PI = Math.PI;
@@ -3535,14 +3536,46 @@ export function animPetJP(pm, dt) {
 // ---------------------------------------------------------------- питомцы: маленькие следующие за игроком существа
 let GROUND_FN = null;
 export function setPetGround(f) { GROUND_FN = f; }
+// ---- ящерка-питомец: скелетная модель с одним клипом (волнообразное движение хвоста и головы). Ходьба: клип ускоряется с ходом + шаги лапами поверх (диагональная походка)
+const _lzB64 = (b) => { const bin = atob(b), u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return u.buffer; };
+let _lzTex = null;
+function lizardModel() {
+  const D = LZD, n = D.n, geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(_lzB64(D.P)), 3)); geo.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(_lzB64(D.N)), 3)); geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(_lzB64(D.UV)), 2));
+  geo.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(Uint16Array.from(new Uint8Array(_lzB64(D.SI))), 4)); geo.setAttribute('skinWeight', new THREE.BufferAttribute(new Float32Array(_lzB64(D.SW)), 4));
+  geo.setIndex(new THREE.BufferAttribute(D.f32 ? new Uint32Array(_lzB64(D.F)) : new Uint16Array(_lzB64(D.F)), 1));
+  if (!_lzTex) { const img = new Image(); _lzTex = new THREE.Texture(img); _lzTex.flipY = false; _lzTex.colorSpace = THREE.SRGBColorSpace; _lzTex.anisotropy = 4; img.onload = () => { _lzTex.needsUpdate = true; }; img.src = 'data:image/jpeg;base64,' + D.tex; }
+  const bones = D.bones.map(b => { const o = new THREE.Bone(); o.name = b.n; o.position.fromArray(b.t); o.quaternion.fromArray(b.q); o.scale.fromArray(b.s); return o; });
+  D.bones.forEach((b, i) => { if (b.p >= 0) bones[b.p].add(bones[i]); });
+  const ibm = new Float32Array(_lzB64(D.IBM)), inv = D.joints.map((j, k) => new THREE.Matrix4().fromArray(ibm, k * 16));
+  const mesh = new THREE.SkinnedMesh(geo, new THREE.MeshStandardMaterial({ map: _lzTex, roughness: 0.85, metalness: 0 }));
+  mesh.add(bones[0]); mesh.updateMatrixWorld(true); mesh.bind(new THREE.Skeleton(D.joints.map(j => bones[j]), inv), new THREE.Matrix4());
+  mesh.frustumCulled = false; mesh.castShadow = true; mesh.receiveShadow = true;
+  const tracks = D.tr.map(t => { const nm = bones[t.b].name + '.' + (t.p === 'q' ? 'quaternion' : t.p === 'p' ? 'position' : 'scale'), T = new Float32Array(_lzB64(t.t)), V = new Float32Array(_lzB64(t.v)); return t.p === 'q' ? new THREE.QuaternionKeyframeTrack(nm, T, V) : new THREE.VectorKeyframeTrack(nm, T, V); });
+  const mixer = new THREE.AnimationMixer(bones[0]), act = mixer.clipAction(new THREE.AnimationClip('wiggle', -1, tracks));       // один клип: в покое идёт медленно, при ходьбе быстрее
+  act.play(); act.timeScale = 0.35;
+  const by = (nm) => bones[D.bones.findIndex(b => b.n === nm)], legs = [['thigh_l', 0, 1, 'calf_l', 'foot_l'], ['thigh_r', Math.PI, 1, 'calf_r', 'foot_r'], ['upperarm_l', Math.PI, 0.7, 'lowerarm_l', 'hand_l'], ['upperarm_r', 0, 0.7, 'lowerarm_r', 'hand_r']].map(([nm, ph, k, c, f]) => ({ b: by(nm), ph, k, c: by(c), f: by(f) }));
+  const sc = (1.0 / (D.bb[1][2] - D.bb[0][2])) * 1.05, wrap = new THREE.Group(), body = new THREE.Group(); body.scale.setScalar(sc); body.rotation.y = Math.PI / 2; body.add(mesh); wrap.add(body);
+  const qa = new THREE.Quaternion(), qb = new THREE.Quaternion(), qc = new THREE.Quaternion(), qd = new THREE.Quaternion(), ax = new THREE.Vector3(1, 0, 0), ay = new THREE.Vector3(0, 1, 0), az = new THREE.Vector3(0, 0, 1), S = { ts: 0.35, amp: 0, ph: 0, lt: null };
+  wrap.userData.update = (t, spd) => {
+    const dt = S.lt == null ? 0.016 : Math.min(0.1, Math.max(0, t - S.lt)); S.lt = t; S.sp = (S.sp || 0) + (spd - (S.sp || 0)) * (1 - Math.exp(-dt * 6));
+    const mv = Math.min(1, Math.max(0, (S.sp - 0.03) / 0.4)), k = 1 - Math.exp(-dt * 7), e = mv * mv * (3 - 2 * mv);
+    S.amp += (e - S.amp) * k; S.ts += ((0.35 + mv * 0.4) - S.ts) * k; S.ph += dt * (2.6 + Math.min(S.sp, 10) * 0.8);
+    act.timeScale = S.ts; mixer.update(dt);
+    if (S.amp > 0.002) { mesh.updateMatrixWorld(true);       // шаги: бедро качается вокруг боковой оси мира (перёд-назад), голень сгибается при переносе вперёд (стопа поднимается); левые/правые в противофазе
+      for (const L of legs) { const sn = Math.sin(S.ph + L.ph), th = -sn * 0.46 * S.amp * L.k; L.b.parent.getWorldQuaternion(qa); L.b.getWorldQuaternion(qb); qc.setFromAxisAngle(ax, th); L.b.quaternion.copy(qa).invert().multiply(qc).multiply(qb);
+        if (L.c) { L.b.updateMatrixWorld(true); const bn = Math.max(0, sn) * 0.7 * S.amp * L.k; L.c.parent.getWorldQuaternion(qa); L.c.getWorldQuaternion(qb); qc.setFromAxisAngle(ax, bn); L.c.quaternion.copy(qa).invert().multiply(qc).multiply(qb); }
+        if (L.f) { L.c.updateMatrixWorld(true); const fa = (Math.cos(S.ph + L.ph) * 0.55 - Math.max(0, sn) * 0.25) * S.amp * L.k; L.f.parent.getWorldQuaternion(qa); L.f.getWorldQuaternion(qb); qc.setFromAxisAngle(ax, fa); L.f.quaternion.copy(qa).invert().multiply(qc).multiply(qb); } } }
+  };
+  return wrap;
+}
+
 export function buildPet(id) {
   const g = new THREE.Group(), M = (c, e) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.8, emissive: e || 0x000000 });
   const sph = (r, m, x, y, z, sx, sy, sz) => { const o = new THREE.Mesh(new THREE.SphereGeometry(r, 12, 10), m); o.position.set(x, y, z); o.scale.set(sx || 1, sy || 1, sz || 1); g.add(o); return o; };
   const eye = (x, y, z) => sph(0.04, M(0x111111), x, y, z);
   if (id === 'lizard') {
-    const m = M(0x4fae4f); sph(0.22, m, 0, 0.18, 0, 1.5, 0.7, 0.8); sph(0.15, m, 0.3, 0.22, 0); eye(0.4, 0.28, 0.07); eye(0.4, 0.28, -0.07);
-    const tail = new THREE.Mesh(new THREE.ConeGeometry(0.1, 0.5, 8), m); tail.rotation.z = Math.PI / 2; tail.position.set(-0.45, 0.14, 0); g.add(tail);
-    for (const [x, z] of [[0.12, 0.14], [0.12, -0.14], [-0.12, 0.14], [-0.12, -0.14]]) sph(0.06, m, x, 0.06, z);
+    const lm = lizardModel(); g.add(lm); g.userData.anim = (t, spd) => lm.userData.update(t, spd); g.userData.noHop = true;
   } else if (id === 'chick') {
     const m = M(0xffd84a); sph(0.24, m, 0, 0.26, 0); sph(0.15, m, 0.12, 0.5, 0); eye(0.24, 0.55, 0.07); eye(0.24, 0.55, -0.07);
     const beak = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.12, 6), M(0xff9a2a)); beak.rotation.z = -Math.PI / 2; beak.position.set(0.3, 0.5, 0); g.add(beak);
@@ -3598,7 +3631,7 @@ export function buildPet(id) {
     const halo = new THREE.Mesh(new THREE.SphereGeometry(0.28, 12, 10), new THREE.MeshBasicMaterial({ color: 0xffe066, transparent: true, opacity: 0.25, depthWrite: false, blending: THREE.AdditiveBlending })); halo.position.y = 0.9; g.add(halo);
     const halo2 = new THREE.Mesh(new THREE.SphereGeometry(0.55, 12, 10), new THREE.MeshBasicMaterial({ color: 0xffe066, transparent: true, opacity: 0.1, depthWrite: false, blending: THREE.AdditiveBlending })); halo2.position.y = 0.9; g.add(halo2);
   }
-  g.userData.id = id; g.userData.fly = id === 'firefly' || id === 'seahorse' || id === 'puffer' || id === 'jelly'; g.userData.sk = id === 'hedgehog' ? 1.0 : id === 'crab' ? 0.8 : 0.55; g.userData.minS = id === 'hedgehog' ? 1.15 : 0.8; g.userData.ph = Math.random() * 6;
+  g.userData.id = id; g.userData.fly = id === 'firefly' || id === 'seahorse' || id === 'puffer' || id === 'jelly'; g.userData.sk = id === 'hedgehog' ? 1.0 : id === 'lizard' ? 0.7 : id === 'crab' ? 0.8 : 0.55; g.userData.minS = id === 'hedgehog' ? 1.15 : 0.8; g.userData.ph = Math.random() * 6;
   return g;
 }
 
@@ -3670,7 +3703,12 @@ export function makeActor({ nick, color, cls, level, evo, cosmetic, admin, king,
       let hd = face - Math.PI / 2; if (dd > 1.4 * ps) hd = Math.atan2(-dz, dx);   // dx,dz — куда ещё идти      // у цели смотрит туда же, куда игрок; издалека — по ходу бега
       let da = hd - pm.rotation.y; da = Math.atan2(Math.sin(da), Math.cos(da)); pm.rotation.y += da * (1 - Math.exp(-dt * 9));
       let wx = x + pm.position.x, wz = z + pm.position.z, gh = actor.groundFn ? actor.groundFn(wx, wz) : null, base = gh == null ? 0 : gh - y; if (U.id === 'crab') base = Math.max(base, -(1.2 * sc + 0.8));
-      let py;
+      let py, pitch = 0;
+      if (!U.fly && actor.groundFn && gh != null && U.id !== 'crab') {       // длинное тело на склоне: берём самую высокую из трёх точек (нос, центр, хвост) и наклоняем по уклону — не проваливается в гору
+        const hl = (U.id === 'lizard' ? 0.5 : 0.3) * ps, ry = pm.rotation.y, fx = Math.cos(ry) * hl, fz = -Math.sin(ry) * hl, h1 = actor.groundFn(wx + fx, wz + fz), h2 = actor.groundFn(wx - fx, wz - fz);
+        if (h1 != null && h2 != null) { base = Math.max(gh, h1, h2) - y + 0.02 * ps; pitch = Math.atan2(h1 - h2, 2 * hl) * 0.9; }
+      }
+      pm.rotation.z += (pitch - pm.rotation.z) * (1 - Math.exp(-dt * 10));
       if (U.fly) py = Math.max(base + 0.25 * ps, (U.id === 'firefly' ? 0.6 * sc : 0.25 * sc + 0.3 * ps) + Math.sin(t * 2.4 + U.ph) * 0.12 * ps);
       else py = base + (U.noHop ? 0 : Math.max(0, Math.sin(t * 9 + U.ph)) * Math.min(0.25, dd * 0.3));
       pm.position.y += (py - pm.position.y) * (1 - Math.exp(-dt * 18)); if (Math.abs(py - pm.position.y) > 3) pm.position.y = py;

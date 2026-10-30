@@ -255,7 +255,21 @@ function failSession(reason) {
   const wasWelcomed = S && S.welcomed; const msg = reason === 'replaced' ? T('replaced') : wasWelcomed ? T('conn_lost') : (reason === 'error' || reason === 'timeout') ? T('server_off') : T(reason, null);
   endSession(false); UI.toast(msg); UI.showMenu();
 }
+// плашка «Океан открыт» и кнопка выбора водного динозавра: показываются строго после всех роликов (корона, сюжет, портал)
+async function oceanOpened() {
+  const s0 = S; while (S === s0 && S && (S.coro || S.bc || S.warp)) await new Promise(r => setTimeout(r, 300));
+  if (!S || S !== s0 || !S.welcomed) return;
+  UI.banner(T('sea_open'), 5200); Audio.sfx('king');
+  const old = $('seabtn'); old && old.remove();
+  const w = document.createElement('div'); w.id = 'seabtn'; w.style.cssText = 'position:fixed;left:50%;bottom:22%;transform:translateX(-50%);z-index:60;display:flex;gap:6px;align-items:center;pointer-events:auto';
+  const b = document.createElement('button'); b.textContent = T('sea_pick'); b.style.cssText = 'padding:12px 18px;font:700 16px system-ui,sans-serif;border-radius:12px;border:2px solid #7fe3ff;background:rgba(10,60,90,.92);color:#e8fbff;cursor:pointer;box-shadow:0 4px 18px rgba(0,0,0,.5)';
+  const x = document.createElement('button'); x.textContent = '✕'; x.style.cssText = 'padding:8px 11px;font:700 14px system-ui,sans-serif;border-radius:10px;border:1px solid #555;background:rgba(20,20,20,.8);color:#ddd;cursor:pointer';
+  x.onclick = () => w.remove();
+  b.onclick = () => { w.remove(); const online = !!(S && S.o && S.o.online); ctl.leave(); UI.openSea(online); };
+  w.append(b, x); document.body.appendChild(w);
+}
 function endSession(silent) {
+  const sb = $('seabtn'); sb && sb.remove();
   if (!S) return;
   S.ending = true; try { Story.abort(); } catch (e) { /* ignore */ }
   if (S.decor) { try { S.decor.dispose(); } catch (e) { /* ignore */ } S.decor = null; }
@@ -428,7 +442,7 @@ function onSnapshot(m) {
   if (m.mp.hz) S.hz = { k: m.mp.hz, t: now };
   if (m.ev) for (const ev of m.ev) onEvent(ev, now);
 }
-function fxIcons(m) { m |= 0; return (m & 1 ? '🩸' : '') + (m & 2 ? '🧪' : '') + (m & 4 ? '🔥' : '') + (m & 8 ? '🐌' : ''); }      // значки эффектов (кровотечение, яд, горение, замедление) — у врагов в подписи, у игрока в HUD
+function fxIcons(m) { m |= 0; return (m & 1 ? '🩸' : '') + (m & 2 ? '🧪' : '') + (m & 4 ? '🔥' : '') + (m & 8 ? '❄️' : ''); }      // значки эффектов (кровотечение, яд, горение, замедление) — у врагов в подписи, у игрока в HUD
 function updateEnt(r, now) {
   let e = S.ents.get(r[0]);
   if (!e) {
@@ -695,7 +709,7 @@ function onEvent(ev, now) {
     }
     case 'k': { const e = S.ents.get(ev[1]); if (e) { const bs = (e.arch && e.arch.size) || 1; burst(e.group.position.x, e.group.position.y + 1, e.group.position.z, 0xffd35a, 18, 5); burst(e.group.position.x, e.group.position.y + 1, e.group.position.z, 0xc4180e, Math.round(8 + 10 * bs), 4.5, 3); if (bs >= 1) { ring(e.group.position.x, e.group.position.y, e.group.position.z, 0xffd35a, 2.5 * bs, 0.5); const sp = sndAt(e.group.position); Audio.sfx('thud', sp); Audio.sfx('die', Object.assign({ g: 0.7 }, sp)); } e.group.parent && e.group.parent.remove(e.group); S.ents.delete(ev[1]); } break; }
     case 'd': p = posOf(ev[1]); if (p) burst(p.x, p.y + 1, p.z, 0xcc3322, 22, 5); if (ev[1] === S.id) { Audio.sfx('die'); S.camShake = 0.6; } else if (p) Audio.sfx('die', sndAt(p)); break;
-    case 'lv': p = posOf(ev[1]); if (p) { ring(p.x, p.y, p.z, 0xffe066, 4, 0.9); burst(p.x, p.y + 1, p.z, 0xffe066, 24, 5); } if (ev[1] === S.id) { Audio.sfx('level'); UI.banner(T('lv_up', { n: ev[2] }), 2200); } break;
+    case 'lv': p = posOf(ev[1]); if (p) { ring(p.x, p.y, p.z, 0xffe066, 4, 0.9); burst(p.x, p.y + 1, p.z, 0xffe066, 24, 5); } if (ev[1] === S.id) { Audio.sfx('level'); UI.banner(T('lv_up', { n: ev[2] }), 2200); { const rq = CONFIG.BOSS_LEVEL[S.biome]; if (rq && ev[2] === rq && (S.profile.kings || []).indexOf(S.biome) < 0) setTimeout(() => UI.banner(T('boss_avail'), 2600), 2400); } } break;
     case 'xp': if (ev[1] === S.id) { p = posOf(ev[1]); if (p) floatText(p.x, p.y + 3.0, p.z, '+' + ev[2] + ' XP', '#9be37a', 0.8); } break;
     case 'eat': p = posOf(ev[1]); if (p) burst(p.x, p.y + 1.4, p.z, ev[2] === 'plant' ? 0x6ccf4a : 0xd9534f, 8, 2.5); if (p) Audio.sfx(ev[2] === 'plant' ? 'eat_plant' : 'eat_meat', ev[1] === S.id ? null : sndAt(p)); break;
     case 'b': { const pl = ev[1] === S.id ? S.actor : (S.players.get(ev[1]) || {}).actor; if (pl) pl.dino.userData.bite = 1; { const q = posOf(ev[1]); if (q) { const own = ev[1] === S.id, so = own ? null : sndAt(q, { g: 0.7 }); if (['carn', 'aqua'].indexOf(voiceOf(ev[1]).kind) < 0) Audio.sfx('swing', so); } } break; }   // у клыкастых: замах-шорох, затем хлопок челюстей в момент смыкания (≈0.25 с)
@@ -729,7 +743,7 @@ function onEvent(ev, now) {
     case 'burrow': { const e = S.ents.get(ev[1]); if (e) { e.burrowed = !!ev[2]; burst(e.group.position.x, e.group.position.y, e.group.position.z, 0xc9a25a, 24, 6); Audio.sfx('boom', sndAt(e.group.position, { ref: 20 })); } break; }
     case 'king': {
       p = posOf(ev[1]); if (p) { ring(p.x, p.y, p.z, 0xffd35a, 8, 1.4); burst(p.x, p.y + 2, p.z, 0xffd35a, 40, 8); }
-      if (ev[1] === S.id) { if (ev[3]) { Story.afterKing(ev[2], S.profile); Story.queue(() => startWarp()); } if (ev[3] || ev[4]) startCoro({ biome: ev[2], lord: ev[4], xp: ev[5], coins: ev[6] }); else { UI.banner(T('king_new', { b: TN(CONFIG.BIOME[ev[2]].n) }), 4200); Audio.sfx('king'); } }
+      if (ev[1] === S.id) { if (ev[3]) { Story.afterKing(ev[2], S.profile); Story.queue(() => startWarp()); const kk = new Set(CONFIG.allKings(S.profile)); kk.add(ev[2]); if (CONFIG.worldOf(ev[2]) === 'land' && CONFIG.worldList('land').every(b => kk.has(b))) Story.queue(() => oceanOpened()); } if (ev[3] || ev[4]) startCoro({ biome: ev[2], lord: ev[4], xp: ev[5], coins: ev[6] }); else { UI.banner(T('king_new', { b: TN(CONFIG.BIOME[ev[2]].n) }), 4200); Audio.sfx('king'); } }
       break;
     }
     case 'rev': { p = posOf(ev[1]); if (p) { ring(p.x, p.y, p.z, 0x6cff9a, 5, 1.0); burst(p.x, p.y + 1.2, p.z, 0x6cff9a, 28, 6, 4); floatText(p.x, p.y + 2.6, p.z, '❤', '#6cff9a', 1.6); } Audio.sfx('level'); if (ev[1] === S.id) UI.banner('❤ ' + T('rev_you'), 2600); break; }
@@ -1542,6 +1556,9 @@ function friendMark(g, x, y, r, info, bot, rot) {
 }
 const miniCv = $('mini-cv'), miniCtx = miniCv.getContext('2d');
 function drawMinimap() {
+  { const bb = $('mini-boss'), rq = CONFIG.BOSS_LEVEL[S.biome], pf = S.profile; let tx = '', ok = false;
+    if (rq && pf && !(S.W && S.W.duel)) { if ((pf.kings || []).indexOf(S.biome) >= 0) tx = T('boss_done'); else if (pf.level >= rq) { tx = T('boss_avail'); ok = true; } else tx = T('boss_need', { n: rq }); }
+    if (bb._t !== tx) { bb._t = tx; bb.textContent = tx; bb.style.display = tx ? 'block' : 'none'; } bb.classList.toggle('ok', ok); }
   const g = miniCtx, N = miniCv.width, c = N / 2, R = 160, k = c / R, w = S.world, me = S.me;
   g.clearRect(0, 0, N, N); g.save(); g.beginPath(); g.arc(c, c, c, 0, TWO_PI); g.clip(); g.fillStyle = '#0a1410'; g.fillRect(0, 0, N, N);
   g.translate(c, c); g.rotate(input.yaw);
@@ -1791,6 +1808,6 @@ $('menubtn').addEventListener('touchstart', e => { e.stopPropagation(); }, { pas
   $('loading').style.display = 'none'; try { localStorage.setItem('dino_seen', '1'); } catch (e) { /* ignore */ }
   requestAnimationFrame(frame);
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => { /* офлайн-кэш необязателен */ });
-  setPetGround((x, z) => { try { const w = S && S.world; if (w && w.meshH) return w.meshH(x, z); return S && S.W ? S.W.heightAt(x, z) : null; } catch (e) { return null; } });
-  window.__dino = { buildDino, buildPet, animPetJP, animateDino, Story, startCoro, startBcine, startWarp, get coro() { return S && S.coro; }, buildEnemy, animateEnemy, setOutline, setCrown, get S() { return S; }, get clock() { return clock; }, ctl, THREE, foodMesh, scene, renderer, Profile, input, camera, menu3d, menuSetDino };      // для отладки и автотестов
+  setPetGround((x, z) => { try { const w = S && S.world; if (w && w.meshH) return w.meshH(x, z) + (w.nestLift ? w.nestLift(x, z) : 0); return S && S.W ? S.W.heightAt(x, z) : null; } catch (e) { return null; } });
+  window.__dino = { oceanOpened, buildDino, buildPet, animPetJP, animateDino, Story, startCoro, startBcine, startWarp, get coro() { return S && S.coro; }, buildEnemy, animateEnemy, setOutline, setCrown, get S() { return S; }, get clock() { return clock; }, ctl, THREE, foodMesh, scene, renderer, Profile, input, camera, menu3d, menuSetDino };      // для отладки и автотестов
 })();
