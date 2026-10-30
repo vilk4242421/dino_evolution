@@ -27,6 +27,7 @@ import { MOS } from './mos.js';
 import { PLIO } from './plio.js';
 import { SCP } from './scp.js';
 import { LZD } from './lzd.js';
+import { CHICK } from './chick.js';
 const CONFIG = window.CONFIG, Sim = window.Sim;
 const V3 = THREE.Vector3;
 const PI = Math.PI;
@@ -3570,16 +3571,75 @@ function lizardModel() {
   return wrap;
 }
 
+// ---- птенец-питомец: скелетная модель (FBX, 27 костей) с одним клипом на 11,4 с. Из клипа берутся фрагменты: покой (поза кадра 0), «осмотр» (вставка в покой) и «клевок» (реакция на лечение, см. userData.heal).
+// Цикла ходьбы в файле нет — шаги, покачивание корпуса и головы наложены поверх процедурно (как у ящерки). Фрагменты ведутся вручную (время + вес), поэтому переходы — плавные и не зависят от частоты кадров.
+let _chTex = null, _chTr = null;
+function chickModel() {
+  const D = CHICK, geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(_lzB64(D.P)), 3)); geo.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(_lzB64(D.N)), 3)); geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(_lzB64(D.UV)), 2));
+  geo.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(Uint16Array.from(new Uint8Array(_lzB64(D.SI))), 4)); geo.setAttribute('skinWeight', new THREE.BufferAttribute(new Float32Array(_lzB64(D.SW)), 4));
+  geo.setIndex(new THREE.BufferAttribute(D.f32 ? new Uint32Array(_lzB64(D.F)) : new Uint16Array(_lzB64(D.F)), 1));
+  if (!_chTex) { const img = new Image(); _chTex = new THREE.Texture(img); _chTex.flipY = false; _chTex.colorSpace = THREE.SRGBColorSpace; _chTex.anisotropy = 4; img.onload = () => { _chTex.needsUpdate = true; }; img.src = 'data:image/jpeg;base64,' + D.tex; }
+  const bones = D.bones.map(b => { const o = new THREE.Bone(); o.name = b.n; o.position.fromArray(b.t); o.quaternion.fromArray(b.q); o.scale.fromArray(b.s); return o; });
+  D.bones.forEach((b, i) => { if (b.p >= 0) bones[b.p].add(bones[i]); });
+  const ibm = new Float32Array(_lzB64(D.IBM)), inv = D.joints.map((j, k) => new THREE.Matrix4().fromArray(ibm, k * 16));
+  const mesh = new THREE.SkinnedMesh(geo, new THREE.MeshStandardMaterial({ map: _chTex, roughness: 0.9, metalness: 0 }));
+  mesh.add(bones[0]); mesh.updateMatrixWorld(true); mesh.bind(new THREE.Skeleton(D.joints.map(j => bones[j]), inv), new THREE.Matrix4());
+  mesh.frustumCulled = false; mesh.castShadow = true; mesh.receiveShadow = true;
+  // фрагменты клипа: кадры [a, b] из D.clips режутся из полной дорожки (ключ на каждый кадр) и играют как отдельные действия с ручным временем
+  if (!_chTr) _chTr = D.tr.map(t => ({ b: t.b, p: t.p, T: new Float32Array(_lzB64(t.t)), V: new Float32Array(_lzB64(t.v)) }));
+  const mixer = new THREE.AnimationMixer(bones[0]);
+  const cut = (nm) => {
+    const [a, b] = D.clips[nm], tr = _chTr.map(t => { const k = t.p === 'q' ? 4 : 3, ts = new Float32Array(b - a + 1), vs = new Float32Array((b - a + 1) * k); for (let f = a; f <= b; f++) { ts[f - a] = (f - a) / D.fps; for (let j = 0; j < k; j++) vs[(f - a) * k + j] = t.V[f * k + j]; }
+      const pn = bones[t.b].name + '.' + (t.p === 'q' ? 'quaternion' : 'position'); return t.p === 'q' ? new THREE.QuaternionKeyframeTrack(pn, ts, vs) : new THREE.VectorKeyframeTrack(pn, ts, vs); });
+    const dur = (b - a) / D.fps, act = mixer.clipAction(new THREE.AnimationClip(nm, dur, tr)); act.play(); act.paused = true; act.setEffectiveWeight(0); return { act, dur, nm };
+  };
+  const C = { rest: cut('rest'), look: cut('look'), peck: cut('peck') };
+  const by = (nm) => bones[D.bones.findIndex(b => b.n === nm)], root = by('Root_M'), chest = by('Chest_M'), neck = by('Neck_M'), head = by('Head_M');
+  const legs = [['Hip_R', 'Knee_R', 'Ankle_R', 0], ['Hip_L', 'Knee_L', 'Ankle_L', Math.PI]].map(([h, k, a, ph]) => ({ h: by(h), k: by(k), a: by(a), ph }));
+  const sc = 0.72 / D.bb[1][1], wrap = new THREE.Group(), body = new THREE.Group(); body.scale.setScalar(sc); body.rotation.y = Math.PI / 2; mesh.position.set(0, -D.bb[0][1], -(D.bb[0][2] + D.bb[1][2]) / 2); body.add(mesh); wrap.add(body);   // перёд в файле +z → у питомцев +x; ступни на земле, центр по длине
+  const AX = new THREE.Vector3(1, 0, 0), qp = new THREE.Quaternion(), qr = new THREE.Quaternion(), sm = (u) => u <= 0 ? 0 : u >= 1 ? 1 : u * u * (3 - 2 * u);
+  const swing = (b, th) => { qp.identity(); for (let o = b.parent; o && o.isBone; o = o.parent) qp.premultiply(o.quaternion); qr.setFromAxisAngle(AX, th); b.quaternion.premultiply(qp).premultiply(qr).premultiply(qp.invert()); };      // поворот кости вокруг боковой оси птенца (ось x модели) независимо от её собственных осей
+  const S = { lt: null, sp: 0, amp: 0, ph: 0, still: 0, next: 2 + Math.random() * 3, L: [] };
+  const ob = [root, neck, head]; for (const L of legs) ob.push(L.h, L.k, L.a);
+  const clean = ob.map(b => ({ q: b.quaternion.clone(), p: b.position.clone() }));       // значения костей «как от клипа», без наложенных шагов: AnimationMixer не пишет кость, если значение из клипа не изменилось за кадр, и наложение накапливалось бы
+  const play = (c, speed, fin, fout) => { if (S.L.some(l => l.c === c)) return; for (const l of S.L) l.kill = true; S.L.push({ c, tl: 0, sp: speed, fin, fout, ko: 1, kill: false }); };      // новый фрагмент вытесняет прежний: тот плавно гаснет
+  wrap.userData.heal = () => play(C.peck, 1, 0.14, 0.3);
+  wrap.userData.update = (t, spd) => {
+    const dt = S.lt == null ? 0.016 : Math.min(0.1, Math.max(0, t - S.lt)); S.lt = t;
+    S.sp += (spd - S.sp) * (1 - Math.exp(-dt * 6)); const mv = Math.min(1, Math.max(0, (S.sp - 0.03) / 0.4)), k = 1 - Math.exp(-dt * 8);
+    S.amp += (mv * mv * (3 - 2 * mv) - S.amp) * k; S.ph += dt * (7 + Math.min(S.sp, 12) * 0.9) * (0.3 + 0.7 * S.amp);       // амплитуда шага плавно растёт и затухает; фаза идёт всегда — остановка без рывка
+    if (mv > 0.05) { S.still = 0; for (const l of S.L) if (l.c === C.look) l.kill = true; }       // осмотр — только на месте; с началом ходьбы гаснет
+    else if (!S.L.length && (S.still += dt) > S.next) { play(C.look, 1, 0.3, 0.4); S.still = 0; S.next = 3.5 + Math.random() * 4.5; }
+    let ws = 0;
+    for (let i = S.L.length - 1; i >= 0; i--) {
+      const l = S.L[i]; l.tl += dt * l.sp; if (l.kill) l.ko -= dt / 0.2;
+      if (l.tl >= l.c.dur || l.ko <= 0) { l.c.act.setEffectiveWeight(0); S.L.splice(i, 1); continue; }
+      const w = sm(l.tl / l.fin) * sm((l.c.dur - l.tl) / l.fout) * sm(l.ko); l.c.act.time = l.tl; l.c.act.setEffectiveWeight(w); ws += w;
+    }
+    C.rest.act.time = 0; C.rest.act.setEffectiveWeight(Math.max(0.001, 1 - ws));
+    ob.forEach((b, i) => { b.quaternion.copy(clean[i].q); b.position.copy(clean[i].p); });      // убрать прошлое наложение, затем миксер, затем снять чистое значение
+    mixer.update(dt);
+    ob.forEach((b, i) => { clean[i].q.copy(b.quaternion); clean[i].p.copy(b.position); });
+    // поверх клипа: дыхание, шаги (бёдра враскачку, колени поджимаются при переносе, стопы держатся ровно), покачивание корпуса и «клевок» головой на каждый шаг
+    chest.scale.setScalar(1 + 0.014 * Math.sin(t * 2.4));
+    if (S.amp > 0.002) {
+      const A = S.amp;
+      for (const L of legs) { const sn = Math.sin(S.ph + L.ph), thh = -0.55 * A * sn, thk = 0.8 * A * Math.max(0, Math.cos(S.ph + L.ph)); swing(L.h, thh); swing(L.k, thk); swing(L.a, -(thh + thk) * 0.9); }
+      root.position.y += (Math.sin(S.ph * 2 + 0.6) * 0.14 - 0.05) * A; const hb = Math.sin(S.ph * 2 + 1.2) * 0.1 * A; swing(neck, hb); swing(head, -hb * 0.6);
+    }
+  };
+  return wrap;
+}
+
 export function buildPet(id) {
   const g = new THREE.Group(), M = (c, e) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.8, emissive: e || 0x000000 });
   const sph = (r, m, x, y, z, sx, sy, sz) => { const o = new THREE.Mesh(new THREE.SphereGeometry(r, 12, 10), m); o.position.set(x, y, z); o.scale.set(sx || 1, sy || 1, sz || 1); g.add(o); return o; };
   const eye = (x, y, z) => sph(0.04, M(0x111111), x, y, z);
   if (id === 'lizard') {
     const lm = lizardModel(); g.add(lm); g.userData.anim = (t, spd) => lm.userData.update(t, spd); g.userData.noHop = true;
-  } else if (id === 'chick') {
-    const m = M(0xffd84a); sph(0.24, m, 0, 0.26, 0); sph(0.15, m, 0.12, 0.5, 0); eye(0.24, 0.55, 0.07); eye(0.24, 0.55, -0.07);
-    const beak = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.12, 6), M(0xff9a2a)); beak.rotation.z = -Math.PI / 2; beak.position.set(0.3, 0.5, 0); g.add(beak);
-    sph(0.1, m, -0.05, 0.3, 0.2, 1.4, 0.5, 0.5); sph(0.1, m, -0.05, 0.3, -0.2, 1.4, 0.5, 0.5);
+  } else if (id === 'chick') {      // птенец: скелетная модель из FBX (см. chickModel)
+    const cm = chickModel(); g.add(cm); g.userData.anim = (t, spd) => cm.userData.update(t, spd); g.userData.heal = () => cm.userData.heal(); g.userData.noHop = true;
   } else if (id === 'hedgehog') {      // внутренний id прежний (чтобы не сломать сохранения); сейчас это скорпион-страж (Sketchfab, чёрный; скелет и клипы idle/walk/areaAttack)
     const rig = jpModel(SCP, { H: 1.0, foot: 0.08, pal: palette(0x202020), q: 0.6 });
     const wrap = new THREE.Group(); wrap.rotation.y = Math.PI / 2; wrap.add(rig.root); g.add(wrap);      // у скелетных моделей перёд = +z, у питомцев — +x
