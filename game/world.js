@@ -4,7 +4,8 @@ import * as THREE from 'three';
 import { BiomeKit } from './biomekit.js';
 import { DinoNest } from './dinonest.js';
 import { Tree } from './treekit.js';
-BiomeKit.uniforms.uTramp.value = Tree.tramp;   // одни и те же пятна «примятия» для травы, деревьев и водорослей
+import { EnvKit, WIND } from './envkit.js';
+BiomeKit.uniforms.uTramp.value = Tree.tramp; BiomeKit.uniforms.uTrampV.value = Tree.trampV;   // одни и те же пятна «примятия» для травы, деревьев и водорослей
 BiomeKit.setLite(true);   // в игре без микродеталей (иголки 2 мм не видны), меньше полигонов
 if (typeof window !== "undefined") window.__BK = BiomeKit;   // для отладки
 const CONFIG = window.CONFIG, Sim = window.Sim;
@@ -204,29 +205,31 @@ function rockGeometry(biome, rc) {
 const BLADES = {
   forest:  { pal: null, mult: 1, h: 1 },
   swamp:   { pal: ['#4d5e2a', '#5f6f32', '#3f4f25', '#6e7a3a'], mult: 0.85, h: 1.1 },
-  mountain:{ pal: ['#7b8a45', '#8c9a50', '#6a7a3c', '#a3a85a'], mult: 0.6, h: 0.8 },
-  snow:    { pal: ['#a3a272', '#b2b182', '#8c8b5e', '#c2bd92'], mult: 0.4, h: 0.75 },
-  desert:  { pal: ['#b9a864', '#c9b873', '#a89a58', '#d6c78a'], mult: 0.32, h: 0.85 },
-  volcano: { pal: ['#3a3a36', '#4a4640', '#2f2f2c', '#5a4a3a'], mult: 0.35, h: 0.8 }
+  mountain:{ pal: ['#7b8a45', '#8c9a50', '#6a7a3c', '#a3a85a'], mult: 0.35, h: 0.8 },
+  snow:    { pal: ['#a3a272', '#b2b182', '#8c8b5e', '#c2bd92'], mult: 0.14, h: 0.75 },
+  desert:  { pal: ['#b9a864', '#c9b873', '#a89a58', '#d6c78a'], mult: 0.1, h: 0.85 },
+  volcano: { pal: ['#3a3a36', '#4a4640', '#2f2f2c', '#5a4a3a'], mult: 0.1, h: 0.8 }
 };
-const BLADE_Q = { high: { R: 32, n: 560 }, med: { R: 23, n: 400 }, low: { R: 15, n: 230 } };
+// трава — пучки по 10 травинок (envkit.grassClump): n — пучков на клетку 6×6 м вблизи (дальше половина), R — радиус газона вокруг камеры
+const BLADE_Q = { high: { R: 34, n: 430 }, med: { R: 26, n: 320 }, low: { R: 17, n: 210 } };
 // ---------- растения BiomeKit по биомам: [вид, вес, масштаб] ----------
 const KIT = {
   // лес: деревья, трава и кусты — из tree.js (дуб и берёза с корой и листьями, травинки, кусты); папоротник, цветы и грибы — BiomeKit
-  forest:   { tree: [['oak', 3, 0.8], ['birch', 2, 0.8]], blades: BLADES.forest, trees: [['oak', 3, 1.45], ['birch', 2, 1.4]], cover: [['@bush', 14, 1.15], ['fern', 20, 1.7], ['fern', 8, 2.3]], water: [['water_lily', 1, 1.7]], under: [['seagrass', 1, 1.5]] },
-  snow:     { blades: BLADES.snow, trees: [['spruce', 1, 1.3]], cover: [['dry_grass', 60, 1.7], ['snowdrop', 10, 1.7], ['frost_shrub', 8, 1.5], ['juniper', 6, 1.5], ['lichen', 8, 1.6]], under: [['seagrass', 1, 1.3]] },
-  mountain: { blades: BLADES.mountain, trees: [['mountain_pine', 1, 2.1]], cover: [['alpine_grass', 60, 1.7], ['moss_campion', 12, 1.7], ['gentian', 10, 1.7], ['edelweiss', 6, 1.7], ['rhododendron', 4, 1.5]], under: [['seagrass', 1, 1.3]] },
-  desert:   { blades: BLADES.desert, trees: [['cactus', 2, 1.6], ['prickly_pear', 1, 1.8]], cover: [['desert_grass', 60, 1.7], ['agave', 10, 1.5], ['barrel_cactus', 6, 1.6], ['tumbleweed', 6, 1.5]], water: [['water_lily', 1, 1.7]], under: [['seagrass', 1, 1.4]] },
-  swamp:    { blades: BLADES.swamp, trees: [['mangrove', 3, 1.3], ['willow', 2, 1.55]], cover: [['sedge', 55, 1.7], ['cattail', 14, 1.5], ['hummock', 8, 1.6]], water: [['water_lily', 1, 1.9]],
-              under: [['kelp', 2, 0.9], ['seagrass', 5, 1.5], ['branch_coral', 2, 1.5], ['table_coral', 1, 1.6], ['tube_coral', 1, 1.5], ['brain_coral', 1, 1.5], ['sea_fan', 1, 1.5], ['anemone', 1, 1.6], ['sea_lettuce', 2, 1.6]] },
-  volcano:  { blades: BLADES.volcano, trees: [['charred_tree', 3, 1.3], ['magma_crystal', 1, 2.0]], cover: [['ash_grass', 60, 1.7], ['ember_shrub', 10, 1.5], ['fire_lily', 8, 1.6]] },
+  // «%вид» — присланные модели (game/envm.js через envkit.js): дуб, 4 берёзы, куст, папоротник; трава — пучки из текстур травинок
+  forest:   { tree: [['%oak', 3, 0.68], ['%birch', 3, 0.85]], blades: BLADES.forest, trees: [['oak', 3, 1.45], ['birch', 2, 1.4]], cover: [['%bush', 6, 1], ['%fern', 14, 1.05], ['%fern', 5, 1.35], ['%bluebell', 6, 1], ['%daisy', 6, 1]], water: [['water_lily', 1, 1.7]], under: [['%seagrass', 1, 1]] },
+  snow:     { blades: BLADES.snow, tree: [['%snowtree', 3, 1], ['%juniper', 1, 1]], trees: [['spruce', 1, 1.3]], cover: [['dry_grass', 60, 1.7], ['%snowdrop', 10, 1.2], ['%snowbush', 8, 1], ['lichen', 8, 1.6]], under: [['%seagrass', 1, 1]] },
+  mountain: { blades: BLADES.mountain, tree: [['%mpine', 1, 1]], trees: [['mountain_pine', 1, 2.1]], cover: [['alpine_grass', 60, 1.7], ['moss_campion', 12, 1.7], ['%gentian', 10, 1.3], ['edelweiss', 6, 1.7], ['%rhodo', 5, 1]], under: [['%seagrass', 1, 1]] },
+  desert:   { blades: BLADES.desert, tree: [['%saguaro', 1, 1]], trees: [['cactus', 2, 1.6], ['prickly_pear', 1, 1.8]], cover: [['desert_grass', 60, 1.7], ['%agave', 10, 1], ['%barrel', 6, 1.1], ['%tumbleweed', 6, 1], ['prickly_pear', 3, 1.4]], water: [['water_lily', 1, 1.7]], under: [['%seagrass', 1, 1]] },
+  swamp:    { blades: BLADES.swamp, tree: [['%mangrove', 3, 0.8], ['%willow', 2, 0.72]], trees: [['mangrove', 3, 1.3], ['willow', 2, 1.55]], cover: [['sedge', 55, 1.7], ['%cattail', 14, 1], ['hummock', 8, 1.6]], water: [['water_lily', 1, 1.9]],
+              under: [['%kelpm', 2, 0.9], ['%seagrass', 5, 1], ['%staghorn', 2, 1], ['table_coral', 1, 1.6], ['%tube', 1, 1], ['%brain', 1, 1], ['%fan', 1, 1], ['%anemone', 1, 1], ['sea_lettuce', 2, 1.6]] },
+  volcano:  { blades: BLADES.volcano, trees: [['charred_tree', 3, 1.3], ['%crystal', 1, 1.2]], cover: [['ash_grass', 60, 1.7], ['ember_shrub', 10, 1.5], ['fire_lily', 8, 1.6], ['%lavarock', 5, 1]] },
   // океан: на островке — трава у гнезда; на дне — кораллы, водоросли, актинии (набор BiomeKit «Море»)
   reef:     { trees: [], cover: [['desert_grass', 30, 1.6], ['sedge', 8, 1.5]],
-              under: [['shells', 10, 1.2], ['urchin', 3, 1.4], ['starfish', 3, 1.5], ['branch_coral', 8, 1.7], ['table_coral', 4, 1.8], ['tube_coral', 4, 1.6], ['brain_coral', 5, 1.9], ['sea_fan', 4, 1.9], ['anemone', 4, 2.2], ['seagrass', 14, 1.7], ['sea_lettuce', 8, 1.9], ['kelp', 5, 1.1]] },
-  kelp:     { trees: [], cover: [['sedge', 30, 1.6]], under: [['shells', 5, 1.2], ['urchin', 3, 1.4], ['starfish', 3, 1.5], ['tube_coral', 2, 1.5], ['table_coral', 1, 1.6], ['kelp', 26, 1.1], ['seagrass', 14, 1.8], ['sea_lettuce', 9, 1.9], ['anemone', 2, 2.0], ['sea_fan', 1, 1.8]] },
-  arctic:   { trees: [], cover: [['lichen', 20, 1.6], ['dry_grass', 20, 1.6]], under: [['shells', 6, 1.2], ['urchin', 4, 1.4], ['starfish', 3, 1.5], ['tube_coral', 2, 1.5], ['seagrass', 9, 1.6], ['sea_lettuce', 6, 1.8], ['anemone', 3, 2.0], ['kelp', 8, 1.0], ['sea_fan', 1, 1.7]] },
-  vents:    { trees: [], cover: [['ash_grass', 20, 1.6]], under: [['shells', 4, 1.2], ['urchin', 3, 1.4], ['starfish', 3, 1.5], ['tube_coral', 3, 1.5], ['table_coral', 1, 1.6], ['anemone', 5, 2.2], ['sea_fan', 3, 1.9], ['seagrass', 5, 1.5], ['sea_lettuce', 3, 1.6]] },
-  abyss:    { trees: [], cover: [['sedge', 20, 1.5]], under: [['shells', 3, 1.2], ['urchin', 2, 1.4], ['sea_fan', 3, 2.0], ['anemone', 3, 2.2], ['brain_coral', 1, 1.8]] }
+              under: [['shells', 10, 1.2], ['%urchin', 3, 1], ['%starfish', 3, 1], ['%staghorn', 8, 1], ['table_coral', 4, 1.8], ['%tube', 4, 1], ['%brain', 5, 1], ['%fan', 4, 1], ['%anemone', 4, 1], ['%seagrass', 14, 1], ['sea_lettuce', 8, 1.9], ['%kelpm', 5, 1.1]] },
+  kelp:     { trees: [], cover: [['sedge', 30, 1.6]], under: [['shells', 5, 1.2], ['%urchin', 3, 1], ['%starfish', 3, 1], ['%tube', 2, 1], ['table_coral', 1, 1.6], ['%kelpm', 26, 1.1], ['%seagrass', 14, 1], ['sea_lettuce', 9, 1.9], ['%anemone', 2, 1], ['%fan', 1, 1]] },
+  arctic:   { trees: [], cover: [['lichen', 20, 1.6], ['dry_grass', 20, 1.6]], under: [['shells', 6, 1.2], ['%urchin', 4, 1], ['%starfish', 3, 1], ['%tube', 2, 1], ['%seagrass', 9, 1], ['sea_lettuce', 6, 1.8], ['%anemone', 3, 1], ['%kelpm', 8, 1.0], ['%fan', 1, 1]] },
+  vents:    { trees: [], cover: [['ash_grass', 20, 1.6]], under: [['%vent', 3, 1], ['shells', 4, 1.2], ['%urchin', 3, 1], ['%starfish', 3, 1], ['%tube', 3, 1], ['table_coral', 1, 1.6], ['%anemone', 5, 1], ['%fan', 3, 1], ['%seagrass', 5, 1], ['sea_lettuce', 3, 1.6]] },
+  abyss:    { trees: [], cover: [['sedge', 20, 1.5]], under: [['shells', 3, 1.2], ['%urchin', 2, 1], ['%fan', 3, 1], ['%anemone', 3, 1], ['%brain', 1, 1]] }
 };
 // в каком наборе BiomeKit лежит растение (кувшинка — в «болоте», водоросли — в «море» и т.д.)
 let _pb = null;
@@ -288,13 +291,25 @@ export function buildWorld(scene, biomeId, opts) {
       void main(){ vec3 d = normalize(vP); float h = d.y; vec3 sd = normalize(sunDir);
         vec3 c = mix(bot, mid, smoothstep(-0.05, 0.32, h)); c = mix(c, top, smoothstep(0.18, 0.78, h));      // горизонт → середина → зенит (на закате — золото, оранжевый, багрянец, лиловый)
         float mu = max(dot(d, sd), 0.0);
-        c += sunCol * (pow(mu, 900.0) * 1.8 + pow(mu, 60.0) * 0.35 * (1.0 + tw) + pow(mu, 12.0) * 0.2 + pow(mu, 3.0) * 0.06) * (1.0 - night);
+        float sunK = smoothstep(-0.1, 0.02, sd.y);       // солнце светит, пока не ушло под горизонт (не зависит от «ночного» неба)
+        c += sunCol * (pow(mu, 60.0) * 0.3 * (1.0 + tw) + pow(mu, 12.0) * 0.2 + pow(mu, 3.0) * 0.06) * sunK;
+        { // солнечный диск: днём маленький бело-золотой, у горизонта крупнее и наливается оранжево-багровым; край темнее центра; корона и мягкие лучи; садится за линию горизонта
+          float up = smoothstep(-0.04, 0.45, sd.y), R = mix(0.05, 0.03, up), ang = sqrt(max(2.0 * (1.0 - dot(d, sd)), 0.0)), r = ang / R;
+          vec3 dcol = mix(vec3(1.0, 0.5, 0.2), mix(vec3(1.0, 0.72, 0.38), vec3(1.0, 0.97, 0.9), smoothstep(0.12, 0.45, sd.y)), smoothstep(-0.02, 0.16, sd.y));
+          float vis = sunK * smoothstep(-0.012, 0.012, h + R * 0.2);
+          float disc = smoothstep(1.0, 0.86, r) * (0.72 + 0.28 * sqrt(max(1.0 - r * r, 0.0)));
+          c = mix(c, dcol * mix(1.9, 1.5, up), disc * vis);
+          c += dcol * (exp(-r * 1.5) * 0.55 + exp(-r * 0.32) * 0.16) * (1.0 - disc) * vis;
+          vec3 tg = normalize(cross(vec3(0.0, 1.0, 0.0), sd) + vec3(1e-4)), bg = cross(sd, tg); float an = atan(dot(d, bg), dot(d, tg));
+          float ray = pow(vn(vec2(an * 7.0, uTime * 0.04)) * 0.6 + vn(vec2(an * 19.0 + 3.0, uTime * 0.07)) * 0.4, 3.0);
+          c += dcol * ray * smoothstep(1.0, 1.6, r) * exp(-r * 0.22) * 0.22 * (1.0 - uCover * 0.7) * vis;
+        }
         c += sunCol * tw * pow(mu, 2.2) * exp(-max(h, 0.0) * 3.2) * 0.55;                                   // зарево у горизонта в сторону солнца
         c = mix(c, c * vec3(1.0, 0.86, 0.92) + vec3(0.07, 0.02, 0.05) * tw, tw * smoothstep(0.0, 0.5, 1.0 - mu) * 0.5 * smoothstep(0.5, 0.0, h));   // розоватый пояс на противоположной стороне
         vec3 mdn = normalize(moonDir); float mm = dot(d, mdn);
         c = mix(c, bot * 1.08, pow(1.0 - max(h, 0.0), 6.0) * 0.5);            // дымка у горизонта
         vec3 g = floor(d * 140.0); float st = step(0.9965, h31(g)) * smoothstep(0.05, 0.4, h);
-        c += vec3(st) * night * (1.0 - uCover * 0.6) * (1.0 - clamp(pow(max(mm, 0.0), 40.0) * 3.0, 0.0, 1.0));
+        c += vec3(st) * night * smoothstep(-0.02, -0.16, sd.y) * (1.0 - uCover * 0.6) * (1.0 - clamp(pow(max(mm, 0.0), 40.0) * 3.0, 0.0, 1.0));
         if (moonVis > 0.001 && mm > 0.9) {       // луна: диск с «морями» и затемнением к краю, холодное свечение вокруг
           vec3 tg = normalize(cross(vec3(0.0, 1.0, 0.0), mdn)), bg = cross(mdn, tg); vec2 q = vec2(dot(d, tg), dot(d, bg)) / 0.05; float r = length(q);
           float disc = smoothstep(1.0, 0.94, r) * smoothstep(-0.03, 0.05, h);
@@ -433,7 +448,15 @@ export function buildWorld(scene, biomeId, opts) {
         float gFade = 1.0 - smoothstep(35.0, 110.0, length(vViewPosition));
         float gMacro = gfbm(vWP.xz * 0.045);
         diffuseColor.rgb *= mix(1.0, 0.8 + 0.4 * gMacro + 0.14 * (gvn(vWP.xz * 11.0) - 0.5), gFade * 0.9 + 0.1);
-        if (uKind > 0.5 && uKind < 1.5) { float rp2 = sin(dot(vWP.xz, vec2(0.82, 0.57)) * 3.6 + gfbm(vWP.xz * 0.3) * 8.0); diffuseColor.rgb *= 1.0 - 0.13 * (1.0 - abs(rp2)) * gFade; }`)
+        if (uKind > 0.5 && uKind < 1.5) { float rp2 = sin(dot(vWP.xz, vec2(0.82, 0.57)) * 3.6 + gfbm(vWP.xz * 0.3) * 8.0); diffuseColor.rgb *= 1.0 - 0.13 * (1.0 - abs(rp2)) * gFade; }
+        if (uKind < 0.5) {                                  // травяная земля: мелкие штрихи травинок разного наклона и оттенка там, где почва зелёная (на тропинках и проплешинах — земля)
+          vec2 q = vWP.xz; float ga = gvn(q * 0.7) * 6.2832; vec2 qr = vec2(q.x * cos(ga) - q.y * sin(ga), q.x * sin(ga) + q.y * cos(ga));
+          float gs = gvn(qr * vec2(46.0, 6.5)) * 0.55 + gvn(qr * vec2(19.0, 3.0)) * 0.25 + gvn(q * 31.0) * 0.2;
+          float green = clamp((diffuseColor.g - diffuseColor.r) * 7.0, 0.0, 1.0);
+          float gf2 = 1.0 - smoothstep(25.0, 80.0, length(vViewPosition));
+          diffuseColor.rgb *= mix(1.0, 0.7 + 0.55 * gs, green * (0.35 + 0.65 * gf2));
+          diffuseColor.rgb *= mix(vec3(1.0), vec3(0.9, 1.05, 0.82) * (0.9 + 0.2 * gvn(q * 0.11)), green * 0.6);
+        }`)
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
         { float gh = groundH(vWP, gSlope) * 0.05 * uBump * gFade; normal = perturbNormalArb(-vViewPosition, normal, vec2(dFdx(gh), dFdy(gh)), faceDirection); }`)
       .replace('#include <fog_fragment>', `
@@ -564,10 +587,16 @@ export function buildWorld(scene, biomeId, opts) {
     return im;
   }
   if (!isDuel) for (const r of W.rocks) chunkAt(r.x, r.z).rocks.push(r);
-  for (const ch of chunks) { if (ch && ch.rocks.length) ch.m.r = instanced(rockGeo, rockMat, ch.rocks, true, true); }
+  // камни из присланных моделей: лес и болото — камень со мхом, горы — валуны (вариант — по чанку); лавовые плиты — среди растений вулкана
+  const ROCK_M = { forest: 'mossrock', swamp: 'mossrock', mountain: 'rock2' }[W.biome];
+  const rockPs = ROCK_M && EnvKit.has(ROCK_M) ? Array.from({ length: EnvKit.variants(ROCK_M) }, (_, v) => EnvKit.parts(ROCK_M, v, 0, false)[0]) : null;
+  chunks.forEach((ch, i) => { if (!ch || !ch.rocks.length) return;
+    if (rockPs) { const pt = rockPs[i % rockPs.length]; ch.m.r = instanced(pt.geo, pt.mat, ch.rocks, true, true); ch.m.r.customDepthMaterial = pt.dm; }
+    else ch.m.r = instanced(rockGeo, rockMat, ch.rocks, true, true); });
 
   // ---------- растения BiomeKit: подробные вблизи, простые силуэты вдали ----------
   const kit = KIT[W.biome], kb = KIT_BIOME[W.biome];
+  const windA0 = (W.biome.length * 1.91 + 0.7) % 6.2832, windDir = new THREE.Vector2(1, 0);
   const kpMat = BiomeKit.plantMaterial(), kdMat = BiomeKit.depthMaterial();
   const VG = 24, GN = Math.ceil((MAP + 64) / VG);
   const gridOf = (items) => { const g = new Map(); for (const it of items) { const k = Math.floor((it.x + HALF + 32) / VG) * GN + Math.floor((it.z + HALF + 32) / VG); let a = g.get(k); if (!a) g.set(k, a = []); a.push(it); } return g; };
@@ -578,25 +607,34 @@ export function buildWorld(scene, biomeId, opts) {
   };
   const pickW = (list, v) => { let sum = 0; for (const e of list) sum += e[1]; let t = v * sum; for (let i = 0; i < list.length; i++) { t -= list[i][1]; if (t <= 0) return i; } return list.length - 1; };
   // набор «видов × вариантов»: у каждого свой InstancedMesh, заполняется только ближними экземплярами
-  function treeEntry(species, seed, lod, cap, shadow, si, v, sc) {
-    const b = Tree.bake(species, seed, lod), M = Tree.materials(species);
+  // присланная модель: части (кора/ветви, листва) — по InstancedMesh на часть; уровень детализации lod
+  function envEntry(name, v, lod, cap, shadow, si, sc, soft) {
+    const ps = EnvKit.parts(name, v, lod, soft), ims = ps.map(pt => { const x = new THREE.InstancedMesh(pt.geo, pt.mat, cap); x.count = 0; x.castShadow = !!shadow; x.receiveShadow = true; x.frustumCulled = false; x.customDepthMaterial = pt.dm; root.add(x); return x; });
+    return { si, v, sc, im: ims[0], im2: ims[1] || null, ex: ims.slice(2) };
+  }
+  function treeEntry(species, seed, lod, cap, shadow, si, v, sc, soft) {
+    if (species[0] === '%') return EnvKit.has(species.slice(1)) ? envEntry(species.slice(1), seed - 1, lod, cap, shadow, si, sc, soft) : null;
+    const b = Tree.bake(species, seed, lod), M = Tree.materials(species, soft);
     const im = new THREE.InstancedMesh(b.wood, M.bark, cap), im2 = new THREE.InstancedMesh(b.leaves, M.leaf, cap);
     for (const x of [im, im2]) { x.count = 0; x.castShadow = !!shadow; x.receiveShadow = true; x.frustumCulled = false; root.add(x); }
     im.customDepthMaterial = M.barkD; im2.customDepthMaterial = M.leafD;
     return { si, v, sc, im, im2 };
   }
   function treePoolOf(specs, variants, lod, cap, shadow) {
-    const pools = []; specs.forEach((sp, si) => { for (let v = 0; v < variants; v++) pools.push(treeEntry(sp[0], v + 1, lod, cap, shadow, si, v, sp[2])); });
+    const pools = []; specs.forEach((sp, si) => { for (let v = 0; v < variants; v++) { const e = treeEntry(sp[0], v + 1, lod, cap, shadow, si, v, sp[2]); if (e) pools.push(e); } });
     const bySV = {}; pools.forEach(p => { bySV[p.si + '_' + p.v] = p; });
     return { pools, get: (si, v) => bySV[si + '_' + v] || pools[0] };
   }
-  function kitPool(specs, variants, cap, shadow) {
+  const kpMatR = BiomeKit.plantMaterial(true), kdMatR = BiomeKit.depthMaterial(true);      // деревья — твёрдые: не гнутся от шагов
+  function kitPool(specs, variants, cap, shadow, rigid) {
     const pools = [];
     specs.forEach((sp, si) => { for (let v = 0; v < variants; v++) {
-      if (sp[0][0] === '@') { pools.push(treeEntry(sp[0].slice(1), v + 1, 0, cap, false, si, v, sp[2])); continue; }
+      if (sp[0][0] === '@') { pools.push(treeEntry(sp[0].slice(1), v + 1, 0, cap, false, si, v, sp[2], !rigid)); continue; }
+      if (sp[0][0] === '%' && !EnvKit.has(sp[0].slice(1))) continue;
+      if (sp[0][0] === '%') { pools.push(envEntry(sp[0].slice(1), v, v, cap, !!shadow || sp[0] === '%bush', si, sp[2], !rigid)); continue; }   // вариант 0 — подробный, 1 — облегчённый (реже листья)
       let geo; try { geo = BiomeKit.plantGeometry(plantBiome(sp[0], kb), sp[0], v + 1); } catch (e) { geo = null; }
       if (!geo) continue;
-      const im = new THREE.InstancedMesh(geo, kpMat, cap); im.count = 0; im.castShadow = !!shadow; im.receiveShadow = true; im.customDepthMaterial = kdMat; im.frustumCulled = false; root.add(im);
+      const im = new THREE.InstancedMesh(geo, rigid ? kpMatR : kpMat, cap); im.count = 0; im.castShadow = !!shadow; im.receiveShadow = true; im.customDepthMaterial = rigid ? kdMatR : kdMat; im.frustumCulled = false; root.add(im);
       pools.push({ si, v, sc: sp[2], im });
     } });
     const bySV = {}; pools.forEach(p => { bySV[p.si + '_' + p.v] = p; });
@@ -605,13 +643,13 @@ export function buildWorld(scene, biomeId, opts) {
   const m4 = new THREE.Matrix4(), q4 = new THREE.Quaternion(), p4 = new THREE.Vector3(), s4 = new THREE.Vector3(), ZERO = new THREE.Matrix4().makeScale(0, 0, 0);
   const setM = (im, i, it, sc, sy) => { q4.setFromAxisAngle(UP, it.rot); p4.set(it.x, it.y, it.z); s4.set(sc, sc * (sy || 1), sc); m4.compose(p4, q4, s4); im.setMatrixAt(i, m4); };
   let trees = null, cover = null, lilies = null, under = null, farTrees = null, midTrees = null, blades = null;
-  const NV = 3;
+  const NV = 4;
   if (!isDuel && kit) {
     // деревья: вид и вариант по случайному числу дерева
     trees = W.trees; trees.forEach((t, i) => { t.ksi = pickW(kit.tree || kit.trees, t.v); t.kv = Math.floor(((t.v * 9973) % 1) * NV); t.idx = i; });
     farTrees = new THREE.InstancedMesh(treeFar, treeMat, trees.length); trees.forEach((t, i) => setM(farTrees, i, t, t.s)); farTrees.instanceMatrix.needsUpdate = true; farTrees.computeBoundingSphere(); root.add(farTrees);
     midTrees = new THREE.InstancedMesh(treeNear, treeMat, Math.min(trees.length, 700)); midTrees.count = 0; midTrees.castShadow = true; midTrees.frustumCulled = false; root.add(midTrees);
-    const treePool = kit.tree ? null : kitPool(kit.trees, NV, 220, true), treeGrid = gridOf(trees);
+    const treePool = kit.tree ? null : kitPool(kit.trees, NV, 220, true, true), treeGrid = gridOf(trees);
     if (kit.tree) trees.tiers = [treePoolOf(kit.tree, NV, 0, 30, true), treePoolOf(kit.tree, NV, 1, 50, true), treePoolOf(kit.tree, NV, 2, 110, false)];
     // трава и кусты: точки по суше
     const [gMax, gDens] = GRASS_FILTER[W.biome] || [14, 1], grng = Sim.mulberry32(W.biome.length * 977 + 4242), N = Math.round(46000 * gDens), items = [];
@@ -643,7 +681,7 @@ export function buildWorld(scene, biomeId, opts) {
           const dn = kfbm(x * 0.03, z * 0.03, 2, 61); if (ur() > Math.max(0.08, Math.min(1, (dn + 0.15) * 1.6))) continue;
           if (Math.hypot(x, z) < ARENA - 2) continue;
         }
-        const v = ur(); let si = pickW(kit.under, v), sp = kit.under[si][0];
+        const v = ur(); let si = pickW(kit.under, v), sp = kit.under[si][0].replace('%', '').replace('kelpm', 'kelp');
         // ламинария дотягивается почти до поверхности: высота по глубине
         const sc = sp === 'kelp' ? (W.ocean ? Math.min(3.8, Math.max(0.6, dep / 9)) : dep < 3 ? 0.4 : 1) : 1;
         if (slp > 0.45 && sp !== 'kelp' && sp !== 'seagrass' && sp !== 'sea_lettuce') continue;   // твёрдые кораллы и ракушки — только на пологом дне
@@ -654,7 +692,7 @@ export function buildWorld(scene, biomeId, opts) {
     }
     trees.pool = treePool; trees.grid = treeGrid;
     if (kit.blades) {
-      const cap = 52000, im = new THREE.InstancedMesh(Tree.bladeGeo(), Tree.grassMaterial(), cap);
+      const cap = 46000, im = new THREE.InstancedMesh(EnvKit.grassClump(), EnvKit.grassMaterial(), cap);
       im.count = 0; im.frustumCulled = false; im.receiveShadow = true; im.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(cap * 3), 3); root.add(im);
       blades = { im, cells: new Map(), cap, q: '', mult: kit.blades.mult || 1, hmul: kit.blades.h || 1, pal: (kit.blades.pal || Tree.grassPalette).map(h => new THREE.Color(h)) };
     }
@@ -683,9 +721,9 @@ export function buildWorld(scene, biomeId, opts) {
   function fillPool(pool, list, fn) {
     for (const p of pool.pools) p.im.count = 0;
     if (!pool.pools.length) return;
-    for (const p of pool.pools) if (p.im2) p.im2.count = 0;
-    for (const it of list) { const p = pool.get(it.ksi, it.kv); if (!p) continue; const im = p.im; if (im.count >= im.instanceMatrix.count) continue; fn(im, im.count, it, p.sc); if (p.im2) { p.im2.setMatrixAt(im.count, m4); p.im2.count = im.count + 1; } im.count++; }
-    for (const p of pool.pools) { p.im.instanceMatrix.needsUpdate = true; if (p.im.instanceColor) p.im.instanceColor.needsUpdate = true; p.im.visible = p.im.count > 0; if (p.im2) { p.im2.instanceMatrix.needsUpdate = true; p.im2.visible = p.im2.count > 0; } }
+    for (const p of pool.pools) { if (p.im2) p.im2.count = 0; if (p.ex) for (const x of p.ex) x.count = 0; }
+    for (const it of list) { const p = pool.get(it.ksi, it.kv); if (!p) continue; const im = p.im; if (im.count >= im.instanceMatrix.count) continue; fn(im, im.count, it, p.sc); if (p.im2) { p.im2.setMatrixAt(im.count, m4); p.im2.count = im.count + 1; } if (p.ex) for (const x of p.ex) { x.setMatrixAt(im.count, m4); x.count = im.count + 1; } im.count++; }
+    for (const p of pool.pools) { p.im.instanceMatrix.needsUpdate = true; if (p.im.instanceColor) p.im.instanceColor.needsUpdate = true; p.im.visible = p.im.count > 0; if (p.im2) { p.im2.instanceMatrix.needsUpdate = true; p.im2.visible = p.im2.count > 0; } if (p.ex) for (const x of p.ex) { x.instanceMatrix.needsUpdate = true; x.visible = x.count > 0; } }
   }
   // травинки из tree.js: по клеткам 6×6 м, у каждой клетки свой постоянный набор (не мерцает при движении)
   const BC = 6, _bo = new THREE.Object3D();
@@ -698,10 +736,10 @@ export function buildWorld(scene, biomeId, opts) {
       if (Math.abs(x) > HALF - 6 || Math.abs(z) > HALF - 6) continue;
       const h = MH(x, z);
       if (h < W.waterY + 0.3 || Math.hypot(x, z) < ARENA - 1 || Math.hypot(x - W.nest.x, z - W.nest.z) < 8.5 || W.slopeAt(x, z) > 1.15) continue;
-      const patch = 0.82 + 0.45 * Tree.fbm2(x * 0.18 + 3, z * 0.18, 2, 11) * 1.6;
+      const patch = 0.97 + 0.3 * Tree.fbm2(x * 0.18 + 3, z * 0.18, 2, 11) * 1.6;      // газон почти сплошной, лишь местами реже
       if (pv > patch) continue;
-      _bo.position.set(x, h - 0.02, z); _bo.rotation.set(-0.15 + a1 * 0.3, a2 * 6.2832, -0.15 + a3 * 0.3);
-      _bo.scale.set((0.8 + s1 * 0.5) * 1.3, (0.25 + s2 * 0.45) * (0.7 + 0.5 * Math.min(1, patch)) * 0.95 * blades.hmul, 1); _bo.updateMatrix();
+      _bo.position.set(x, h - 0.03, z); _bo.rotation.set(-0.08 + a1 * 0.16, a2 * 6.2832, -0.08 + a3 * 0.16);
+      const gw = 0.85 + s1 * 0.5; _bo.scale.set(gw, (0.2 + s2 * 0.26) * (0.75 + 0.4 * Math.min(1, patch)) * blades.hmul, gw); _bo.updateMatrix();
       mats.push(..._bo.matrix.elements); tc.copy(blades.pal[Math.floor(cp * blades.pal.length)]).multiplyScalar(0.85 + cs * 0.3); cols.push(tc.r, tc.g, tc.b);
     }
     c = { m: new Float32Array(mats), c: new Float32Array(cols), n: cols.length / 3 };
@@ -718,7 +756,11 @@ export function buildWorld(scene, biomeId, opts) {
       list.push([d2, ix, iz]);
     }
     list.sort((a, b) => a[0] - b[0]);                       // ближние клетки первыми: при нехватке места пропадает дальняя трава
-    for (const [, ix, iz] of list) { const c = bladeCell(ix, iz); if (n + c.n > blades.cap) break; ma.set(c.m, n * 16); ca.set(c.c, n * 3); n += c.n; }
+    const RH = (R * 0.55) * (R * 0.55);
+    for (const [d2, ix, iz] of list) {                     // дальше половины радиуса — 60 % пучков (набор клетки случайный, редеет равномерно)
+      const c = bladeCell(ix, iz), k = d2 > RH ? Math.round(c.n * 0.6) : c.n; if (n + k > blades.cap) break;
+      ma.set(c.m.subarray(0, k * 16), n * 16); ca.set(c.c.subarray(0, k * 3), n * 3); n += k;
+    }
     im.count = n; im.instanceMatrix.needsUpdate = true; im.instanceColor.needsUpdate = true;
   }
   function refreshVeg(cx, cz) {
@@ -759,8 +801,39 @@ export function buildWorld(scene, biomeId, opts) {
   const barrier = new THREE.Mesh(new THREE.CylinderGeometry(ARENA - 1.6, ARENA - 1.6, 9, 48, 1, true), new THREE.MeshBasicMaterial({ color: 0xff4a2a, transparent: true, opacity: 0.16, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending }));
   barrier.position.y = (W.def.arenaY || 0) + 4.5; barrier.visible = false; root.add(barrier);
 
+  // водная арена: стена-«пузырь» от дна до поверхности, светящиеся кольца глубины (ближнее к игроку ярче), лучи по краю и маяк в центре —
+  // видно, где границы арены и на какой ты глубине
+  let seaAr = null;
+  function seaArena() {
+    if (seaAr) return seaAr;
+    const R = ARENA - 1.6, y0 = W.heightAt(0, 0) - 1, y1 = W.waterY - 0.25, h = y1 - y0, g = new THREE.Group(); root.add(g);
+    const add = (geo, col, op, y) => { const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: op, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending })); m.position.y = y; g.add(m); return m; };
+    const wall = add(new THREE.CylinderGeometry(R, R, h, 72, 1, true), 0x3ad8ff, 0.07, y0 + h / 2);
+    const rings = []; for (let i = 0; i < 5; i++) { const y = y0 + 1.5 + (h - 2.5) * i / 4, r = add(new THREE.TorusGeometry(R, 0.14, 6, 120), 0x8ff4ff, 0.4, y); r.rotation.x = Math.PI / 2; r.userData.y = y; rings.push(r); }
+    for (let i = 0; i < 16; i++) { const a = i / 16 * 6.2832, b = add(new THREE.CylinderGeometry(0.1, 0.1, h, 5, 1, true), 0x8ff4ff, 0.3, y0 + h / 2); b.position.x = Math.cos(a) * R; b.position.z = Math.sin(a) * R; }
+    const beam = add(new THREE.CylinderGeometry(0.5, 0.9, h, 16, 1, true), 0xffd36a, 0.14, y0 + h / 2);
+    const pad = add(new THREE.RingGeometry(1.6, 2.2, 48), 0xffd36a, 0.5, y0 + 1.05); pad.rotation.x = -Math.PI / 2;
+    seaAr = { update(t, py) {
+      wall.material.opacity = 0.06 + 0.02 * Math.sin(t * 1.3); beam.material.opacity = 0.12 + 0.05 * Math.sin(t * 2);
+      for (const r of rings) { const near = Math.max(0, 1 - Math.abs(r.userData.y - py) / 4); r.material.opacity = 0.28 + 0.5 * near + 0.08 * Math.sin(t * 2 + r.userData.y); r.material.color.setHex(near > 0.5 ? 0xfff2a0 : 0x8ff4ff); }
+    } };
+    return seaAr;
+  }
   function makePortal(pt, colorHex) {
     const g = new THREE.Group(); g.position.set(pt.x, pt.y, pt.z); g.rotation.y = -pt.ang + Math.PI / 2;
+    if (EnvKit.has('portal')) {        // присланная модель: каменная арка на помосте с лианами; плёнка портала — её же сетка, светится цветом биома
+      const ps = EnvKit.parts('portal', 0, 0, false), frame = ps.find(q => q.geo.attributes.color), sheet = ps.find(q => !q.geo.attributes.color);
+      const N = sheet.geo.attributes.normal, P = sheet.geo.attributes.position; let nx = 0, nz = 0, cx = 0, cz = 0;
+      for (let i = 0; i < P.count; i++) { nx += N.getX(i); nz += N.getZ(i); cx += P.getX(i); cz += P.getZ(i); }
+      cx /= P.count; cz /= P.count; const th = Math.atan2(-nx, nz), co = Math.cos(th), si = Math.sin(th);
+      const inner = new THREE.Group(); inner.rotation.y = th; inner.position.set(-(cx * co + cz * si), 0, -(-cx * si + cz * co)); g.add(inner);
+      const fm = new THREE.Mesh(frame.geo, frame.mat); fm.castShadow = true; fm.receiveShadow = true; fm.customDepthMaterial = frame.dm; inner.add(fm);
+      const mat = new THREE.MeshBasicMaterial({ color: colorHex, transparent: true, opacity: 0.55, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending });
+      inner.add(new THREE.Mesh(sheet.geo, mat));
+      if (!TOUCH_DEV) { const light = new THREE.PointLight(colorHex, 1.2, 22); light.position.y = 3.6; g.add(light); }
+      root.add(g);
+      return { group: g, film: new THREE.Object3D(), ring: null, mat };
+    }
     const stoneM = new THREE.MeshStandardMaterial({ color: 0x8a8a90, roughness: 0.9, bumpMap: detailTex('stone'), bumpScale: 1.5 });
     for (const sx of [-1, 1]) { const pil = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 0.95, 6.5, 14), stoneM); pil.position.set(sx * 3.3, 3.2, 0); pil.castShadow = true; g.add(pil); }
     const plinth = new THREE.Mesh(new THREE.BoxGeometry(9.4, 0.8, 3.2), stoneM); plinth.position.y = 0.05; plinth.receiveShadow = true; g.add(plinth);       // плита под колоннами — ровный цоколь
@@ -785,6 +858,7 @@ export function buildWorld(scene, biomeId, opts) {
     nest.position.set(W.nest.x, W.nest.y, W.nest.z); nest.scale.setScalar(NEST_S);
     const ec = new THREE.Color(); colorAt(W.nest.x + 14, W.nest.z, W.nest.y, UP, ec);
     nestKit = DinoNest.create({ seed: (cfg.seed % 997) + 3, layout: 'ring', eggs: 8, shell: NEST_SHELL[W.biome] || 'sand', diameter: 1.8, hatching: false, surroundings: true, groundR: 2.4, eggDetail: 30, edgeColor: ec.getHex() });
+    EnvKit.fitEggs(nestKit.eggs);
     nestKit.group.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
     nest.add(nestKit.group); root.add(nest);
   }
@@ -894,8 +968,8 @@ export function buildWorld(scene, biomeId, opts) {
   let Q = CONFIG.QUALITY.high;
   // примятая трава: до 14 пятен (x, высота, z, радиус) — динозавры и след за своим; значения читает шейдер травинок
   function setTramplers(list) {
-    const u = Tree.tramp; let i = 0;
-    for (; i < list.length && i < u.length; i++) u[i].set(list[i].x, 0, list[i].z, list[i].r);
+    const u = Tree.tramp, uv = Tree.trampV; let i = 0;       // (x, возраст касания, z, радиус) и скорость тела (для наклона по ходу и пружины)
+    for (; i < list.length && i < u.length; i++) { const q = list[i]; u[i].set(q.x, q.age || 0, q.z, q.r); uv[i].set(q.vx || 0, q.vz || 0, 0, 0); }
     for (; i < u.length; i++) u[i].w = 0;
   }
   function applyQuality(name) {
@@ -958,7 +1032,7 @@ export function buildWorld(scene, biomeId, opts) {
     lastDay = dayK;
   }
   function setTime(tod) {
-    if (Math.abs(tod - lastTod) > 0.0002) { lastTod = tod; recompute(tod); }
+    if (tod !== lastTod) { lastTod = tod; recompute(tod); }
     skyU.top.value.copy(cTp); skyU.bot.value.copy(cHz); skyU.mid.value.copy(cMid); skyU.night.value = vNk; skyU.moonVis.value = vMoon; skyU.tw.value = vTw; skyU.sunCol.value.copy(cSun);
     scene.background.copy(cHz); scene.fog.color.copy(cHz);
     hemi.color.copy(cHs); hemi.groundColor.copy(cHg); hemi.intensity = vHemI; sun.color.copy(cLt); sun.intensity = vLightI; sun.shadow.normalBias = vShN;
@@ -966,7 +1040,12 @@ export function buildWorld(scene, biomeId, opts) {
   }
   // цель теневой камеры привязана к сетке текселей карты теней: тени не «плывут» и не мерцают, когда игрок идёт
   const shR = new THREE.Vector3(), shU = new THREE.Vector3(), shUp = new THREE.Vector3(0, 1, 0);
-  function snapShadow(f, d) {
+  // направление тени обновляется ступеньками (раз в ~0,25°): солнце теперь движется плавно каждый кадр, и непрерывный поворот сетки текселей
+  // давал мелкое мерцание краёв теней (особенно на закате, когда тени длинные); ступенька в 0,25° незаметна, а дрожь пропадает
+  const shD = new THREE.Vector3(0, 1, 0); let shDInit = false;
+  function snapShadow(f, d0) {
+    if (!shDInit || shD.dot(d0) < Math.cos(0.0044)) { shD.copy(d0); shDInit = true; }
+    const d = shD;
     const hs = sun.shadow.camera.right, tex = (2 * hs) / (sun.shadow.mapSize.x || 2048);
     shR.crossVectors(shUp, d).normalize(); shU.crossVectors(d, shR);
     const a = Math.round(f.x * shR.x / tex + f.y * shR.y / tex + f.z * shR.z / tex) * tex, b = Math.round((f.x * shU.x + f.y * shU.y + f.z * shU.z) / tex) * tex, c = f.x * d.x + f.y * d.y + f.z * d.z;
@@ -1008,8 +1087,12 @@ export function buildWorld(scene, biomeId, opts) {
     }
     if (nestKit) nest.visible = Math.hypot(cam.x - W.nest.x, cam.z - W.nest.z) < 110;
     if (!vegAt || vegQ !== ((Q && Q.name) || 'high') || Math.hypot(focus.x - vegAt.x, focus.z - vegAt.z) > 5) refreshVeg(focus.x, focus.z);
-    BiomeKit.uniforms.uWind.value = ((cfg.weather === 'wind' || cfg.weather === 'dust') ? 1.5 : 0.9) + (wx || 0) * 0.8;
-    BiomeKit.update(t); Tree.wind = 0.7 + (wx || 0) * 0.8; Tree.update(t);
+    // ветер мира: одно направление для всего (деревья, кусты, трава, водоросли, частицы); медленно поворачивает (минуты), сила — от погоды
+    const wStr = ((cfg.weather === 'wind' || cfg.weather === 'dust') ? 1.5 : 0.9) + (wx || 0) * 0.8, wAng = windA0 + 0.45 * Math.sin(t / 170) + 0.12 * Math.sin(t / 41);
+    windDir.set(Math.cos(wAng), Math.sin(wAng));
+    WIND.uTime.value = t; WIND.uWind.value = wStr; WIND.uWindDir.value.copy(windDir);
+    BiomeKit.uniforms.uWind.value = wStr; BiomeKit.uniforms.uWindDir.value.copy(windDir);
+    BiomeKit.update(t); Tree.wind = 0.7 + (wx || 0) * 0.8; Tree.windDir.copy(windDir); Tree.update(t);
     if (lavaMat && lavaMat.normalMap) lavaMat.normalMap.offset.set(t * 0.012, t * 0.008);
     if (waterU) {
       waterU.uTime.value = t; waterU.uSunDir.value.copy(skyU.sunDir.value); waterU.uDay.value = lastDay;
@@ -1029,10 +1112,10 @@ export function buildWorld(scene, biomeId, opts) {
     wxLevel += ((wx || 0) - wxLevel) * Math.min(1, dt * 0.5);
     const active = Math.min(pCount, Math.round(pCount * (0.35 + 0.65 * wxLevel) * WX.n));
     pg.setDrawRange(0, active);
-    const windX = (cfg.weather === 'wind' || cfg.weather === 'dust') ? 3 + wxLevel * 9 : 0;
+    const windV = WX.sea ? 0 : (cfg.weather === 'wind' || cfg.weather === 'dust') ? 3 + wxLevel * 9 : 0.6 + wStr * 0.8, windX = windDir.x * windV, windZ = windDir.y * windV;   // снег, пыль, листья — по ветру
     for (let i = 0; i < active; i++) {
       const k = i * 3;
-      ppos[k] += (pvel[k] + windX + Math.sin(t + i) * 0.4) * dt; ppos[k + 1] += pvel[k + 1] * dt; ppos[k + 2] += (pvel[k + 2] + Math.cos(t * 0.8 + i) * 0.4) * dt;
+      ppos[k] += (pvel[k] + windX + Math.sin(t + i) * 0.4) * dt; ppos[k + 1] += pvel[k + 1] * dt; ppos[k + 2] += (pvel[k + 2] + windZ + Math.cos(t * 0.8 + i) * 0.4) * dt;
       const gh = W.heightAt(ppos[k] + focus.x, ppos[k + 2] + focus.z) - focus.y;
       if (WX.sea) {     // под водой: частицы между дном и поверхностью вокруг игрока
         const top = W.waterY - focus.y - 0.2;
@@ -1075,7 +1158,7 @@ export function buildWorld(scene, biomeId, opts) {
     // высота волны в точке (та же формула, что в шейдере воды): по ней динозавр качается на поверхности и не торчит над водой
     waveAt(x, z) { return waveH(x, z); },
     get underwater() { return underNow; },
-    sim: W, root, nest: W.nest, nestInfo, sun, minimap, minimapSize: MM, mapSize: SIZE, applyQuality, update, dispose, setTramplers, barrier, portalIn, portalNext,
+    sim: W, root, seaArena, nest: W.nest, nestInfo, sun, minimap, minimapSize: MM, mapSize: SIZE, applyQuality, update, dispose, setTramplers, barrier, portalIn, portalNext,
     setPortalNext(on) { if (portalNext) portalNext.group.visible = !!on; },
     get quality() { return Q; }
   };

@@ -15,7 +15,7 @@
     // --- сеть ---
     TICK_RATE: 25,            // тиков в секунду (сервер и фиксированный шаг клиента)
     MAX_ROOM: 4,              // игроков в комнате
-    DISCONNECT_KEEP_SEC: 10,  // сколько динозавр остаётся после отключения
+    DISCONNECT_KEEP_SEC: 25,  // сколько динозавр остаётся после отключения
     MAX_MSG_PER_SEC: 80,      // лимит сообщений от клиента
     TOKEN_DAYS: 90,
     AOI: 170,                 // радиус «интереса»: врагов дальше не рассылаем (м)
@@ -26,6 +26,7 @@
     SPEED_SCALE: 1 / 30,      // «скорость 180» = 6 м/с
     GRAVITY: 28,
     JUMP_V: 9.5,
+    FALL_MAX: 32,                   // предел скорости падения (м/с): с высоких уступов падение не разгоняется бесконечно
     SPRINT_MULT: 1.7,
     STAM_MAX: 100, STAM_DRAIN: 25, STAM_REGEN: 16,
     FOOD_MAX: 100, FOOD_DRAIN: 0.35,      // сытость в секунду (≈5 минут до нуля)
@@ -112,7 +113,7 @@
       // --- морские питомцы (отдельная колонка в магазине): поведение как у сухопутных
       seahorse: { sea: true, price: 450, ico: '🐴', n: { ru: 'Морской конёк', en: 'Seahorse' }, d: { ru: 'Ускоряет вас на 10 %.', en: 'Makes you 10% faster.' } },
       crab:     { sea: true, price: 350, ico: '🦀', n: { ru: 'Краб', en: 'Crab' }, d: { ru: 'Панцирь: вы получаете на 8 % меньше урона.', en: 'Shell: you take 8% less damage.' } },
-      puffer:   { sea: true, price: 600, ico: '🐡', n: { ru: 'Фугу', en: 'Pufferfish' }, d: { ru: 'Раздувается, когда здоровья меньше 25 %, и оглушает врагов вокруг на 1,2 с (раз в 45 с).', en: 'Puffs up below 25% health and stuns nearby enemies for 1.2 s (every 45 s).' } },
+      octopus:  { sea: true, price: 600, ico: '🐙', n: { ru: 'Осьминог', en: 'Octopus' }, d: { ru: 'Выпускает чернила, когда здоровья меньше 25 %, и оглушает врагов вокруг на 1,2 с (раз в 45 с).', en: 'Squirts ink below 25% health and stuns nearby enemies for 1.2 s (every 45 s).' } },
       jelly:    { sea: true, price: 700, ico: '🪼', n: { ru: 'Медуза', en: 'Jellyfish' }, d: { ru: 'Светится в глубине. При ударе по вам 12 % шанс оглушить напавшего на 0,7 с (раз в 12 с).', en: 'Glows in the deep. 12% chance when you are hit to stun the attacker for 0.7 s (every 12 s).' } }
     },
     // --- косметика (монеты) ---
@@ -202,7 +203,7 @@
   C.maxLvUp = function () { return 3; };
   C.ENEMIES = {
     compy:  E('compy', 'Компсогнат', 'Compy', { model: 'critter', color: 0x9bb36a, size: 0.55, hp: 12, dmg: 0, speed: 150, role: 'prey', drop: 'smeat', lv: [1, 6], xp: 0.45, tiny: true }),
-    bug:    E('bug', 'Стрекозы', 'Dragonflies', { model: 'bug', color: 0xbfe8ff, size: 0.35, hp: 3, dmg: 0, speed: 90, role: 'bug', drop: 'bug', lv: [1, 1], xp: 0.15, fly: true, tiny: true }),
+    bug:    E('bug', 'Стрекозы', 'Dragonflies', { model: 'bug', color: 0xbfe8ff, size: 0.35, hp: 3, dmg: 0, speed: 90, role: 'bug', drop: 'bug', lv: [1, 5], xp: 0.15, fly: true, tiny: true }),
     fish:   E('fish', 'Рыба', 'Fish', { model: 'fish', color: 0x6fb2d9, size: 0.5, hp: 8, dmg: 0, speed: 130, role: 'fish', drop: 'fish', lv: [1, 1], xp: 0.2, water: true, tiny: true }),
     raptor: E('raptor', 'Раптор', 'Raptor', { model: 'biped', color: 0xb5651d, size: 0.8, hp: 55, dmg: 9, speed: 190, role: 'hostile', aggro: 22, drop: 'meat', lv: [1, 9], xp: 1 }),
     stego:  E('stego', 'Стегозавр', 'Stegosaur', { model: 'quad', color: 0x7a9a4a, size: 1.2, hp: 140, dmg: 7, speed: 105, role: 'herd', drop: 'meat', lv: [3, 11], xp: 1.1, plates: true }),
@@ -210,7 +211,7 @@
     parasaur: E('parasaur', 'Паразавролофус', 'Parasaurolophus', { model: 'quad', color: 0x8f9a5a, size: 0.8, hp: 190, dmg: 8, speed: 115, role: 'herd', drop: 'meat', lv: [4, 11], xp: 1.25 }),
     hare:   E('hare', 'Снежный заяц', 'Snow hare', { model: 'critter', color: 0xeef3f7, size: 0.55, hp: 14, dmg: 0, speed: 160, role: 'prey', drop: 'smeat', lv: [8, 14], xp: 0.45, tiny: true }),
     frostwolf: E('frostwolf', 'Ледяной хищник', 'Frost stalker', { model: 'biped', color: 0x9fd0ee, size: 0.9, hp: 95, dmg: 13, speed: 200, role: 'hostile', aggro: 26, drop: 'meat', lv: [10, 16], xp: 1, slow: 0.35, pack: true }),
-    mammoth: E('mammoth', 'Шерстистый динозавр', 'Woolly dino', { model: 'quad', color: 0x8a6b4a, size: 1.6, hp: 300, dmg: 15, speed: 95, role: 'herd', drop: 'meat', lv: [11, 17], xp: 1.2, fur: true }),
+    mammoth: E('mammoth', 'Шерстистый мамонт', 'Woolly mammoth', { model: 'quad', color: 0x8a6b4a, size: 1.6, hp: 300, dmg: 15, speed: 95, role: 'herd', drop: 'meat', lv: [11, 17], xp: 1.2, fur: true }),
     goat:   E('goat', 'Горный козлик', 'Cliff goat', { model: 'critter', color: 0xb3a58a, size: 0.65, hp: 18, dmg: 0, speed: 170, role: 'prey', drop: 'smeat', lv: [13, 18], xp: 0.45, tiny: true }),
     cragwolf: E('cragwolf', 'Горный хищник', 'Crag hunter', { model: 'biped', color: 0x6d6d78, size: 1.0, hp: 140, dmg: 18, speed: 195, role: 'hostile', aggro: 28, drop: 'meat', lv: [15, 21], xp: 1 }),
     ptero:  E('ptero', 'Птерозавр', 'Pterosaur', { model: 'ptero', color: 0x8b5e83, size: 1.0, hp: 90, dmg: 14, speed: 210, role: 'hostile', aggro: 34, drop: 'meat', lv: [15, 21], xp: 1.2, fly: true, alt: 14 }),
@@ -488,7 +489,34 @@
     ]
   };
   C.BOSS_PHASES = [1, 0.66, 0.33];     // доли HP, с которых начинаются фазы
+  C.TEAM_ENEMY_HP = 0.3;               // командная игра: +30% HP обычных врагов за каждого дополнительного игрока
+  C.TEAM_ENEMY_DMG = 0.08;             //                  +8% их урона
+  C.BOSS_TEAM_DMG = 0.1;               // +10% урона босса за каждого дополнительного игрока в бою
+  C.BOSS_LV_EXP = 0.6;                 // насколько сила босса догоняет уровень бойцов выше требуемого (0 — никак, 1 — полностью)
   C.BOSS_HP_PER_PLAYER = 0.7;          // +70% HP за каждого дополнительного игрока в бою
+  // Арена (режимы 'arena' — одиночная и 'arenat' — совместная): волны врагов, бонусы, передышка (game/boss.js, раздел «АРЕНА»)
+  C.ARENA = {
+    PREP: 8, BREAK: 10,                 // подготовка перед 1-й волной и передышка между волнами, с
+    HEAL: 0.25,                         // за передышку восстанавливается 25% максимального здоровья (понемногу, за 10 с)
+    HP_STEP: 0.05, DMG_STEP: 0.03,      // здоровье и урон врагов: +5% и +3% за каждую волну (плюс рост их уровня)
+    MAX_ENEMIES: 20, MINI_HP: 4, MINI_DMG: 1.3, BOSS_STEP: 0.35,   // мини-босс (каждая 5-я волна), босс локации (каждая 10-я): +35% за каждый следующий десяток
+    BONUS_EVERY: [6, 8], BONUS_MAX: 3,  // бонус на арене: в команде раз в 6 с, в одиночку раз в 8 с (×0.6, если здоровье сильно просело); не больше 3 (в команде 4)
+    BONUS_FIRST: 4, NEED_HEAL: 0.35,    // первый бонус через 4 с после начала волны; аптечка, если в среднем не хватает ≥35% здоровья (или у кого-то <40%)
+    LV_UP: 2, LV_K: 1,                 // арена: все начинают с 1 уровня (без эволюции), за пройденную волну +2 уровня
+    LV_STEP: 0.2, LV_GAP: 3,           // уровень врагов (размер, подпись): средний уровень бойцов + 0.2·волна, не выше среднего + 3; сила — по SEC/HIT ниже
+    CNT0: 3, CNT_W: 0.4,                // врагов в волне: 3 + 0,4·волна
+    EARLY: [0.75, 0.85, 0.95],          // волны 1–3: здоровье и урон врагов ×0.75…0.95 (разминка)
+    SEC0: 1.6, SEC_W: 0.06,             // враг волны n выдерживает (1,6 + 0,06·(n−1)) с атак бойца
+    HIT0: 0.045, HIT_W: 0.003,          // его удар снимает (4,5 % + 0,3 %·(n−1)) здоровья бойца
+    PL_K: 0.06,                         // боец арены: +6 % здоровья и урона за каждый уровень арены (вместо эволюции)
+    BOSS_T: 40, BOSS_HIT: 0.1,          // босс арены: ~40 с чистого боя бойца его уровня, средний удар — 10 % HP
+    TEAM_HP: 0.15, TEAM_CNT: 0.6,       // совместная: +15% HP врагов и +60% их числа за каждого игрока сверх одного
+    MINI_TEAM: 0.6,                     //             мини-босс +60% HP за игрока
+    TEAM_HEAL: 0.15, TEAM_BUFF: 0.7,    //             бонус делится: союзники +15% здоровья / 70% длительности баффа
+    HEAL_K: 0.35,                       // аптечка: +35% здоровья сразу
+    DMG_K: 1.5, DMG_T: 15,              // ярость: урон ×1,5 на 15 с
+    SPD_K: 1.35, SPD_T: 12              // скорость: ×1,35 на 12 с (бег и плавание)
+  };
   C.BOSS_RUSH_STEP = 0.3;              // босс-раш: +30% HP и урона за каждую волну
 
   // ---------- достижения (счётчики лежат в profile.stats) ----------
@@ -504,13 +532,12 @@
     { id: 'sea1', ico: '🌊', n: { ru: 'Владыка рифа', en: 'Reef ruler' }, d: { ru: 'Победить первого босса океана', en: 'Defeat your first ocean boss' }, t: function (p) { return C.worldKings(p, 'sea') >= 1; } },
     { id: 'sea5', ico: '🔱', n: { ru: 'Повелитель океана', en: 'Lord of the Ocean' }, d: { ru: 'Победить всех 5 боссов океана', en: 'Defeat all 5 ocean bosses' }, t: function (p) { return C.worldKings(p, 'sea') >= 5; } },
     { id: 'king3', ico: '🏰', n: { ru: 'Три королевства', en: 'Three realms' }, d: { ru: 'Стать королём 3 биомов', en: 'Become king of 3 biomes' }, t: function (p) { return C.worldKings(p, 'land') >= 3; } },
-    { id: 'lord', ico: '🌟', n: { ru: 'Владыка эпох', en: 'Lord of the Ages' }, d: { ru: 'Стать королём всех 6 биомов суши', en: 'Become king of all 6 land biomes' }, t: function (p) { return C.worldKings(p, 'land') >= 6; } },
+    { id: 'lord', ico: '🌟', n: { ru: 'Владыка эпох', en: 'Lord of the Ages' }, d: { ru: 'Победить всех боссов суши и океана', en: 'Defeat every land and ocean boss' }, t: function (p) { return C.worldKings(p, 'land') >= 6 && C.worldKings(p, 'sea') >= 5; } },
     { id: 'duel1', ico: '🥊', n: { ru: 'Дуэлянт', en: 'Duelist' }, d: { ru: 'Выиграть дуэль у живого игрока', en: 'Win a duel against a human' }, t: function (p) { return p.wins >= 1; } },
-    { id: 'duel10', ico: '🏆', n: { ru: 'Чемпион арены', en: 'Arena champion' }, d: { ru: '10 побед в дуэлях', en: '10 duel wins' }, t: function (p) { return p.wins >= 10; } },
+    { id: 'duel10', ico: '🏆', n: { ru: 'Мастер дуэлей', en: 'Duel master' }, d: { ru: '10 побед в дуэлях', en: '10 duel wins' }, t: function (p) { return p.wins >= 10; } },
     { id: 'tourney', ico: '🥇', n: { ru: 'Победитель турнира', en: 'Tournament winner' }, d: { ru: 'Выиграть турнир дуэлей', en: 'Win a duel tournament' }, t: function (p) { return p.stats.tourney >= 1; } },
     { id: 'rush5', ico: '🔥', n: { ru: 'Босс-раш', en: 'Boss rush' }, d: { ru: 'Дойти до 5 волны босс-раша', en: 'Reach wave 5 of the boss rush' }, t: function (p) { return p.stats.rush >= 5; } },
     { id: 'rich', ico: '🪙', n: { ru: 'Копилка', en: 'Piggy bank' }, d: { ru: 'Накопить 1000 монет', en: 'Hold 1000 coins' }, t: function (p) { return p.coins >= 1000 || (p.stats.coinsEarned || 0) >= 1000; } },
-    { id: 'forestking', ico: '🌲', n: { ru: 'Король леса', en: 'King of the forest' }, d: { ru: 'Победить босса леса', en: 'Defeat the forest boss' }, t: function (p) { return p.kings.indexOf('forest') >= 0; } },
     { id: 'boss5', ico: '☠', n: { ru: 'Охотник на боссов', en: 'Boss hunter' }, d: { ru: 'Победить боссов 5 раз', en: 'Defeat bosses 5 times' }, t: function (p) { return p.stats.bosses >= 5; } },
     { id: 'streak7', ico: '📅', n: { ru: 'Неделя подряд', en: 'A week in a row' }, d: { ru: 'Серия входа 7 дней', en: '7-day login streak' }, t: function (p) { return (p.daily && p.daily.best | 0) >= 7; } },
     { id: 'streak30', ico: '🔥', n: { ru: 'Верный 30 дней', en: 'Loyal 30 days' }, d: { ru: 'Серия входа 30 дней', en: '30-day login streak' }, t: function (p) { return (p.daily && p.daily.best | 0) >= 30; } },
@@ -526,19 +553,16 @@
   // награды за достижения: c — монеты, title — титул, cos — наряд (забираются кнопкой, один раз)
   C.TITLES = {
     hunter: { ico: '🏹', n: { ru: 'Охотник', en: 'Hunter' } }, ancient: { ico: '🐉', n: { ru: 'Древний', en: 'Ancient' } },
-    forestking: { ico: '🌲', n: { ru: 'Король леса', en: 'King of the forest' } },
-    landking: { ico: '👑', n: { ru: 'Король суши', en: 'King of the Land' } }, bosshunter: { ico: '☠', n: { ru: 'Охотник на боссов', en: 'Boss hunter' } }, oceanlord: { ico: '🔱', n: { ru: 'Повелитель океана', en: 'Lord of the Ocean' } },
-    lord: { ico: '🌟', n: { ru: 'Владыка эпох', en: 'Lord of the Ages' } }, epoch_lord: { ico: '👑', n: { ru: 'Владыка Эпох (финал)', en: 'Lord of Ages (ending)' } }, spark_keeper: { ico: '🥚', n: { ru: 'Хранитель Искры', en: 'Keeper of the Spark' } }, champion: { ico: '🏆', n: { ru: 'Чемпион арены', en: 'Arena champion' } },
+    landking: { ico: '👑', n: { ru: 'Король суши', en: 'King of the Land' } }, bosshunter: { ico: '☠', n: { ru: 'Охотник на боссов', en: 'Boss hunter' } }, oceanlord: { ico: '🔱', n: { ru: 'Повелитель океана', en: 'Lord of the Ocean' } }, epoch_lord: { ico: '🌟', n: { ru: 'Владыка Эпох', en: 'Lord of the Ages' } }, spark_keeper: { ico: '🥚', n: { ru: 'Хранитель Искры', en: 'Keeper of the Spark' } }, champion: { ico: '🏆', n: { ru: 'Мастер дуэлей', en: 'Duel master' } },
     tourney: { ico: '🥇', n: { ru: 'Победитель турнира', en: 'Tournament winner' } }, streak30: { ico: '🔥', n: { ru: 'Верный 30 дней', en: 'Loyal 30 days' } },
-    tough: { ico: '💀', n: { ru: 'Несгибаемый', en: 'Unbreakable' } }, friend: { ico: '🐾', n: { ru: 'Друг зверей', en: 'Animal friend' } },
     ult: { ico: '💥', n: { ru: 'Мастер ульты', en: 'Ultimate master' } }
   };
   C.ACH_REWARD = {
     first: { c: 30 }, hunter: { c: 100, title: 'hunter' }, glutton: { c: 80 }, lv10: { c: 100 }, lv20: { c: 250 }, lv30: { c: 500, title: 'ancient' }, evo: { c: 100 },
-    king1: { c: 150, title: 'landking' }, forestking: { c: 100, title: 'forestking' }, boss5: { c: 300, title: 'bosshunter' }, sea1: { c: 150 }, sea5: { c: 500, title: 'oceanlord' },
-    king3: { c: 300 }, lord: { c: 800, title: 'lord', cos: 'aura' }, duel1: { c: 100 }, duel10: { c: 300, title: 'champion' }, tourney: { c: 300, title: 'tourney' },
-    rush5: { c: 200 }, nest3: { c: 150 }, craft1: { c: 120 }, rich: { c: 100 }, tough: { c: 100, title: 'tough' }, streak7: { c: 150 }, streak30: { c: 500, title: 'streak30', cos: 'party' },
-    ult10: { c: 120, title: 'ult' }, pet1: { c: 80, title: 'friend' }, kill500: { c: 250 }, quest30: { c: 200 }
+    king1: { c: 150, title: 'landking' }, boss5: { c: 300, title: 'bosshunter' }, sea1: { c: 150 }, sea5: { c: 500, title: 'oceanlord' },
+    king3: { c: 300 }, lord: { c: 800, title: 'epoch_lord', cos: 'aura' }, duel1: { c: 100 }, duel10: { c: 300, title: 'champion' }, tourney: { c: 300, title: 'tourney' },
+    rush5: { c: 200 }, nest3: { c: 150 }, craft1: { c: 120 }, rich: { c: 100 }, tough: { c: 100 }, streak7: { c: 150 }, streak30: { c: 500, title: 'streak30', cos: 'party' },
+    ult10: { c: 120, title: 'ult' }, pet1: { c: 80 }, kill500: { c: 250 }, quest30: { c: 200 }
   };
 
   // ---------- рейтинг дуэлей, лиги и сезоны (1.10.2) ----------
@@ -723,69 +747,69 @@
     life: { cls: null, ico: '❤', n: { ru: 'Здоровье', en: 'Health' }, nodes: {
       L: N('Крепкое тело', 'Sturdy body', '💪', { hp: 6 }),                R: N('Быстрое заживление', 'Fast healing', '🩹', { regen: 0.7 }),
       LL: N('Толстая шкура', 'Thick hide', '🛡', { armor: 4 }),            LR: N('Запас жира', 'Fat reserves', '🍖', { hp: 4, foodSave: 8 }),
-      RL: N('Пиявка', 'Leech', '🩸', { leech: 1.5 }),                        RR: N('Второе дыхание', 'Second wind', '🌬', { regen: 0.4, resist: 8 }),
-      LLL: N('Костяная броня', 'Bone armor', '🦴', { armor: 5 }),          LLR: N('Шипы', 'Spikes', '🌵', { thorns: 8 }),
-      LRL: N('Гигант', 'Giant', '⛰', { hp: 8 }),                           LRR: N('Неутомимый', 'Tireless', '🔋', { hp: 3, stamina: 12 }),
-      RLL: N('Кровопийца', 'Bloodsucker', '🧛', { leech: 2 }),              RLR: N('Ярость выжившего', 'Survivor\'s rage', '🔥', { lastStand: 12 }),
-      RRL: N('Иммунитет', 'Immunity', '🧪', { resist: 14, regen: 0.2 }),   RRR: N('Регенерация', 'Regeneration', '✨', { regen: 0.9 }) } },
+      RL: N('Пиявка', 'Leech', '🪱', { leech: 1.5 }),                        RR: N('Второе дыхание', 'Second wind', '🌬', { regen: 0.4, resist: 8 }),
+      LLL: N('Костяная броня', 'Bone armor', '🦴', { armor: 5 }),          LLR: N('Шипы', 'Spikes', '📌', { thorns: 8 }),
+      LRL: N('Гигант', 'Giant', '🏔', { hp: 8 }),                           LRR: N('Неутомимый', 'Tireless', '♾', { hp: 3, stamina: 12 }),
+      RLL: N('Кровопийца', 'Bloodsucker', '🦇', { leech: 2 }),              RLR: N('Ярость выжившего', 'Survivor\'s rage', '🔥', { lastStand: 12 }),
+      RRL: N('Иммунитет', 'Immunity', '💉', { resist: 14, regen: 0.2 }),   RRR: N('Регенерация', 'Regeneration', '🌱', { regen: 0.9 }) } },
     fight: { cls: null, ico: '⚔', n: { ru: 'Урон', en: 'Damage' }, nodes: {
       L: N('Сила челюстей', 'Jaw strength', '🦷', { dmg: 5 }),             R: N('Точность', 'Precision', '🎯', { crit: 5 }),
       LL: N('Ядовитый укус', 'Venom bite', '☠', { venom: 2 }),             LR: N('Рваные раны', 'Tearing wounds', '🩸', { bleed: 2 }),
       RL: N('Смертельный удар', 'Deadly blow', '💥', { critDmg: 15 }),     RR: N('Добивание', 'Finisher', '🗡', { execute: 12 }),
       LLL: N('Нейротоксин', 'Neurotoxin', '🧫', { venom: 3 }),             LLR: N('Яд-паралитик', 'Paralytic venom', '😵', { venom: 1, stunHit: 3 }),
-      LRL: N('Глубокие раны', 'Deep wounds', '🔪', { bleed: 3 }),          LRR: N('Жажда крови', 'Bloodlust', '🩸', { bleed: 1, leech: 1 }),
+      LRL: N('Глубокие раны', 'Deep wounds', '🔪', { bleed: 3 }),          LRR: N('Жажда крови', 'Bloodlust', '🫀', { bleed: 1, leech: 1 }),
       RLL: N('Убийца', 'Assassin', '🌑', { crit: 4, critDmg: 8 }),         RLR: N('Свирепость', 'Ferocity', '😤', { dmg: 6 }),
-      RRL: N('Палач', 'Executioner', '⚰', { execute: 16 }),               RRR: N('Охотник на гигантов', 'Giant slayer', '🐘', { bigDmg: 12 }) } },
+      RRL: N('Палач', 'Executioner', '⚰', { execute: 16 }),               RRR: N('Охотник на гигантов', 'Giant slayer', '🦣', { bigDmg: 12 }) } },
     wild: { cls: null, ico: '🍃', n: { ru: 'Выживание', en: 'Survival' }, nodes: {
       L: N('Быстрые лапы', 'Swift feet', '🐾', { speed: 4 }),              R: N('Выносливость', 'Endurance', '🔋', { stamina: 15 }),
       LL: N('Чутьё', 'Senses', '👁', { sense: 14 }),                       LR: N('Скрытность', 'Stealth', '🌿', { stealth: 10 }),
-      RL: N('Экономный', 'Frugal', '🥩', { foodSave: 12 }),                 RR: N('Опыт выживания', 'Survivor\'s wisdom', '📖', { xp: 4 }),
-      LLL: N('Ночное зрение', 'Night vision', '🌙', { sense: 10, crit: 2 }), LLR: N('Инстинкт', 'Instinct', '💨', { dodge: 4 }),
-      LRL: N('Тень', 'Shadow', '🌫', { stealth: 12 }),                      LRR: N('Удар из тени', 'Strike from shadow', '🗡', { firstStrike: 15 }),
-      RLL: N('Стальной желудок', 'Iron stomach', '🍀', { foodSave: 10, regen: 0.3 }), RLR: N('Стальные мышцы', 'Steel muscles', '🏃', { stamina: 12, speed: 2 }),
-      RRL: N('Мудрость', 'Wisdom', '🦉', { xp: 6 }),                        RRR: N('Удача', 'Luck', '🪙', { coins: 12 }) } },
+      RL: N('Экономный', 'Frugal', '🧺', { foodSave: 12 }),                 RR: N('Опыт выживания', 'Survivor\'s wisdom', '📖', { xp: 4 }),
+      LLL: N('Ночное зрение', 'Night vision', '🌃', { sense: 10, crit: 2 }), LLR: N('Инстинкт', 'Instinct', '🧠', { dodge: 4 }),
+      LRL: N('Тень', 'Shadow', '🌫', { stealth: 12 }),                      LRR: N('Удар из тени', 'Strike from shadow', '🫥', { firstStrike: 15 }),
+      RLL: N('Стальной желудок', 'Iron stomach', '🍲', { foodSave: 10, regen: 0.3 }), RLR: N('Стальные мышцы', 'Steel muscles', '🏋', { stamina: 12, speed: 2 }),
+      RRL: N('Мудрость', 'Wisdom', '🦉', { xp: 6 }),                        RRR: N('Удача', 'Luck', '🍀', { coins: 12 }) } },
     hunt: { cls: 'carn', ico: '🦖', n: { ru: 'Охота', en: 'Hunt' }, nodes: {
       L: N('Охотничий рывок', 'Hunting dash', '⚡', { pounce: 1 }),         R: N('Засада', 'Ambush', '🌾', { ambush: 1 }),
-      LL: N('Прыжок хищника', 'Predator leap', '🦘', { pounce: 1, dmg: 2 }), LR: N('Грозный рёв', 'Dread roar', '📣', { roar: 1 }),
-      RL: N('Камуфляж', 'Camouflage', '🦎', { ambush: 1, stealth: 5 }),     RR: N('Ночной охотник', 'Night hunter', '🌙', { nightDmg: 9 }),
-      LLL: N('Разрыв', 'Rend', '🩸', { bleed: 2 }),                         LLR: N('Таран', 'Ram', '💫', { stunHit: 4 }),
-      LRL: N('Ужас', 'Terror', '😱', { roar: 1, speed: 2 }),               LRR: N('Вожак', 'Alpha', '👑', { dmg: 4 }),
-      RLL: N('Призрак', 'Ghost', '👻', { stealth: 10 }),                    RLR: N('Удар из засады', 'Ambush strike', '🎯', { ambush: 1, crit: 2 }),
-      RRL: N('Лунный клык', 'Moon fang', '🌕', { nightDmg: 10 }),           RRR: N('Тёмное зрение', 'Dark sight', '👁', { sense: 15 }) } },
+      LL: N('Прыжок хищника', 'Predator leap', '🦘', { pounce: 1, dmg: 2 }), LR: N('Грозный рёв', 'Dread roar', '🗣', { roar: 1 }),
+      RL: N('Камуфляж', 'Camouflage', '🦎', { ambush: 1, stealth: 5 }),     RR: N('Ночной охотник', 'Night hunter', '🌘', { nightDmg: 9 }),
+      LLL: N('Разрыв', 'Rend', '💢', { bleed: 2 }),                         LLR: N('Таран', 'Ram', '🐏', { stunHit: 4 }),
+      LRL: N('Ужас', 'Terror', '😱', { roar: 1, speed: 2 }),               LRR: N('Вожак', 'Alpha', '🐺', { dmg: 4 }),
+      RLL: N('Призрак', 'Ghost', '👻', { stealth: 10 }),                    RLR: N('Удар из засады', 'Ambush strike', '🐍', { ambush: 1, crit: 2 }),
+      RRL: N('Лунный клык', 'Moon fang', '🌕', { nightDmg: 10 }),           RRR: N('Тёмное зрение', 'Dark sight', '🌌', { sense: 15 }) } },
     herd: { cls: 'herb', ico: '🦕', n: { ru: 'Стадо', en: 'Herd' }, nodes: {
-      L: N('Масса', 'Mass', '⛰', { mass: 1 }),                             R: N('Лазание по деревьям', 'Tree climbing', '🌲', { climb: 1 }),
-      LL: N('Тяжёлый топот', 'Heavy stomp', '🦶', { herd: 1 }),            LR: N('Шипастый хвост', 'Spiked tail', '🌵', { thorns: 6 }),
-      RL: N('Отдых на дереве', 'Treetop rest', '🍃', { climb: 1, regen: 0.3 }), RR: N('Наблюдатель', 'Lookout', '👁', { sense: 15 }),
+      L: N('Масса', 'Mass', '🪨', { mass: 1 }),                             R: N('Лазание по деревьям', 'Tree climbing', '🌲', { climb: 1 }),
+      LL: N('Тяжёлый топот', 'Heavy stomp', '🦶', { herd: 1 }),            LR: N('Шипастый хвост', 'Spiked tail', '☄', { thorns: 6 }),
+      RL: N('Отдых на дереве', 'Treetop rest', '🍃', { climb: 1, regen: 0.3 }), RR: N('Наблюдатель', 'Lookout', '👀', { sense: 15 }),
       LLL: N('Землетрясение', 'Earthquake', '🌋', { herd: 1, dmg: 2 }),     LLR: N('Несокрушимый', 'Unbreakable', '🛡', { armor: 4 }),
-      LRL: N('Ёж', 'Hedgehog', '🦔', { thorns: 8 }),                        LRR: N('Бульдозер', 'Bulldozer', '🚜', { mass: 1, stunHit: 2 }),
+      LRL: N('Ёж', 'Hedgehog', '🦔', { thorns: 8 }),                        LRR: N('Бульдозер', 'Bulldozer', '🦏', { mass: 1, stunHit: 2 }),
       RLL: N('Древолаз', 'Tree dweller', '🐒', { climb: 1, hp: 3 }),        RLR: N('Бегун', 'Runner', '🏃', { speed: 4 }),
       RRL: N('Тревога', 'Alarm', '🔔', { sense: 10, dodge: 2 }),            RRR: N('Мудрое стадо', 'Wise herd', '🦉', { xp: 5 }) } },
     sky: { cls: 'fly', ico: '🦅', n: { ru: 'Небо', en: 'Sky' }, nodes: {
       L: N('Крылья', 'Wings', '🪽', { wings: 1 }),                          R: N('Когти', 'Talons', '🦅', { talons: 1 }),
       LL: N('Парение', 'Soaring', '☁', { wings: 1 }),                      LR: N('Высота', 'Altitude', '⛅', { altitude: 1 }),
-      RL: N('Крик', 'Screech', '📣', { screech: 1 }),                       RR: N('Хватка', 'Grip', '✊', { talons: 1, dmg: 2 }),
-      LLL: N('Попутный ветер', 'Tailwind', '💨', { speed: 4 }),             LLR: N('Буревестник', 'Storm bird', '⛈', { stamina: 15 }),
-      LRL: N('Пике', 'Nosedive', '🎯', { altitude: 1, crit: 2 }),           LRR: N('Стрела', 'Arrow', '🏹', { dmg: 4 }),
-      RLL: N('Оглушающий крик', 'Stunning screech', '😵', { screech: 1 }),  RLR: N('Паника', 'Panic', '😱', { stealth: 8 }),
-      RRL: N('Рыболов', 'Fisher', '🐟', { talons: 1, leech: 1 }),           RRR: N('Хищная птица', 'Bird of prey', '🩸', { bleed: 2 }) } },
+      RL: N('Крик', 'Screech', '🔊', { screech: 1 }),                       RR: N('Хватка', 'Grip', '✊', { talons: 1, dmg: 2 }),
+      LLL: N('Попутный ветер', 'Tailwind', '🎐', { speed: 4 }),             LLR: N('Буревестник', 'Storm bird', '⛈', { stamina: 15 }),
+      LRL: N('Пике', 'Nosedive', '🔻', { altitude: 1, crit: 2 }),           LRR: N('Стрела', 'Arrow', '🏹', { dmg: 4 }),
+      RLL: N('Оглушающий крик', 'Stunning screech', '📢', { screech: 1 }),  RLR: N('Паника', 'Panic', '🌀', { stealth: 8 }),
+      RRL: N('Рыболов', 'Fisher', '🎣', { talons: 1, leech: 1 }),           RRR: N('Хищная птица', 'Bird of prey', '🪶', { bleed: 2 }) } },
     deep: { cls: 'aqua', ico: '🌊', n: { ru: 'Глубины', en: 'Depths' }, nodes: {
       L: N('Плавники', 'Fins', '🐟', { fins: 1 }),                          R: N('Лёгкие', 'Lungs', '🫁', { lungs: 1 }),
       LL: N('Электрический укус', 'Shock bite', '⚡', { shock: 1 }),        LR: N('Торпеда', 'Torpedo', '🚀', { dmg: 3, speed: 2 }),
-      RL: N('Глубокий вдох', 'Deep breath', '🫁', { lungs: 1 }),       RR: N('Глубоководный', 'Deep diver', '🫧', { armor: 3, resist: 6 }),
-      LLL: N('Цепная молния', 'Chain lightning', '🌩', { shock: 1 }),       LLR: N('Разряд', 'Discharge', '😵', { stunHit: 4 }),
-      LRL: N('Акулья хватка', 'Shark grip', '🦈', { bleed: 2 }),            LRR: N('Стремительный', 'Swift', '💨', { fins: 1, speed: 2 }),
-      RLL: N('Подводная регенерация', 'Underwater regen', '💚', { regen: 0.5, hp: 3 }),            RLR: N('Быстрое всплытие', 'Fast ascent', '🫧', { rise: 1, hp: 3 }),
-      RRL: N('Давление', 'Pressure', '⛰', { hp: 5 }),                      RRR: N('Хладнокровие', 'Cold blood', '🧊', { regen: 0.5 }) } }
+      RL: N('Глубокий вдох', 'Deep breath', '🤿', { lungs: 1 }),       RR: N('Глубоководный', 'Deep diver', '🫧', { armor: 3, resist: 6 }),
+      LLL: N('Цепная молния', 'Chain lightning', '🌩', { shock: 1 }),       LLR: N('Разряд', 'Discharge', '💫', { stunHit: 4 }),
+      LRL: N('Акулья хватка', 'Shark grip', '🦈', { bleed: 2 }),            LRR: N('Стремительный', 'Swift', '🌊', { fins: 1, speed: 2 }),
+      RLL: N('Подводная регенерация', 'Underwater regen', '💚', { regen: 0.5, hp: 3 }),            RLR: N('Быстрое всплытие', 'Fast ascent', '⏫', { rise: 1, hp: 3 }),
+      RRL: N('Давление', 'Pressure', '🗜', { hp: 5 }),                      RRR: N('Хладнокровие', 'Cold blood', '🧊', { regen: 0.5 }) } }
   };
   // ветка мегалодона (вместо общей «Глубин» у остальных морских): плавники, крепкое тело (вместо лёгких: акула дышит жабрами и воздуха под водой не тратит) + кровавый рывок и нюх крови
   C.TREES.maw = { cls: 'ichth', ico: '🦈', n: { ru: 'Мегалодон', en: 'Megalodon' }, nodes: {
       L: N('Плавники', 'Fins', '🐟', { fins: 1 }),                          R: N('Крепкое тело', 'Sturdy body', '💪', { hp: 3 }),
       LL: N('Нюх крови', 'Scent of blood', '👃', { scent: 1 }),             LR: N('Кровавый рывок', 'Rending rush', '🦈', { rend: 1, dmg: 2 }),
       RL: N('Плотные мышцы', 'Dense muscle', '🦾', { hp: 1, armor: 1 }),     RR: N('Глубоководный', 'Deep diver', '🫧', { armor: 3, resist: 6 }),
-      LLL: N('Долгий след', 'Long trail', '🩸', { scent: 1 }),              LLR: N('Жажда крови', 'Bloodlust', '😈', { scent: 1, leech: 1 }),
-      LRL: N('Акулья хватка', 'Shark grip', '🦷', { bleed: 2 }),            LRR: N('Глубокий рывок', 'Deep rush', '💨', { rend: 1, fins: 1 }),
-      RLL: N('Подводная регенерация', 'Underwater regen', '💚', { regen: 0.5, hp: 3 }), RLR: N('Быстрое всплытие', 'Fast ascent', '🫧', { rise: 1, hp: 3 }),
-      RRL: N('Давление', 'Pressure', '⛰', { hp: 5 }),                      RRR: N('Хладнокровие', 'Cold blood', '🧊', { regen: 0.5 }) } };
+      LLL: N('Долгий след', 'Long trail', '🩸', { scent: 1 }),              LLR: N('Жажда крови', 'Bloodlust', '🫀', { scent: 1, leech: 1 }),
+      LRL: N('Акулья хватка', 'Shark grip', '🦷', { bleed: 2 }),            LRR: N('Глубокий рывок', 'Deep rush', '⏩', { rend: 1, fins: 1 }),
+      RLL: N('Подводная регенерация', 'Underwater regen', '💚', { regen: 0.5, hp: 3 }), RLR: N('Быстрое всплытие', 'Fast ascent', '⏫', { rise: 1, hp: 3 }),
+      RRL: N('Давление', 'Pressure', '🗜', { hp: 5 }),                      RRR: N('Хладнокровие', 'Cold blood', '🧊', { regen: 0.5 }) } };
   C.TREE_ORDER = ['life', 'fight', 'wild', 'hunt', 'herd', 'sky', 'deep', 'maw'];
   C.treesFor = function (cls) { return C.TREE_ORDER.filter(function (t) { return C.treeFits(C.TREES[t], cls); }); };
   C.treeFits = function (t, cls) { return t.cls === null || t.cls === cls || (t.cls === 'aqua' && C.isAqua(cls) && cls !== 'ichth'); };

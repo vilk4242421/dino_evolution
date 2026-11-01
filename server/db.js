@@ -1,6 +1,6 @@
 'use strict';
 /* Хранилище: PostgreSQL (DATABASE_URL, например Neon) или JSON-файл, если переменной нет (или модуль pg не установлен).
-   Интерфейс одинаковый: createUser, findByNick, createToken, userByToken, deleteToken, saveProfile, countUsers, topWins, topKings.
+   Интерфейс одинаковый: createUser, findByNick, createToken, userByToken, deleteToken, saveProfile, countUsers, topWins, topKings, topElo, topCoins, topArena.
    Таблицы создаются сами при первом запуске. */
 const fs = require('fs');
 const path = require('path');
@@ -16,6 +16,9 @@ function coinsRow(u) { const p = u.profile || {}; return { nick: u.display, nick
 function sortCoins(rows) { return rows.filter(r => r.coins > 0).sort((a, b) => b.coins - a.coins); }
 function sortElo(rows) { return rows.filter(r => r.played > 0).sort((a, b) => b.elo - a.elo || b.played - a.played); }
 function sortWins(rows) { return rows.filter(r => r.wins > 0).sort((a, b) => b.wins - a.wins || b.level - a.level); }
+// рекорды арены: stats.arena — одиночная, stats.arenaT — совместная (пройдено волн); при равенстве выше тот, кто поставил рекорд раньше
+function arenaRow(u, key) { const p = u.profile || {}, st = p.stats || {}; return { nick: u.display, nickKey: u.nick, waves: st[key] | 0, cls: st[key + 'Cls'] || p.cls || null, at: st[key + 'At'] || 0, level: p.level | 0 }; }
+function sortArena(rows) { return rows.filter(r => r.waves > 0).sort((a, b) => b.waves - a.waves || a.at - b.at); }
 function sortKings(rows) { return rows.filter(r => r.count > 0).sort((a, b) => b.count - a.count || a.at - b.at); }
 
 function jsonStore(file) {
@@ -62,7 +65,8 @@ function jsonStore(file) {
     async topWins(n) { return sortWins(Object.values(data.users).map(winsRow)).slice(0, n); },
     async topKings(n) { return sortKings(Object.values(data.users).map(kingsRow)).slice(0, n); },
     async topElo(n) { return sortElo(Object.values(data.users).map(eloRow)).slice(0, n); },
-    async topCoins(n) { return sortCoins(Object.values(data.users).map(coinsRow)).slice(0, n); }
+    async topCoins(n) { return sortCoins(Object.values(data.users).map(coinsRow)).slice(0, n); },
+    async topArena(n, key) { return sortArena(Object.values(data.users).map(u => arenaRow(u, key))).slice(0, n); }
   };
 }
 
@@ -107,6 +111,11 @@ async function pgStore(url) {
     async topCoins(n) {
       const r = await pool.query("SELECT nick, display, profile FROM users WHERE COALESCE((profile->>'coins')::bigint,0) > 0 ORDER BY (profile->>'coins')::bigint DESC LIMIT $1", [n]);
       return sortCoins(r.rows.map(coinsRow));
+    },
+    async topArena(n, key) {
+      const k = key === 'arenaT' ? 'arenaT' : 'arena';
+      const r = await pool.query("SELECT nick, display, profile FROM users WHERE COALESCE((profile->'stats'->>'" + k + "')::int,0) > 0 ORDER BY (profile->'stats'->>'" + k + "')::int DESC LIMIT $1", [n * 2]);
+      return sortArena(r.rows.map(u => arenaRow(u, k))).slice(0, n);
     }
   };
 }

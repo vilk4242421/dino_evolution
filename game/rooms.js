@@ -27,21 +27,22 @@
   var Core = { Sim: Sim, CF: CF, DT: DT, r1: r1, r2: r2, r3: r3, clamp: clamp, wrap: wrap, newId: newId, dist: dist, dist3: dist3, angTo: angTo, ARCH_IDS: ARCH_IDS, ARCH_INDEX: ARCH_INDEX, BOSS_IDS: BOSS_IDS };
 
   // флаги игрока в снимке
-  var F = { SHIELD: 1, FLY: 2, SUB: 4, CLM: 8, GRD: 16, ATK: 32, DEAD: 64, HIDE: 128, KING: 256, LORD: 512, STUN: 1024, MOVE: 2048, BOT: 4096, ALLY: 8192 };
+  var F = { SHIELD: 1, FLY: 2, SUB: 4, CLM: 8, GRD: 16, ATK: 32, DEAD: 64, HIDE: 128, KING: 256, LORD: 512, STUN: 1024, MOVE: 2048, BOT: 4096, ALLY: 8192, RAGE: 16384, FAST: 32768 };
   Core.F = F;
 
   function Room(hub, o) {
-    this.hub = hub; this.id = o.id; this.biome = o.biome; this.code = o.code || null; this.mode = o.mode || 'public';
+    this.hub = hub; this.id = o.id; this.biome = o.biome; this.code = o.code || null; this.mode = o.mode || 'public'; this.isLobby = !!o.lobby;
     this.W = Sim.getWorld(this.biome);
     this.players = new Map(); this.ents = new Map(); this.drops = []; this.plants = []; this.zones = [];
     this.events = []; this.t = 0; this.tick = 0; this.tod = 0.3; this.wx = 0; this.noPlayersT = 0;
-    this.maxHumans = this.mode === 'solo' ? 1 : this.mode === 'duel' ? 2 : CF.MAX_ROOM;
+    this.maxHumans = this.mode === 'solo' || this.mode === 'arena' ? 1 : this.mode === 'duel' ? 2 : CF.MAX_ROOM;
     this.rng = Sim.mulberry32((Math.random() * 1e9) | 0);
     this.respawnQ = [];
     this.boss = null; this.bossCool = 0; this.rush = null; this.duel = null;
     this.hazT = 0; this.rockT = 6;
     if (this.mode !== 'duel') { this.initPlants(); this.initSpawns(); this.initBoss(); }
     if (this.mode === 'rush') this.initRush();
+    if (this.mode === 'arena' || this.mode === 'arenat') this.initArena();
   }
   Core.Room = Room;
   var RP = Room.prototype;
@@ -52,13 +53,13 @@
 
   RP.pubInfo = function (p) {
     return {
-      id: p.id, nick: p.name, color: p.color, cls: p.cls, level: p.profile.level, evo: p.profile.evo, cosmetic: p.profile.cosmetic || '', pet: p.profile.pet || '', title: p.profile.title || '', nest: p.profile.nest ? p.profile.nest.put.filter(function (id) { return CF.nestOwned(p.profile, id); }) : [], patc: p.profile.patc || '', rfx: p.profile.rfx || '', morph: p.profile.morph || '',
+      id: p.id, nick: p.name, color: p.color, cls: p.cls, level: this.arena && p.arLv ? p.arLv : p.profile.level, evo: this.arena && p.arLv ? {} : p.profile.evo, cosmetic: p.profile.cosmetic || '', pet: p.profile.pet || '', title: p.profile.title || '', nest: p.profile.nest ? p.profile.nest.put.filter(function (id) { return CF.nestOwned(p.profile, id); }) : [], patc: p.profile.patc || '', rfx: p.profile.rfx || '', morph: p.profile.morph || '',
       admin: !!p.admin, king: (p.profile.kings || []).indexOf(this.biome) >= 0, lord: Sim.isLord(p.profile), end: p.profile.ending || '', bot: !!p.bot, team: p.team
     };
   };
   RP.refreshStats = function (p, keepRatio) {
-    var pr = p.profile, old = p.stats ? p.hp / p.stats.hp : 1;
-    p.stats = Sim.statsFor(p.cls, pr.level, pr.evo);
+    var pr = p.profile, old = p.stats ? p.hp / p.stats.hp : 1, ar = this.arena && p.arLv && !p.bot;
+    p.stats = ar ? Sim.arenaStats(p.cls, p.arLv) : Sim.statsFor(p.cls, pr.level, pr.evo);       // арена: свой уровень (с 1-го), без эволюции
     p.hp = keepRatio ? clamp(old, 0, 1) * p.stats.hp : Math.min(p.hp, p.stats.hp);
   };
   RP.makePlayer = function (profile, conn, opts) {
@@ -150,7 +151,7 @@
     if (lv > pr.level) {
       pr.level = lv; this.refreshStats(p); p.hp = p.stats.hp; p.food = Math.min(CF.FOOD_MAX, p.food + 20);
       this.events.push(['lv', p.id, lv]);
-      this.broadcast({ t: 'upd', p: { id: p.id, level: lv } }, p.id);
+      if (!(this.arena && p.arLv)) this.broadcast({ t: 'upd', p: { id: p.id, level: lv } }, p.id);   // на арене другим виден уровень арены
       this.onLevelUp(p, before, lv);
     }
     this.events.push(['xp', p.id, Math.round(amount)]);
@@ -166,6 +167,21 @@
   // ---------------------------------------------------------------- команды клиента
   RP.handle = function (p, m) {
     switch (m.t) {
+      case 'lobbydest': {                                                       // создатель лобби выбрал, куда идти
+        if (!this.isLobby || p.id !== this.hostId) break;
+        var dm = m.mode === 'arenat' || m.mode === 'rush' ? m.mode : 'code', db = CF.ALL_BIOMES.indexOf(m.biome) >= 0 ? m.biome : this.biome, dest = { mode: dm, biome: db }, self0 = this, block = [];
+        this.players.forEach(function (q) { if (!q.bot && !q.gone && !self0.hub.canGo(q.profile, dest)) block.push(q.name); });
+        if (block.length) { this.sendTo(p, { t: 'lobbyblock', names: block, dest: dest }); break; }
+        var cs = ''; for (var ci = 0; ci < 6; ci++) cs += String.fromCharCode(65 + ((this.rng() * 26) | 0));
+        this.lobbyGo = { mode: dm, biome: db, code: cs, t: this.t };
+        this.broadcast({ t: 'lobbygo', dest: dest });
+        break;
+      }
+      case 'lobbypick': {                                                       // каждый выбрал динозавра — переезжает в выбранное место (одна комната по новому коду)
+        if (!this.isLobby || !this.lobbyGo || typeof m.cls !== 'string') break;
+        this.hub.lobbyMove(p, m.cls, this.lobbyGo);
+        return;
+      }
       case 'in': {
         var inp = Sim.cleanInput(m);
         if (inp && inp.q > p.lastQ && p.q.length < 12) { p.lastQ = inp.q; p.q.push(inp); }
@@ -185,12 +201,12 @@
       case 'ending': this.chooseEnding(p, m.id); break;
       case 'warp': {   // ролик «всасывает в портал»: после победы над боссом отправляем в следующую локацию
         var wl2 = CF.worldList(CF.worldOf(this.biome)), ix2 = wl2.indexOf(this.biome);
-        if (this.mode !== 'rush' && this.mode !== 'duel' && ix2 >= 0 && ix2 < wl2.length - 1 && p.profile.kings.indexOf(this.biome) >= 0 && this.t - (p.travelT || -99) > 3) { p.travelT = this.t; p.shield = Math.max(p.shield || 0, this.t + 6); this.hub.travelQ.push({ p: p, biome: wl2[ix2 + 1] }); }
+        if (this.mode !== 'rush' && this.mode !== 'duel' && !this.arena && ix2 >= 0 && ix2 < wl2.length - 1 && p.profile.kings.indexOf(this.biome) >= 0 && this.t - (p.travelT || -99) > 3) { p.travelT = this.t; p.shield = Math.max(p.shield || 0, this.t + 6); this.hub.travelQ.push({ p: p, biome: wl2[ix2 + 1] }); }
         break;
       }
       case 'goto': {   // выбор пройденной локации прямо из игры
         var gb = String(m.biome || '');
-        if (this.mode !== 'rush' && this.mode !== 'duel' && gb !== this.biome && CF.worldOf(gb) === CF.worldOf(this.biome) && Sim.canEnterBiome(p.profile, gb) && p.alive && this.t - (p.travelT || -99) > 3) { p.travelT = this.t; p.shield = Math.max(p.shield || 0, this.t + 6); this.hub.travelQ.push({ p: p, biome: gb }); }
+        if (this.mode !== 'rush' && this.mode !== 'duel' && !this.arena && gb !== this.biome && CF.worldOf(gb) === CF.worldOf(this.biome) && Sim.canEnterBiome(p.profile, gb) && p.alive && this.t - (p.travelT || -99) > 3) { p.travelT = this.t; p.shield = Math.max(p.shield || 0, this.t + 6); this.hub.travelQ.push({ p: p, biome: gb }); }
         break;
       }
       case 'pause': if (this.mode === 'solo') { this.paused = !!m.on; this.pausedAt = this.t; } break;      // одиночная комната на сервере: пауза в меню
@@ -331,7 +347,9 @@
   // множитель урона босса по игроку: нормировка босса × поправка на уровень игрока относительно требуемого
   RP.bossK = function (src, p) {
     if (this.mode === 'duel' || !src || !p.profile) return 1;
-    return (src.dmgK || 0.85) * clamp(1 - 0.05 * (p.profile.level - (CF.BOSS_LEVEL[this.biome] || 10)), 0.25, 1.2);
+    // уровень игрока относительно уровня, под который босс подстроен в начале боя (lvL): перекачанный в группе получает чуть меньше, отстающий — больше
+    var ref = src.lvL ? Math.max(src.lvL, CF.BOSS_LEVEL[this.biome] || 10) : (CF.BOSS_LEVEL[this.biome] || 10), lk = src.lvL ? 0.03 : 0.05;
+    return (src.dmgK || 0.85) * (src.lvD || 1) * (src.teamK || 1) * clamp(1 - lk * (p.profile.level - ref), 0.25, 1.2);
   };
   RP.damage = function (src, dst, raw, o) {
     o = o || {};
@@ -342,6 +360,7 @@
     if (!o.force && !this.hostile(src, dst)) return 0;
     var amount = raw;
     if (src && src.kind === 'p' && src.buffK === 'dmg' && src.buffT > this.t) amount *= 1.25;
+    if (src && src.kind === 'p' && src.aDmgT > this.t) amount *= CF.ARENA.DMG_K;          // бонус арены «ярость»
     if (src && src.kind === 'p' && src.scentT > this.t) { var dmh = dst.mhp || (dst.stats && dst.stats.hp) || 0; if (dmh && dst.hp < dmh * 0.5) amount *= 1.3 + 0.05 * (src.stats.ranks.scent | 0); }   // нюх крови: бьёт раненых сильнее
     if (src && src.kind === 'p' && src.ultT > this.t) amount *= src.ultMul;     // золотой плод: +25% урона
     // баланс по уровням: боец выше уровнем бьёт заметно сильнее, ниже — намного слабее (1 ур. против 4 ур. = ×0.36 урона)
@@ -355,7 +374,7 @@
       else if (dst.kind === 'p' && src.fromBoss) amount *= 0.85 * clamp(1 - 0.05 * (dst.profile.level - breq), 0.25, 1.2);
     }
     if (dst.kind === 'p' && src && src.kind === 'b') amount *= this.bossK(src, dst);
-    if (dst.kind === 'p' && src && this.mode !== 'duel' && this.mode !== 'rush') { if (src.kind === 'b') amount = Math.min(amount, 0.4 * dst.stats.hp); else if (src.fromBoss) amount = Math.min(amount, 0.07 * dst.stats.hp); }   // ни один удар босса не убивает с одного раза, помощники бьют слабо
+    if (dst.kind === 'p' && src && this.mode !== 'duel' && this.mode !== 'rush' && !this.arena) { if (src.kind === 'b') amount = Math.min(amount, 0.4 * dst.stats.hp); else if (src.fromBoss) amount = Math.min(amount, 0.07 * dst.stats.hp); }   // ни один удар босса не убивает с одного раза, помощники бьют слабо
     if (dst.kind === 'p' && dst.stats.fx.dodge && !o.force && this.rng() * 100 < dst.stats.fx.dodge) { this.events.push(['h', dst.id, 0, 3]); return 0; }   // увернулся
     if (dst.kind === 'p') {
       amount *= 1 - dst.stats.armor; if (dst.profile && dst.profile.pet === 'crab') amount *= 0.92;
@@ -421,16 +440,17 @@
     var lostNow = 0;
     p.ult = 0; p.ultT = 0; p.alive = false; p.hp = 0; p.respawnAt = this.t + 4.5; p.q.length = 0; p.dots = []; p.st.clm = 0; p.st.fly = 0; p.st.grd = 0; p.st.dsh = 0; p.wantAtk = false;
     p.deadBy = src ? (src.name || (src.arch && src.arch.n) || (src.owner && src.owner.name) || '') : '';
-    p.deadByRaw = src ? (src.arch ? { id: src.arch.id } : src.bossId ? { boss: src.bossId } : { name: src.name || '' }) : null;
+    p.deadByRaw = src ? (src.arch ? { id: src.arch.id } : src.bossId ? { boss: src.bossId } : { name: (src.profile && src.profile.name) || src.name || '' }) : null;
     this.events.push(['d', p.id]);
     this.onPlayerDeath(p, src);
+    if (this.arena) this.arenaDeath(p);
     if (!p.bot && !this.W.duel) {
       var pr = p.profile, into = pr.totalXp - CF.cumXp(pr.level), lose = Math.floor(into * CF.DEATH_XP_LOSS);
       pr.totalXp -= lose; pr.stats.deaths = (pr.stats.deaths | 0) + 1; this.markDirty(p); lostNow = lose;
     }
     // в комнате с живым другом есть время, чтобы он поднял: респаун позже, потерянный опыт вернётся при спасении
     p.lostXp = 0; p.reviveable = false;
-    if (!p.bot && !this.W.duel && this.mode !== 'rush' && this.anyAliveHuman(p)) { p.reviveable = true; p.respawnAt = this.t + CF.REVIVE_SEC; p.lostXp = lostNow || 0; }
+    if (!p.bot && !this.W.duel && this.mode !== 'rush' && !this.arena && this.anyAliveHuman(p)) { p.reviveable = true; p.respawnAt = this.t + CF.REVIVE_SEC; p.lostXp = lostNow || 0; }
     this.sendTo(p, { t: 'dead', by: p.deadByRaw, in: p.reviveable ? CF.REVIVE_SEC : 4.5, rv: p.reviveable ? 1 : 0 });
   };
   RP.anyAliveHuman = function (except) {
@@ -791,7 +811,7 @@
     var f = 0, s = p.st, t = this.t;
     if (p.shield > t) f |= F.SHIELD; if (s.fly) f |= F.FLY; if (p.sub) f |= F.SUB; if (s.clm) f |= F.CLM; if (s.grd) f |= F.GRD;
     if (p.atkAnim > 0) f |= F.ATK; if (!p.alive) f |= F.DEAD; if (p.hidden) f |= F.HIDE; if (s.stun > 0) f |= F.STUN;
-    if (p.moved > 0.5) f |= F.MOVE; if (p.bot) f |= F.BOT;
+    if (p.moved > 0.5) f |= F.MOVE; if (p.bot) f |= F.BOT; if (p.aDmgT > t) f |= F.RAGE; if (p.aSpdT > t) f |= F.FAST;
     return f;
   };
   RP.snapshotFor = function (p) {
@@ -831,7 +851,7 @@
   };
   RP.fxMask = function (e) { var m = 0, d = e.dots || [], i; for (i = 0; i < d.length; i++) m |= d[i].k === 'bleed' ? 1 : d[i].k === 'poison' ? 2 : d[i].k === 'burn' ? 4 : 0; if (e.slowT > this.t) m |= 8; return m; };      // значки эффектов: 1 кровотечение, 2 яд, 4 горение, 8 замедление
   RP.entRow = function (e) {
-    var f = 0; if (e.atkAnim > 0) f |= 1; if (e.target && e.kind === 'e') f |= 2; if (e.stunT > this.t) f |= 4; if (e.hidden) f |= 8; if (e.owner) f |= 16; if (e.moving) f |= 32;
+    var f = 0; if (e.atkAnim > 0) f |= 1; if (e.target && e.kind === 'e') f |= 2; if (e.stunT > this.t) f |= 4; if (e.hidden) f |= 8; if (e.owner) f |= 16; if (e.moving) f |= 32; if (e.mini) f |= 128;
     if (e.kind === 'b') return [e.id, 'B:' + e.bossId, r1(e.st.x), r1(e.st.y), r1(e.st.z), r2(e.st.face), Math.round(e.hp), Math.round(e.mhp), f | (e.burrowed ? 64 : 0), e.phase | 0, this.fxMask(e)];
     return [e.id, ARCH_INDEX[e.arch.id], r1(e.st.x), r1(e.st.y), r1(e.st.z), r2(e.st.face), Math.round(e.hp), Math.round(e.mhp), f, e.lv, this.fxMask(e)];
   };
@@ -853,6 +873,7 @@
       if (p.bot) self.botThink(p);
       self.processPlayer(p);
     });
+    if (this.tick % 10 === 0 && this.teamUpdate) this.teamUpdate();
     this.updateEnts();
     this.updateBossAndZones();
     this.updateDrops();
@@ -865,7 +886,7 @@
   };
 
   // ======================================================================== HUB
-  function Hub(opts) { opts = opts || {}; this.rooms = new Map(); this.nextRoomId = 1; this.onSave = opts.onSave || null; this.onGone = opts.onGone || null; this.tourney = null; this.travelQ = []; }
+  function Hub(opts) { opts = opts || {}; this.rooms = new Map(); this.nextRoomId = 1; this.onSave = opts.onSave || null; this.onGone = opts.onGone || null; this.onMoved = opts.onMoved || null; this.tourney = null; this.travelQ = []; }
   Core.Hub = Hub;
   var HP = Hub.prototype;
   HP.createRoom = function (o) {
@@ -900,13 +921,24 @@
     if (mode === 'rush' && !Sim.isLord(pr)) return { error: 'locked' };
     if (mode !== 'rush' && !Sim.canEnterBiome(pr, biome)) return { error: 'locked' };
     var code = typeof o.code === 'string' && /^[A-Za-z]{5,8}$/.test(o.code) ? o.code.toUpperCase() : null;
-    if (mode === 'code' || (mode === 'rush' && code)) {
+    if (mode === 'arena' || mode === 'arenat') {                              // арена: одиночная — своя комната; совместная — по коду или в открытую, где ещё есть место
+      if (mode === 'arena') room = this.createRoom({ biome: biome, mode: 'arena' });
+      else if (code) { room = this.findCode(code); if (room && (room.mode !== 'arenat' || room.humans() >= room.maxHumans || (room.arena && room.arena.over))) return { error: room.mode !== 'arenat' ? 'bad_code' : 'full' }; if (!room) room = this.createRoom({ biome: biome, code: code, mode: 'arenat' }); }
+      else { var self0 = this; this.rooms.forEach(function (r) { if (!room && r.mode === 'arenat' && !r.code && r.biome === biome && r.humans() < r.maxHumans && r.arena && !r.arena.over && r.arena.wave <= 3) room = r; }); if (!room) room = this.createRoom({ biome: biome, mode: 'arenat' }); }
+      pr.biome = room.biome;
+      return { room: room, player: room.addPlayer(pr, o.conn, { userId: o.userId, admin: o.admin, index: room.humans() }) };
+    }
+    if (mode === 'lobby') {                                                     // «Создать игру»: лобби в мире создателя, у его гнезда; друзья входят по коду
+      if (!code) return { error: 'bad_code' };
+      room = this.findCode(code); if (room) return { error: 'bad_code' };
+      room = this.createRoom({ biome: biome, code: code, mode: 'code', lobby: true });
+    } else if (mode === 'code' || (mode === 'rush' && code)) {
       if (!code) return { error: 'bad_code' };
       room = this.findCode(code);
       if (room) {
         if (room.humans() >= room.maxHumans) return { error: 'full' };
-        if (room.mode !== 'rush' && !Sim.canEnterBiome(pr, room.biome)) return { error: 'locked' };
-        if (room.mode !== 'rush' && !Sim.typeFits(pr.cls, room.biome)) return { error: 'bad_type' };
+        if (!room.isLobby && room.mode !== 'rush' && !Sim.canEnterBiome(pr, room.biome)) return { error: 'locked' };      // в лобби можно всем — это просто сбор у гнезда
+        if (!room.isLobby && room.mode !== 'rush' && !Sim.typeFits(pr.cls, room.biome)) return { error: 'bad_type' };
       } else room = this.createRoom({ biome: biome, code: code, mode: mode === 'rush' ? 'rush' : 'code' });
     } else if (mode === 'solo' || mode === 'rush') {
       room = this.createRoom({ biome: biome, mode: mode });
@@ -935,6 +967,13 @@
     player.gone = true; player.goneAt = room.t; player.shield = room.t + 999;
     this.dropFromQueues(player);
   };
+  // повторное подключение после обрыва: тот же динозавр в той же комнате, без потери позиции и прогресса
+  HP.resume = function (player, conn) {
+    var room = player.room; if (!room || !this.rooms.has(room.id) || !player.gone || room.players.get(player.id) !== player) return false;
+    player.conn = conn; player.gone = false; player.goneAt = 0; player.shield = room.t + 2; player.q.length = 0;
+    room.sendTo(player, room.welcomeMsg(player));
+    return true;
+  };
   HP.checkRoom = function (room) {
     if (!room.hasHuman()) { room.dispose(); this.rooms.delete(room.id); }
   };
@@ -942,6 +981,23 @@
   HP.onMessage = function (p, m) {
     if (!p || !p.room || !m || typeof m.t !== 'string') return;
     p.room.handle(p, m);
+  };
+  // ---- лобби: создатель выбирает, куда идти; у кого что не открыто — сообщается создателю; затем каждый выбирает динозавра
+  HP.canGo = function (pr, dest) {
+    if (dest.mode === 'rush') return Sim.isLord(pr);
+    var types = Object.keys(CF.CLASSES).filter(function (t) { return Sim.typeUnlocked(pr, t); });
+    if (dest.mode === 'arenat') return types.some(function (t) { return !CF.isAqua(t) || CF.OCEANS.indexOf(dest.biome) >= 0; });
+    return types.some(function (t) { if (!Sim.typeFits(t, dest.biome)) return false; var vp = Object.assign({}, pr, { kings: CF.typeKings(pr, t), landDone: Sim.landDone(pr) }); return Sim.canEnterBiome(vp, dest.biome); });
+  };
+  HP.lobbyMove = function (player, cls, go) {
+    var room = player.room, pr = player.profile, conn = player.conn, userId = player.userId, admin = player.admin;
+    if (!room || !CF.CLASSES[cls] || !Sim.typeUnlocked(pr, cls)) return;
+    room.flushProfile(player, true); player.conn = null; room.removePlayer(player); this.checkRoom(room);
+    var res = this.join({ profile: pr, conn: conn, userId: userId, admin: admin, biome: go.biome, cls: cls, mode: go.mode, code: go.code });
+    if (res.error) { res = this.join({ profile: pr, conn: conn, userId: userId, admin: admin, biome: room.biome, mode: 'public' }); if (conn) try { conn.send(JSON.stringify({ t: 'err', m: res.error || 'locked' })); } catch (e) { /* ignore */ } }
+    if (res.player && conn) conn.player = res.player;
+    if (res.player && this.onMoved) this.onMoved(res.player);
+    return res;
   };
   // переход в другой биом через портал: игрок выходит из комнаты и входит в новую
   HP.travel = function (player, biome) {
@@ -952,6 +1008,7 @@
     room.removePlayer(player); this.checkRoom(room);
     var res = this.join({ profile: pr, conn: conn, userId: userId, admin: admin, biome: biome, mode: mode });
     if (res.player && conn) { conn.player = res.player; }
+    if (res.player && this.onMoved) this.onMoved(res.player);
     return res;
   };
   HP.tick = function () {

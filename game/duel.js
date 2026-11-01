@@ -13,7 +13,7 @@
   RP.welcomeMsg = function (p) {
     var li = p.loginInfo || null; p.loginInfo = null; var se = p.seasonInfo || null; p.seasonInfo = null;
     return {
-      t: 'welcome', id: p.id, proto: CF.PROTO, room: { id: this.id, biome: this.biome, code: this.code, mode: this.mode }, tick: CF.TICK_RATE,
+      t: 'welcome', id: p.id, proto: CF.PROTO, room: { id: this.id, biome: this.biome, code: this.code, mode: this.mode, lobby: this.isLobby ? 1 : 0 }, tick: CF.TICK_RATE,
       me: Sim.exportState(p.st), prof: p.profile, tod: Core.r3(this.tod), players: this.roster(p.id), nest: this.W.nest, t0: r1(this.t), login: li, season: se, host: this.hostId || 0
     };
   };

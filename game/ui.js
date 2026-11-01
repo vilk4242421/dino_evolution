@@ -23,8 +23,26 @@ function show(id) { for (const s of screens) $(s).classList.toggle('on', s === i
 function closeAll() { for (const s of screens) $(s).classList.remove('on'); closePanelState(); }
 let pauseChain = false;      // окна, открытые из меню паузы, держат игру замороженной; окна по горячим клавишам — нет
 function closePanelState() { pauseChain = false; openName = null; openRender = null; if (ctl && inGame()) ctl.setPanelOpen(false); }
+// цветные эмодзи: у символов, которые без селектора рисуются чёрно-белыми (⚔ ☠ ⚙ ☁ …), добавляется U+FE0F;
+// иконка в начале заголовка выносится из градиентного текста (иначе она закрашивается градиентом)
+const EMO_RX = /([\u2190-\u21FF\u2300-\u23FF\u2600-\u27BF\u2B00-\u2BFF\u2934\u2935\u3030\u303D\u3297\u3299])(?!\uFE0F)/g;
+function colorEmoji(root) {
+  const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT), list = []; let n;
+  while ((n = w.nextNode())) if (EMO_RX.test(n.nodeValue)) list.push(n);
+  for (const t of list) { EMO_RX.lastIndex = 0; t.nodeValue = t.nodeValue.replace(EMO_RX, (m, c) => (c === '✕' || c === '·' || c === '→' || c === '←' || c === '↑' || c === '↓' || c === '★' || c === '☆' || c === '✔' || c === '✖') ? c : c + '\uFE0F'); }
+  root.querySelectorAll('h2').forEach(h => { const tn = h.firstChild; if (!tn || tn.nodeType !== 3) return; const m = tn.nodeValue.match(/^\s*((?:\p{Extended_Pictographic}|\p{Emoji_Presentation})(?:\uFE0F|\u200D|\p{Extended_Pictographic}|\p{Emoji_Modifier})*)\s*/u); if (!m) return;
+    tn.nodeValue = tn.nodeValue.slice(m[0].length); const sp = document.createElement('span'); sp.className = 'h2ico'; sp.textContent = m[1]; h.insertBefore(sp, tn); });
+}
+// окно подтверждения в стиле игры (вместо системного confirm)
+function openConfirm(title, text, okLabel, onOk, onCancel) {
+  openPanel('confirm', `<h2>${title}</h2><p class="sub" style="font-size:15px;line-height:1.5">${text}</p>
+    <div class="grid2" style="margin-top:12px"><button class="red" id="cf-ok" style="font-weight:800">✔️ ${okLabel}</button><button id="cf-no">✖️ ${T('cancel_btn')}</button></div>`, () => {
+    $('cf-ok').onclick = () => { onOk && onOk(); };
+    $('cf-no').onclick = () => { if (onCancel) onCancel(); else panelClose(); };
+  });
+}
 function openPanel(name, html, after) {
-  const was = openName; openName = name; $('panel-card').innerHTML = '<button class="pclose" id="pclose" aria-label="close">✕</button>' + html; show('panel');
+  const was = openName; openName = name; $('panel-card').innerHTML = '<button class="pclose" id="pclose" aria-label="close">✕</button>' + html; colorEmoji($('panel-card')); show('panel');
   const frz = name === 'pause' || pauseChain; if (name === 'pause') pauseChain = true;
   $('pclose').onclick = () => { ctl.audio.sfx('click'); panelClose(); };
   $('panel-card').scrollTop = 0; if (inGame()) ctl.setPanelOpen(true, frz);
@@ -85,7 +103,7 @@ export const UI = {
   toast(msg, ms) { const t = $('toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(toastT); toastT = setTimeout(() => { t.style.display = 'none'; }, ms || 2600); },
   banner(msg, ms) { const b = $('banner'); b.textContent = msg; b.classList.add('on'); clearTimeout(bannerT); bannerT = setTimeout(() => b.classList.remove('on'), ms || 2200); },
   note(msg) { const n = document.createElement('div'); n.textContent = msg; $('notes').appendChild(n); setTimeout(() => n.remove(), 4600); while ($('notes').children.length > 5) $('notes').firstChild.remove(); },
-  closeAll, showMenu, openSea, openAbout, openChange, openEvo, openShop, openAch, openLeaders, openSettings, openPause, openPlayers, duelRequest,
+  closeAll, showMenu, openLobbyDest, openLobbyPick, lobbyBlock, openSea, openAbout, openChange, openEvo, openShop, openAch, openLeaders, arenaTable, openPlayPanel, openSettings, openPause, openPlayers, duelRequest,
   refreshOpen() { if (openName && openRender) openRender(); }
 };
 
@@ -97,29 +115,65 @@ export function showMenu() {
   const st = P.state, prof = activeProf();
   const acc = st.user ? `<b>${esc(st.user)}</b>${st.admin ? ADM : ''}` : `<b>${T('guest')}</b>`;
   $('menu-card').innerHTML = `
-    <h1>DINO EVOLUTION</h1><p class="sub">${T('tagline')}</p>
+    <div class="m-logo"><h1>DINO EVOLUTION</h1><div class="m-tag">${T('tagline')}</div></div>
     <div id="acc"><span>${acc}</span><button class="sm" id="m-acc">${st.user ? T('signout') : T('signin')}</button></div>
     ${!st.serverUp ? `<p class="sub" style="color:#ffb066">${T('offline_note')}</p>` : ''}
-    <button class="pri" data-go="online" ${!st.serverUp ? 'disabled' : ''}>${T('play_online')}</button>
-    <button data-go="code" ${!st.serverUp ? 'disabled' : ''}>${T('friends')}</button>
-    <button data-go="single">${T('single')}</button>
-    <div class="grid2">
-      <button data-go="leaders">${T('leaderboard')}</button><button data-go="evo">${T('evolution')}</button>
-      <button data-go="ach">${T('achievements')}</button><button data-go="settings">${T('settings')}</button>
-    </div>
-    <div class="grid2"><button data-go="quests">📅 ${T('quests')}</button><button data-go="nest">🪺 ${T('nest')}</button></div>
-    <div class="grid2"><button data-go="duel">🥊 ${T('duel_menu')}</button><button data-go="shop">🏪 ${T('shop')}</button></div>
-    <button data-go="wardrobe" class="pri2">🚪 ${T('wardrobe')}</button>`;
-  const root = $('menu-card');
+    <div class="m-sec">${T('m_play')}</div>
+    <button class="pri m-big" data-go="single">🦖 ${T('single')}</button>
+    <div class="grid2 m-pair"><button class="pri" data-go="online" ${!st.serverUp ? 'disabled' : ''}>🌍 ${T('play_online')}</button><button class="m-alt" data-go="code" ${!st.serverUp ? 'disabled' : ''}>🔑 ${T('friends')}</button></div>
+    <button class="pri m-arena" data-go="arena">🏟️ ${T('arena')}</button>
+    <div class="m-sec">${T('m_more')}</div>
+    <div class="grid2 m-tiles">
+      <button data-go="evo">🧬 ${T('evolution')}</button><button data-go="duel">🥊 ${T('duel_menu')}</button>
+      <button data-go="leaders">🏆 ${T('leaderboard')}</button><button data-go="ach">🎖️ ${T('achievements')}</button>
+      <button data-go="quests">📅 ${T('quests')}</button><button data-go="shop">🏪 ${T('shop')}</button>
+      <button data-go="wardrobe">🚪 ${T('wardrobe')}</button><button data-go="settings">⚙️ ${T('settings')}</button>
+    </div>`;
+  const root = $('menu-card'); colorEmoji(root);
   $('m-acc').onclick = async () => { ctl.audio.init(); if (st.user) { await P.logout(); showMenu(); } else openAuth(() => showMenu()); };
   btnClick(root, '[data-go]', b => {
     const g = b.dataset.go;
     if (g === 'online' || g === 'code' || g === 'single') goPlay(g);
-    else if (g === 'leaders') openLeaders(); else if (g === 'quests') openQuests(); else if (g === 'evo') openEvo(); else if (g === 'ach') openAch(); else if (g === 'nest') openNest(); else if (g === 'duel') openDuelMenu(); else if (g === 'wardrobe') openWardrobe(); else if (g === 'shop') openShop(); else openSettings();
+    else if (g === 'leaders') openLeaders(); else if (g === 'quests') openQuests(); else if (g === 'evo') openEvo(); else if (g === 'ach') openAch(); else if (g === 'nest') openNest(); else if (g === 'duel') openDuelMenu(); else if (g === 'arena') openArena(); else if (g === 'wardrobe') openWardrobe(); else if (g === 'shop') openShop(); else openSettings();
   });
   show('menu');
   if (prof && prof.hatched) ctl.menuSetDino({ cls: prof.cls, color: CONFIG.COLORS[prof.color], level: prof.level, evo: prof.evo, cosmetic: prof.cosmetic, patc: prof.patc, morph: prof.morph }); else ctl.menuShowEgg(0x6aa84f);
   ctl.audio.setScene('menu');
+}
+
+// ---------------------------------------------------------------- арена (из главного меню): одиночная, совместная (код или открытая), рекорды
+let arenaCode = '', arenaCls = null;
+function openArena() {
+  const acct = !!(P.state.token && P.state.serverUp && P.state.online), online = acct;
+  const prof = online ? P.state.profile : P.state.local;
+  if (!prof || !prof.hatched) { openCreate(online, () => openArena(), false); return; }
+  // выбор динозавра для арены: любой открытый тип (на арене все с 1 уровня, поэтому прокачка типа не важна)
+  const types = CONFIG.TYPES.land.concat(CONFIG.TYPES.sea).filter(t => Sim.typeUnlocked(prof, t) && (CONFIG.TYPES.land.indexOf(t) >= 0 || Sim.landDone(prof)));
+  if (!arenaCls || types.indexOf(arenaCls) < 0) arenaCls = types.indexOf(prof.cls) >= 0 ? prof.cls : types[0];
+  const cls = arenaCls, aqua = CONFIG.isAqua(cls), w = aqua ? 'sea' : 'land';
+  const vp = Object.assign({}, prof, { kings: CONFIG.typeKings(prof, cls), landDone: Sim.landDone(prof) });
+  const biome = CONFIG.worldList(w).indexOf(prof.biome) >= 0 && Sim.canEnterBiome(vp, prof.biome) ? prof.biome : (CONFIG.worldList(w).filter(b => Sim.canEnterBiome(vp, b)).pop() || Sim.homeBiome(prof, cls));
+  const card = k => `<div class="tp ${k === cls ? 'sel' : ''}" data-ak="${k}"><i>${cIco(k, true)}</i><b>${esc(TN(CONFIG.CLS_INFO[k].n))}</b></div>`;
+  const html = `<h2>🏟️ ${T('arena')}</h2>
+    <h3>🦖 ${T('lobby_pick')}</h3><div class="types">${types.map(card).join('')}</div>
+    <div class="ar-info"><span>${T('arena_lv1')}</span><span>${BIOME_ICO[biome] || ''} ${esc(TN(CONFIG.BIOME[biome].n))}</span></div>
+    <button class="pri m-big" id="ar-solo" style="font-size:19px;padding:14px">🏟️ ${T('arena_solo')}</button>
+    ${online ? `<h3>👥 ${T('arena_team')}</h3><label>${T('code_room')}</label><div class="row"><input id="ar-code" inputmode="text" maxlength="8" autocapitalize="characters" autocomplete="off" spellcheck="false" value="${arenaCode}" placeholder="${T('code_ph')}" style="margin:0;text-transform:uppercase;letter-spacing:3px;font-weight:800"><button id="ar-dice">🎲</button></div>
+      <button class="pri" id="ar-team">🔑 ${T('join_code')}</button>`
+      : `<button id="ar-team" disabled>👥 ${T('arena_team')}</button>`}
+    <div class="m-sep"></div>
+    <button class="gold" id="ar-lb">🏆 ${T('arena_records')}</button>
+    <div class="err" id="ar-err"></div><button id="ar-back">⬅️ ${T('back')}</button>`;
+  openPanel('arena', html, () => {
+    const go = (mode, code) => { closeAll(); ctl.start({ online, biome, cls, mode, code }); };
+    $('ar-solo').onclick = () => go('arena');
+    $('ar-team').onclick = () => { if (!online) { UI.toast(T('arena_team_off')); return; } const c = ($('ar-code').value || '').trim().toUpperCase(); if (c && !/^[A-Z]{5,8}$/.test(c)) { $('ar-err').textContent = T('bad_code'); return; } go('arenat', c || undefined); };
+    $('ar-dice') && ($('ar-dice').onclick = () => { arenaCode = randCode(); $('ar-code').value = arenaCode; });
+    $('ar-code') && ($('ar-code').oninput = e => { e.target.value = e.target.value.replace(/[^A-Za-z]/g, '').toUpperCase(); arenaCode = e.target.value; });
+    $('ar-lb').onclick = () => openLeaders('arena');
+    $('ar-back').onclick = () => showMenu();
+    btnClick($('panel-card'), '[data-ak]', b => { arenaCls = b.dataset.ak; openArena(); });
+  });
 }
 
 function goPlay(kind) {
@@ -132,8 +186,46 @@ function goPlay(kind) {
   // только что вылупившийся: сразу в первый биом, без экрана выбора
   if (ctl.pendingHatch && kind !== 'code') { ctl.start({ online, biome: Sim.homeBiome(prof), mode: online && !solo ? 'public' : 'solo' }); return; }   // морской вылупляется в океане
   if (ctl.pendingHatch) ctl.fade(false, 600);
+  if (kind === 'online') {      // «Создать игру»: лобби у своего гнезда — друзья входят по коду, потом создатель выбирает, куда идти
+    const b = Sim.canEnterBiome(prof, prof.biome) && Sim.typeFits(prof.cls, prof.biome) ? prof.biome : Sim.homeBiome(prof);
+    ctl.start({ online: true, biome: b, cls: prof.cls, mode: 'lobby', code: randCode() }); return;
+  }
   openPlayPanel(online, kind === 'code', solo);
 }
+
+// ---------------------------------------------------------------- лобби («Создать игру»)
+// создатель: куда идём — биом мира (суша/океан), совместная арена или босс-раш; у кого не открыто — сообщение здесь же
+function openLobbyDest(block) {
+  if (!inGame()) return;
+  const S = ctl.session, pr = S.profile, land = CONFIG.worldList('land'), sea = CONFIG.worldList('sea');
+  const names = [...S.players.values()].map(p => p.info && p.info.nick).filter(Boolean);
+  const bt = b => `<button class="bm" data-lb="${b}" style="text-align:left"><i>${BIOME_ICO[b] || ''}</i> ${esc(TN(CONFIG.BIOME[b].n))}</button>`;
+  openPanel('lobby', `<h2>🚀 ${T('lobby_where')}</h2><div class="ar-info"><span>🔑 ${esc(S.room.code || '')}</span><span>👥 ${1 + names.length}</span></div>
+    ${names.length ? `<p class="sub">${esc(names.join(', '))}</p>` : `<p class="sub">${T('lobby_alone')}</p>`}
+    ${block && block.length ? `<p class="err" style="font-weight:700">🔒 ${T('lobby_block', { n: esc(block.join(', ')) })}</p>` : ''}
+    <h3>🌍 ${T('world_land')}</h3><div class="biomes">${land.map(bt).join('')}</div>
+    <h3>🌊 ${T('world_sea')}</h3><div class="biomes">${sea.map(bt).join('')}</div>
+    <h3>🏟️ ${T('arena')}</h3><button class="gold" data-lm="arenat">👥 ${T('arena_team')}</button>
+    ${Sim.isLord(pr) ? `<button data-lm="rush">🔥 ${T('boss_rush')}</button>` : ''}
+    <button id="lb-x" style="margin-top:10px">⬅️ ${T('back')}</button>`, root => {
+    btnClick(root, '[data-lb]', b => ctl.send({ t: 'lobbydest', mode: 'code', biome: b.dataset.lb }));
+    btnClick(root, '[data-lm]', b => ctl.send({ t: 'lobbydest', mode: b.dataset.lm, biome: S.biome }));
+    $('lb-x').onclick = panelClose;
+  });
+}
+// все: выбор динозавра под выбранное место (тип должен подходить и быть открыт)
+function openLobbyPick(dest) {
+  if (!inGame()) return;
+  const S = ctl.session, pr = S.realProf || S.profile, world = dest.mode === 'arenat' || dest.mode === 'rush' ? (CONFIG.OCEANS.indexOf(dest.biome) >= 0 && dest.mode === 'arenat' ? 'sea' : 'land') : CONFIG.worldOf(dest.biome);
+  const ok = t => Sim.typeUnlocked(pr, t) && (dest.mode !== 'code' || (Sim.typeFits(t, dest.biome) && Sim.canEnterBiome(Object.assign({}, pr, { kings: CONFIG.typeKings(pr, t), landDone: Sim.landDone(pr) }), dest.biome)));
+  const where = dest.mode === 'arenat' ? T('arena_team') : dest.mode === 'rush' ? T('boss_rush') : TN(CONFIG.BIOME[dest.biome].n);
+  const card = k => { const I = CONFIG.CLS_INFO[k], lv = Sim.typeLevel(pr, k), can = ok(k);
+    return `<div class="tp ${can ? '' : 'lock'}" ${can ? `data-pk="${k}"` : ''} style="${can ? '' : 'opacity:.4'}"><i>${cIco(k, true)}</i><b>${esc(TN(I.n))}</b><small>${can ? (lv ? T('level_short') + lv : T('type_new')) : '🔒'}</small></div>`; };
+  openPanel('lobbypick', `<h2>🦖 ${T('lobby_pick')}</h2><div class="ar-info"><span>${esc(where)}</span></div><div class="types">${CONFIG.TYPES[world].map(card).join('')}</div>`, root => {
+    btnClick(root, '[data-pk]', b => { ctl.send({ t: 'lobbypick', cls: b.dataset.pk }); panelClose(); UI.toast(T('lobby_going')); });
+  });
+}
+function lobbyBlock(names) { if (openName === 'lobby') openLobbyDest(names); else UI.toast(T('lobby_block', { n: names.join(', ') })); }
 
 // ---------------------------------------------------------------- вход
 let authDone = null;
@@ -157,7 +249,7 @@ function openPlayPanel(online, codeFocus, soloMode) {
   if (CONFIG.clsWorld(cls) !== world) cls = bestType(world);
   const landOk = Sim.landDone(prof), vp = () => Object.assign({}, prof, { kings: CONFIG.typeKings(prof, cls), landDone: landOk });      // у каждого типа динозавра своё прохождение
   const firstOpen = (w) => { const l = CONFIG.worldList(w); let b = l[0]; for (const x of l) if (Sim.canEnterBiome(vp(), x)) b = x; return b; };
-  let roomCode = randCode();   // при открытии меню в поле сразу подставлен случайный код новой комнаты
+  let roomCode = randCode(); const roomCode0 = roomCode;   // при открытии меню в поле сразу подставлен случайный код новой комнаты (совместная арена берёт код, только если его ввели/изменили)
   let sel = CONFIG.worldList(world).indexOf(prof.biome) >= 0 && Sim.canEnterBiome(vp(), prof.biome) ? prof.biome : firstOpen(world);
   const worldBtn = (w) => {
     const pct = CONFIG.worldProgress(prof, w), n = CONFIG.worldKings(prof, w), all = CONFIG.worldList(w).length, sp = CONFIG.worldSpecies(w).length, seen = CONFIG.worldSeen(prof, w);
@@ -173,12 +265,21 @@ function openPlayPanel(online, codeFocus, soloMode) {
     return `<div class="tp ${k === cls ? 'sel' : ''}" data-k="${k}"><i>${cIco(k, true)}</i><b>${esc(TN(I.n))}</b><small>${st}</small></div>`;
   };
   const render = () => {
+    if (codeFocus && online) {      // «Комната по коду»: только код комнаты и выбор динозавра (локация — последняя открытая для этого типа)
+      const I = CONFIG.CLS_INFO[cls];
+      return `<h2>🔑 ${T('friends')}</h2><p class="sub">${T('code_room')}</p>
+        <div class="row" style="margin:6px 0 10px"><input id="pp-code" inputmode="text" maxlength="8" autocapitalize="characters" autocomplete="off" spellcheck="false" value="${roomCode}" placeholder="${T('code_ph')}" style="margin:0;text-transform:uppercase;letter-spacing:4px;font-weight:800;font-size:22px;text-align:center;flex:1"><button id="pp-dice" title="${T('new_room')}" style="flex:0 0 64px">🎲</button></div>
+        <div class="worlds">${worldBtn('land')}${worldBtn('sea')}</div>
+        <h3>${T('type_title')}</h3><div class="types">${CONFIG.TYPES[world].map(typeCard).join('')}</div>
+        <p class="sub">${esc(TN(I.n))} · ${BIOME_ICO[sel] || ''} ${esc(TN(CONFIG.BIOME[sel].n))}</p>
+        <button class="pri" id="pp-join">${T('join_code')}</button><div class="err" id="pp-err"></div><button id="pp-back">${T('back')}</button>`;
+    }
     const grid = CONFIG.worldList(world).map(b => {
       const ok = Sim.canEnterBiome(vp(), b), king = CONFIG.typeKings(prof, cls).indexOf(b) >= 0;
       return `<div class="bm ${ok ? '' : 'lock'} ${b === sel ? 'sel' : ''}" data-b="${b}"><i>${ok ? BIOME_ICO[b] : '🔒'}</i>${esc(TN(CONFIG.BIOME[b].n))}<small>${king ? '👑 ' + T('king_mark') : T('req_boss', { n: CONFIG.BOSS_LEVEL[b] })}</small></div>`;
     }).join('');
     const I = CONFIG.CLS_INFO[cls], lv = Sim.typeLevel(prof, cls);
-    return `<h2>${T('play_title')}</h2><div class="worlds">${worldBtn('land')}${worldBtn('sea')}</div>
+    return `<h2>🎮 ${T('play_title')}</h2><div class="worlds">${worldBtn('land')}${worldBtn('sea')}</div>
       <h3>${T('type_title')}</h3><div class="types">${CONFIG.TYPES[world].map(typeCard).join('')}</div>
       <div class="tdesc"><p>${esc(TN(I.d))}</p>${statsGrid(cls, Math.max(1, lv))}${world === 'sea' ? `<p class="sub">${T('sea_land_note')}</p>` : ''}${abilList(cls)}${lv ? '' : `<p class="sub">${T('type_new_d')}</p>`}</div>
       <h3>${T('tab_biomes')}</h3><p class="sub">${T('unlock_next')}</p><div class="biomes">${grid}</div>
@@ -274,7 +375,7 @@ function openEvo(tab) {
   tab = tab || 'evo';
   const render = () => {
     const live = inGame(), prof = live ? ctl.session.profile : activeProf(), offEdit = !live && prof === P.state.local;      // офлайн-профиль можно прокачивать и из меню
-    if (!prof || !prof.hatched) { openPanel('evo', `<h2>${T('evolution')}</h2><p class="sub">${T('no_character')}</p><button id="pn-x">${T('back')}</button>`, r => { $('pn-x').onclick = panelClose; }); return; }
+    if (!prof || !prof.hatched) { openPanel('evo', `<h2>🧬 ${T('evolution')}</h2><p class="sub">${T('no_character')}</p><button id="pn-x">${T('back')}</button>`, r => { $('pn-x').onclick = panelClose; }); return; }
     const pts = CONFIG.evoPoints(prof.level, prof.evo), head = `<div class="row" style="margin-bottom:8px"><h2 style="margin:0;flex:2">${CLS_ICO[prof.cls]} ${esc(prof.name)} · ${T('level_short')}${prof.level}</h2><div class="pts" style="text-align:right">${T('evo_points', { n: pts })} · 🪙 ${prof.coins}</div></div>`;
     let body = '';
     if (tab === 'evo') {
@@ -426,7 +527,9 @@ function openShop(tab) {
 }
 
 // ---------------------------------------------------------------- гнездо: трофеи и яйца
-function openNest() {
+let nestFrom = '';
+function openNest(from) {
+  if (from !== undefined) nestFrom = from;
   const live = inGame(), prof = live ? ctl.session.profile : activeProf(); if (!prof || !prof.hatched) return;
   const online = !live && !!(P.state.token && P.state.profile && P.state.profile.hatched);
   const nest = prof.nest || { items: [], put: [] }, mats = prof.mats || { bone: 0, hide: 0 };
@@ -440,7 +543,9 @@ function openNest() {
     return `<div class="br${on ? '' : ' off'}"><h4>${esc(nm(id))}</h4><p>${on ? T('nest_placed') : T('nest_stored')}</p><button data-np="${id}" ${!on && full ? 'disabled' : ''}>${on ? '✖ ' + T('nest_remove') : '＋ ' + T('nest_return')}</button></div>`; }).join('');
   const shopHtml = shop.map(id => { const it = CONFIG.NEST_ITEMS[id]; const okb = it.craft ? mats.bone >= (it.craft.bone | 0) && mats.hide >= (it.craft.hide | 0) : prof.coins >= it.price;
     return `<div class="br"><h4>${esc(nm(id))}</h4><button data-nb="${id}" ${okb ? '' : 'disabled'}>${it.craft ? '🛠 ' + T('craft') + ' · ' + (it.craft.bone ? '🦴' + it.craft.bone : '🟫' + it.craft.hide) : T('buy') + ' · 🪙 ' + it.price}</button></div>`; }).join('');
-  openPanel('nest', `<h2>🪺 ${T('nest')} <small style="color:var(--mut)">${put.length}/${CONFIG.NEST_MAX}</small></h2><p class="sub">${T('nest_hint')}</p><p class="sub">🪙 ${prof.coins} · 🦴 ${mats.bone} · 🟫 ${mats.hide}</p>
+  openPanel('nest', `<h2>🪺 ${T('nest')} <small style="color:var(--mut)">${put.length}/${CONFIG.NEST_MAX}</small></h2>
+    <div style="position:relative"><canvas id="nest3d" style="width:100%;height:270px;border-radius:12px;display:block;background:#9cc4e4;touch-action:none;cursor:grab"></canvas><span class="sub" style="position:absolute;left:10px;bottom:6px;margin:0;color:#fff;text-shadow:0 1px 3px #000">🖐 ${T('nest_view_hint')}</span></div>
+    <p class="sub">${T('nest_hint')}</p><p class="sub">🪙 ${prof.coins} · 🦴 ${mats.bone} · 🟫 ${mats.hide}</p>
     <h4 class="sh">${T('nest_have')}</h4><div class="shop">${ownedHtml || `<p class="sub">${T('nest_none')}</p>`}</div>${shopHtml ? `<h4 class="sh">${T('nest_shop')}</h4><div class="shop">${shopHtml}</div>` : ''}<button id="pn-x" style="margin-top:12px">${T('back')}</button>`, root => {
     const nact = async (op, a) => {
       try {
@@ -450,7 +555,8 @@ function openNest() {
     };
     btnClick(root, '[data-np]', b => { const id = b.dataset.np, i = put.indexOf(id); if (i >= 0) put.splice(i, 1); else if (put.length < CONFIG.NEST_MAX) put.push(id); nact('nestput', { put }); });
     btnClick(root, '[data-nb]', b => nact('nestbuy', { id: b.dataset.nb }));
-    $('pn-x').onclick = panelClose;
+    $('pn-x').onclick = () => { if (nestFrom === 'wd') openWardrobe(); else panelClose(); };
+    ctl.nestView && ctl.nestView($('nest3d'), prof, put);
   });
 }
 
@@ -492,11 +598,11 @@ function openWardrobe(tab) {
     body = `<div class="row"><button data-pet="" ${prof.pet ? '' : 'class="sel"'}>${T('wd_nothing')}</button></div>` + (own.length ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:start">${col(false)}${col(true)}</div>` : `<p class="sub">${T('wd_empty')}</p>`);
   }
   else if (wdTab === 'egg') body = `<p class="sub">${T('shop_eggs_hint')}</p><div class="row"><button data-eq="" data-slot="egg" ${prof.eggskin ? '' : 'class="sel"'}>${T('egg_classic')}</button></div>` + grid(ownedBySlot('egg'));
-  const tabs = [['color', '🎨', T('tab_color')], ['skins', '🦎', T('tab_skins')], ['outfit', '👒', T('tab_outfit')], ['fx', '✨', T('tab_fx')], ['pets', '🐾', T('shop_pets')], ['egg', '🥚', T('tab_egg')]];
+  const tabs = [['color', '🎨', T('tab_color')], ['skins', '🦎', T('tab_skins')], ['outfit', '👒', T('tab_outfit')], ['fx', '✨', T('tab_fx')], ['pets', '🐾', T('shop_pets')], ['egg', '🥚', T('tab_egg')], ['nest', '🪺', T('nest')]];
   const srcSw = !live && hasOnline && hasLocal ? `<div class="tabs"><button data-src="1" class="${shopOnline ? 'on' : ''}">🌐 ${T('prof_online')}</button><button data-src="0" class="${shopOnline ? '' : 'on'}">👤 ${T('prof_local')}</button></div>` : '';
   openPanel('wardrobe', `<div class="row" style="margin-bottom:6px"><h2 style="margin:0;flex:2">🚪 ${T('wardrobe')}</h2><button class="sm" id="wd-shop">🏪 ${T('shop')}</button></div>${srcSw}
     <div class="tabs shoptabs">${tabs.map(([k, i, n]) => `<button data-wt="${k}" class="${wdTab === k ? 'on' : ''}">${i} ${n}</button>`).join('')}</div>${body}<button id="pn-x" style="margin-top:12px">${T('back')}</button>`, root => {
-    btnClick(root, '[data-wt]', b => { wdTab = b.dataset.wt; openWardrobe(); });
+    btnClick(root, '[data-wt]', b => { if (b.dataset.wt === 'nest') { openNest('wd'); return; } wdTab = b.dataset.wt; openWardrobe(); });
     btnClick(root, '[data-src]', b => { shopOnline = b.dataset.src === '1'; openWardrobe(); });
     btnClick(root, '[data-eq]', b => act('equip', { id: b.dataset.eq, slot: b.dataset.slot }));
     btnClick(root, '[data-pet]', b => act('setpet', { id: b.dataset.pet }));
@@ -511,9 +617,9 @@ function openDuelMenu() {
   const prof = P.state.profile && P.state.token ? P.state.profile : null, up = P.state.serverUp;
   const lg = CONFIG.leagueOf((prof && prof.elo) || 1000);
   openPanel('duelm', `<h2>🥊 ${T('duel_menu')}</h2>${prof ? `<div class="ratehead"><b>${lg.ico} ${esc(TN(lg.n))} · ${prof.elo | 0}</b><span>${T('duels_wl', { w: prof.dw | 0, l: prof.dl | 0 })}</span></div>` : ''}
-    <p class="sub">${T('duel_menu_hint')}</p>
     <button class="pri" id="dm-q" ${up ? '' : 'disabled'}>🥊 ${T('duel_find')}</button>
     <button id="dm-t" ${up ? '' : 'disabled'}>🏆 ${T('tourney')}</button>
+    <button id="dm-lb">📊 ${T('lb_title')} · ${T('rating')}</button>
     <button id="pn-x" style="margin-top:10px">${T('back')}</button>`, () => {
     const go = (kind) => {
       const online = true;
@@ -523,7 +629,7 @@ function openDuelMenu() {
       panelClose();
       ctl.start({ online, biome: Sim.homeBiome(prof), mode: online ? 'public' : 'solo', duelq: kind === 'q', tourneyJoin: kind === 't' });
     };
-    $('dm-q').onclick = () => go('q'); $('dm-t').onclick = () => go('t'); $('pn-x').onclick = panelClose;
+    $('dm-q').onclick = () => go('q'); $('dm-t').onclick = () => go('t'); $('dm-lb').onclick = () => openLeaders('elo'); $('pn-x').onclick = panelClose;
   });
 }
 function ratingHead() {
@@ -532,20 +638,32 @@ function ratingHead() {
   const rw = lg.reward, rewTxt = '🪙 ' + rw.c + (rw.title ? ' · ' + CONFIG.TITLES[rw.title].ico + ' ' + TN(CONFIG.TITLES[rw.title].n) : '') + (rw.cos ? ' · 🎁 ' + TN(CONFIG.COSMETICS[rw.cos].n) : '');
   return `<div class="ratehead"><b>${lg.ico} ${esc(TN(lg.n))} · ${elo}</b><span>${T('duels_wl', { w: pr.dw | 0, l: pr.dl | 0 })}${nx ? ' · ' + T('to_next', { n: nx.min - elo, l: TN(nx.n) }) : ''}</span><span>${T('season_left', { d: CONFIG.seasonLeftDays(Date.now()) })} · ${T('season_reward')}: ${esc(rewTxt)}</span></div>`;
 }
+// «Рекорды Арены»: топ по пройденным волнам (одиночная / совместная). data — ответ сервера (/api/leaderboard), null — сервер недоступен
+export function arenaTable(data, tab, limit) {
+  const me = (P.state.user || '').toLowerCase(), rows = data ? (data[tab] || []).slice(0, limit || 50) : null;
+  if (!rows) { const pr = P.state.token && P.state.profile ? P.state.profile : P.state.local, n = pr && pr.stats ? pr.stats[tab] | 0 : 0; return `<p class="sub">${T('arena_lb_off')}</p>${n ? `<p class="sub">${T('arena_lb_local', { n })}</p>` : ''}`; }
+  if (!rows.length) return `<p class="sub">${T('arena_lb_empty')}</p>`;
+  return `<table><tr><th>${T('lb_place')}</th><th>${T('lb_name')}</th><th>${T('arena_lb_waves')}</th><th>${T('level_short')}</th></tr>` + rows.map((r, i) =>
+    `<tr class="${r.nickKey === me ? 'me' : ''}"><td>${i < 3 ? ['🥇', '🥈', '🥉'][i] : i + 1}</td><td>${r.cls ? CLS_ICO[r.cls] + ' ' : ''}${esc(r.nick)}${r.admin ? ADM : ''}</td><td><b>${r.waves}</b></td><td>${r.level}</td></tr>`).join('') + '</table>';
+}
 async function openLeaders(tab) {
   tab = tab || 'wins';
-  openPanel('lb', `<h2>${T('lb_title')}</h2><p class="sub">…</p><button id="pn-x">${T('back')}</button>`, () => { $('pn-x').onclick = panelClose; });
+  openPanel('lb', `<h2>🏆 ${T('lb_title')}</h2><p class="sub">…</p><button id="pn-x">${T('back')}</button>`, () => { $('pn-x').onclick = panelClose; });
   let data = null; try { data = await P.leaderboard(); } catch (e) { /* сервер недоступен */ }
   const me = (P.state.user || '').toLowerCase();
   let table;
   if (!data) table = `<p class="sub">${T('server_off')}</p>`;
   else {
+    if (tab === 'arena' || tab === 'arenaT') { table = arenaTable(data, tab); }
+    else {
     const rows = tab === 'wins' ? data.wins : tab === 'elo' ? (data.elo || []) : tab === 'coins' ? (data.coins || []) : data.kings;
     table = rows.length ? `<table><tr><th>${T('lb_place')}</th><th>${T('lb_name')}</th><th>${tab === 'wins' ? T('lb_wins_n') : tab === 'elo' ? T('rating') : tab === 'coins' ? T('lb_coins_n') : T('lb_kings_n')}</th><th>${T('level_short')}</th></tr>` + rows.map((r, i) =>
       `<tr class="${r.nickKey === me ? 'me' : ''}"><td>${i + 1}</td><td>${r.cls ? CLS_ICO[r.cls] + ' ' : ''}${esc(r.nick)}${r.lord ? ' 🌟' : ''}${r.admin ? ADM : ''}</td><td>${tab === 'wins' ? r.wins : tab === 'elo' ? CONFIG.leagueOf(r.elo).ico + ' ' + r.elo : tab === 'coins' ? '🪙 ' + r.coins : r.count + '/6'}</td><td>${r.level || ''}</td></tr>`).join('') + '</table>' : `<p class="sub">${T('lb_empty')}</p>`;
+    }
   }
+  if (!data && (tab === 'arena' || tab === 'arenaT')) table = arenaTable(null, tab);
   if (openName !== 'lb') return;
-  openPanel('lb', `<h2>🏆 ${T('lb_title')}</h2><div class="tabs"><button data-t="wins" class="${tab === 'wins' ? 'on' : ''}">${T('lb_wins')}</button><button data-t="kings" class="${tab === 'kings' ? 'on' : ''}">${T('lb_kings')}</button><button data-t="elo" class="${tab === 'elo' ? 'on' : ''}">${T('rating')}</button><button data-t="coins" class="${tab === 'coins' ? 'on' : ''}">🪙 ${T('lb_coins')}</button></div>${tab === 'elo' ? ratingHead() : ''}${table}<button id="pn-x" style="margin-top:12px">${T('back')}</button>`, root => {
+  openPanel('lb', `<h2>🏆 ${T('lb_title')}</h2><div class="tabs"><button data-t="wins" class="${tab === 'wins' ? 'on' : ''}">🥊 ${T('lb_wins')}</button><button data-t="kings" class="${tab === 'kings' ? 'on' : ''}">👑 ${T('lb_kings')}</button><button data-t="elo" class="${tab === 'elo' ? 'on' : ''}">📈 ${T('rating')}</button><button data-t="coins" class="${tab === 'coins' ? 'on' : ''}">🪙 ${T('lb_coins')}</button><button data-t="arena" class="${tab === 'arena' || tab === 'arenaT' ? 'on' : ''}">🏟️ ${T('arena')}</button></div>${tab === 'arena' || tab === 'arenaT' ? `<div class="tabs" style="margin-top:6px;justify-content:center"><button data-t="arena" class="${tab === 'arena' ? 'on' : ''}">👤 ${T('arena_lb_solo')}</button><button data-t="arenaT" class="${tab === 'arenaT' ? 'on' : ''}">${T('arena_lb_team')}</button></div>` : ''}${tab === 'elo' ? ratingHead() : ''}${table}<button id="pn-x" style="margin-top:12px">${T('back')}</button>`, root => {
     btnClick(root, '[data-t]', b => openLeaders(b.dataset.t)); $('pn-x').onclick = panelClose;
   });
 }
@@ -553,7 +671,7 @@ async function openLeaders(tab) {
 // ---------------------------------------------------------------- настройки
 function openSettings() {
   const live = inGame(), lang = window.I18N.lang;
-  const html = `<h2>${T('settings')}</h2><div class="grid2"><div>
+  const html = `<h2>⚙️ ${T('settings')}</h2><div class="grid2"><div>
     <label>${T('settings_lang')}</label><select id="s-lang"><option value="ru" ${lang === 'ru' ? 'selected' : ''}>Русский</option><option value="en" ${lang === 'en' ? 'selected' : ''}>English</option></select>
     <label>${T('quality')}</label><select id="s-q">${['auto', 'high', 'med', 'low'].map(q => `<option value="${q}" ${ctl.getQuality() === q ? 'selected' : ''}>${T('q_' + q)}</option>`).join('')}</select>
     <label>${T('sens')}</label><input id="s-sens" type="range" min="0.3" max="2.5" step="0.1" value="${ctl.getSens()}"></div><div>
@@ -562,18 +680,16 @@ function openSettings() {
     <div style="height:10px"></div>
     <button id="s-newrun" ${live ? 'disabled' : ''}>${T('new_run')}</button>
     ${P.state.user ? `<button id="s-logout" ${live ? 'disabled' : ''}>${T('logout')}</button>` : ''}</div></div>
-    <div style="margin:10px 0 0;font-size:11px;opacity:.6;text-align:center">${lang === 'ru' ? '3D-модели: тираннозавр и трицератопс — из присланных STL; птеранодон, паразавролофус и велоцираптор (враги «Раптор» и «Магмовый раптор») — Jurassic Park: The Game (Telltale Games / Universal), присланные модели; брахиозавр — Creazilla.com (Creazilla Open-Source License); мегалодон — «Mighty Megalodon» (Sketchfab, лицензия не указана), корона — скульпт; мозазавр — модель «Mosasaurus»; стегозавр — «Stegosaurus II» (sjpiper145, Thingiverse, CC0); компсогнат, троодон и геррерозавр — Jurassic Park: The Game (Telltale / Universal); плезиозавр — Dino Crisis 2 (Capcom), вариант 2; варан — «Komodo Dragon» (Thingiverse); спинозавр — «Spinosaurus animation» (лицензия не указана); болотный крокодил (саркозух) — «Sarcosuchus imperator» — Nobilis 2 (CC BY 4.0); летающие враги — «Pterosaur Quetzalcoatlus» (Sketchfab, лицензия не указана); ихтиозавр — «Ichthyosaurus» (Sketchfab, лицензия не указана); плиозавр — «Pliosaurus kevani» (Sketchfab, лицензия не указана); питомец-скорпион — Sketchfab, лицензия не указана; удильщик — «Anglerfish 3D» (Sketchfab, лицензия не указана); все присланы автором игры' : '3D models: tyrannosaur and triceratops from supplied STL files; pteranodon, parasaurolophus and velociraptor from Jurassic Park: The Game (Telltale / Universal), supplied models; brachiosaurus — Creazilla.com (Creazilla Open-Source License); megalodon — “Mighty Megalodon” (Sketchfab, license not specified), crown — sculpt; mosasaur — “Mosasaurus” model; stegosaurus — “Stegosaurus II” (sjpiper145, Thingiverse, CC0); compsognathus, troodon and herrerasaurus — Jurassic Park: The Game (Telltale / Universal); plesiosaur — Dino Crisis 2 (Capcom), variant 2; komodo dragon — “Komodo Dragon” (Thingiverse); spinosaurus — “Spinosaurus animation” (license not specified); swamp crocodile (Sarcosuchus) — “Sarcosuchus imperator” by Nobilis 2 (CC BY 4.0); flying enemies — “Pterosaur Quetzalcoatlus” (Sketchfab, license not specified); ichthyosaur — “Ichthyosaurus” (Sketchfab, license not specified); pliosaur — “Pliosaurus kevani” (Sketchfab, license not specified); scorpion pet — Sketchfab, license not specified; anglerfish — “Anglerfish 3D” (Sketchfab, license not specified); all supplied by the game author'}</div>
     <button class="pri" id="pn-x">${T('back')}</button>`;
   openPanel('settings', html, root => {
     $('s-lang').onchange = e => { window.I18N.set(e.target.value); UI.applyLang(); ctl.rebuildHud(); openSettings(); };
     $('s-q').onchange = e => ctl.setQuality(e.target.value);
     $('s-sens').oninput = e => ctl.setSens(parseFloat(e.target.value));
     $('s-vol').oninput = e => ctl.audio.setVolume(parseFloat(e.target.value)); $('s-mus').onchange = e => ctl.audio.setMusic(e.target.checked);
-    $('s-newrun').onclick = async () => {
-      if (!confirm(T('new_run_q'))) return;
+    $('s-newrun').onclick = () => openConfirm('⚠️ ' + T('new_run'), T('new_run_q') + '<br><b style="color:#ff8a7a">' + T('new_run_warn') + '</b>', T('confirm'), async () => {
       const online = !!P.state.token && !!P.state.profile && P.state.profile.hatched, prof = online ? P.state.profile : P.state.local;
       try { await P.createCharacter({ name: prof.name, color: prof.color, cls: null, hatched: false }, online, true); openCreate(online, () => showMenu(), true); } catch (e) { UI.toast(errText(e)); }
-    };
+    }, () => openSettings());
     if ($('s-logout')) $('s-logout').onclick = async () => { await P.logout(); showMenu(); };
     $('pn-x').onclick = panelClose;
   });
@@ -584,19 +700,19 @@ function randCode() { const a = new Uint32Array(6); (window.crypto || window.msC
 function openPause() {
   if (!inGame()) return;
   const S = ctl.session, code = S.room.code;
-  openPanel('pause', `<h2>${T('menu')} Dino Evolution</h2>${code ? `<p class="sub">${T('copy_code')}: <b style="color:var(--ac2);font-size:20px">${code}</b></p>` : ''}
-    <button class="pri" id="ps-resume">${T('resume')}</button>
-    <div class="grid2"><button id="ps-about">🦖 ${T('about_dino')}</button><button id="ps-chg" ${S.room.mode === 'duel' || S.room.mode === 'rush' ? 'disabled' : ''}>🔄 ${T('change_dino')}</button></div>
+  openPanel('pause', `<h2>🦖 Dino Evolution</h2>${code ? `<p class="sub">${T('copy_code')}: <b style="color:var(--ac2);font-size:20px">${code}</b></p>` : ''}
+    <button class="pri" id="ps-resume">▶️ ${T('resume')}</button>
+    <div class="grid2"><button id="ps-about">🦖 ${T('about_dino')}</button><button id="ps-chg" ${S.room.mode === 'duel' || S.room.mode === 'rush' || S.room.mode === 'arena' || S.room.mode === 'arenat' ? 'disabled' : ''}>🔄 ${T('change_dino')}</button></div>
     ${(() => {      // одна сетка: «Игроки» только в комнате; нечётная кнопка в конце растягивается на всю ширину — пустых ячеек нет
       const room = !(S.o && (!S.o.online || S.o.mode === 'solo'));
-      const bs = [`<button id="ps-evo">${T('evolution')}</button>`, room ? `<button id="ps-pl">${T('players')}</button>` : '', `<button id="ps-ach">${T('achievements')}</button>`, `<button id="ps-set">${T('settings')}</button>`,
-        `<button id="ps-nest">🪺 ${T('nest')}</button>`, `<button id="ps-shop">🏪 ${T('shop')}</button>`, `<button id="ps-q">📅 ${T('quests')}</button>`, `<button id="ps-wd">🚪 ${T('wardrobe')}</button>`, `<button id="ps-story">${ctl.story.tr('storyBtn')}</button>`].filter(Boolean);
+      const bs = [`<button id="ps-evo">🧬 ${T('evolution')}</button>`, room ? `<button id="ps-pl">👥 ${T('players')}</button>` : '', `<button id="ps-ach">🏆 ${T('achievements')}</button>`, `<button id="ps-set">⚙️ ${T('settings')}</button>`,
+        `<button id="ps-shop">🏪 ${T('shop')}</button>`, `<button id="ps-q">📅 ${T('quests')}</button>`, `<button id="ps-wd">🚪 ${T('wardrobe')}</button>`, `<button id="ps-story">${ctl.story.tr('storyBtn')}</button>`].filter(Boolean);
       if (bs.length % 2) bs[bs.length - 1] = bs[bs.length - 1].replace('<button ', '<button style="grid-column:1/-1" ');
       return '<div class="grid2">' + bs.join('') + '</div>';
     })()}
-    ${S.room.mode === 'rush' || S.room.mode === 'duel' ? '' : `<button id="ps-loc">🗺 ${T('locations_btn')}</button>`}
-    <button class="red" id="ps-exit">${T('to_menu')}</button>`, root => {
-    $('ps-resume').onclick = panelClose; $('ps-about').onclick = openAbout; $('ps-chg').onclick = openChange; $('ps-evo').onclick = () => openEvo(); if ($('ps-pl')) $('ps-pl').onclick = openPlayers; $('ps-ach').onclick = openAch; $('ps-nest').onclick = openNest; $('ps-wd').onclick = () => openWardrobe(); $('ps-shop').onclick = () => openShop(); $('ps-set').onclick = openSettings; $('ps-q').onclick = openQuests;
+    ${S.room.mode === 'rush' || S.room.mode === 'duel' || S.room.mode === 'arena' || S.room.mode === 'arenat' ? '' : `<button id="ps-loc">🗺 ${T('locations_btn')}</button>`}
+    <button class="red" id="ps-exit">🏠 ${T('to_menu')}</button>`, root => {
+    $('ps-resume').onclick = panelClose; $('ps-about').onclick = openAbout; $('ps-chg').onclick = openChange; $('ps-evo').onclick = () => openEvo(); if ($('ps-pl')) $('ps-pl').onclick = openPlayers; $('ps-ach').onclick = openAch; $('ps-wd').onclick = () => openWardrobe(); $('ps-shop').onclick = () => openShop(); $('ps-set').onclick = openSettings; $('ps-q').onclick = openQuests;
     $('ps-exit').onclick = () => { closePanelState(); $('panel').classList.remove('on'); ctl.leave(); };
     $('ps-story').onclick = openStory;
     if ($('ps-loc')) $('ps-loc').onclick = openLocations;
@@ -606,7 +722,7 @@ function openLocations() {
   const S = ctl.session, pr = S.profile, w = CONFIG.worldOf(S.biome);
   const rows = CONFIG.worldList(w).map(b => { const ok = Sim.canEnterBiome(pr, b), here = b === S.biome;
     return `<button class="bm ${ok ? '' : 'lock'} ${here ? 'sel' : ''}" data-b="${b}" ${ok && !here ? '' : 'disabled'} style="text-align:left"><i>${ok ? BIOME_ICO[b] : '🔒'}</i> ${esc(TN(CONFIG.BIOME[b].n))}<small>${here ? T('loc_here') : ok ? (pr.kings.indexOf(b) >= 0 ? '👑 ' + T('king_mark') : T('loc_go')) : T('req_boss', { n: CONFIG.BOSS_LEVEL[b] })}</small></button>`; }).join('');
-  openPanel('locations', `<h2>🗺 ${T('locations_btn')}</h2><p class="sub">${T('loc_note')}</p><div class="biomes">${rows}</div><button id="lc-back">${T('back')}</button>`, root => {
+  openPanel('locations', `<h2>🗺️ ${T('locations_btn')}</h2><p class="sub">${T('loc_note')}</p><div class="biomes">${rows}</div><button id="lc-back">${T('back')}</button>`, root => {
     btnClick(root, '.bm', b => { if (b.disabled) return; ctl.session.conn.send({ t: 'goto', biome: b.dataset.b }); panelClose(); });
     $('lc-back').onclick = openPause;
   });
@@ -677,7 +793,7 @@ function openPlayers() {
       const i = p.info; return `<tr><td>${CLS_ICO[i.cls] || ''} ${esc(i.nick)}${i.king ? ' 👑' : ''}${i.lord ? ' 🌟' : ''}${i.admin ? ADM : ''}${i.bot ? ' 🤖' : ''}</td><td>${T('level_short')}${i.level}</td><td style="text-align:right">${!i.bot && canDuel ? `<button class="sm" data-duel="${id}">⚔ ${T('duel')}</button>` : ''}</td></tr>`;
     });
     const tq = S.tq > 0;
-    const html = `<h2>${T('players')}</h2>${rows.length ? `<table>${rows.join('')}</table>` : `<p class="sub">${T('no_players')}</p>`}
+    const html = `<h2>👥 ${T('players')}</h2>${rows.length ? `<table>${rows.join('')}</table>` : `<p class="sub">${T('no_players')}</p>`}
       ${S.o.online && canDuel ? `<h3>${T('tourney')}</h3><button id="pl-t">${tq ? T('tourney_cancel') : T('tourney_join')}</button>` : ''}
       <div class="row">${[0, 1, 2, 3].map(i => `<button data-em="${i}" style="font-size:22px">${['👋', '😄', '😡', '❤'][i]}</button>`).join('')}</div>
       <button class="pri" id="pn-x" style="margin-top:12px">${T('resume')}</button>`;

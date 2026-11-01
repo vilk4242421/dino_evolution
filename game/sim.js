@@ -320,7 +320,7 @@
       if (i % 5 === 0) continue;
       var ang = i / 20 * 6.2832, sx = Math.cos(ang) * (ARENA + 1), sz = Math.sin(ang) * (ARENA + 1);
       var st = { x: sx, z: sz, y: heightAt(sx, sz), r: 1.5, s: 1, rot: ang, kind: 'stone', h: 5 };
-      W.stones.push(st); if (!W.ocean) addObstacle(W, st);              // под водой над камнями проплывают
+      W.stones.push(st); if (W.ocean) st.sub = 1; addObstacle(W, st);              // твёрдые: в обход; под водой — над вершиной камня можно проплыть
     }
 
     var rng = mulberry32(cfg.seed * 7 + 3);
@@ -337,8 +337,10 @@
       var near = obstaclesNear(W, x, z, 3.5), ok = true;
       for (var j = 0; j < near.length; j++) { if (Math.hypot(near[j].x - x, near[j].z - z) < 3.2) { ok = false; break; } }
       if (!ok) continue;
-      var s = 0.8 + rng() * 0.9;
-      var tr = { x: x, z: z, y: h, s: s, r: TR * s, rot: rng() * 6.28, v: rng(), kind: 'tree', h: (TREE_H[tstyle] || 6) * s };
+      var s = 0.8 + rng() * 0.9, trot = rng() * 6.28, tv = rng();
+      // лес: вид дерева берётся из v (как в world.js: v ≤ 0.5 — дуб, иначе берёза) — столкновение по толщине именно этого ствола
+      var tr_ = tstyle === 'broad' ? (tv <= 0.5 ? 0.52 : 0.2) : TR;
+      var tr = { x: x, z: z, y: h, s: s, r: tr_ * s, rot: trot, v: tv, kind: 'tree', h: (TREE_H[tstyle] || 6) * s };
       W.trees.push(tr); addObstacle(W, tr);
     }
     for (var rt = 0; rt < 6000 && W.rocks.length < cfg.rocks; rt++) {
@@ -348,9 +350,9 @@
       if (Math.hypot(rx, rz) < ARENA + 8) continue;
       if (Math.hypot(rx - W.portalIn.x, rz - W.portalIn.z) < 6 || Math.hypot(rx - W.portalNext.x, rz - W.portalNext.z) < 6) continue;
       var rs = 0.7 + rng() * 1.8;
-      var rk = { x: rx, z: rz, y: rh, s: rs, r: 0.6 * rs, rot: rng() * 6.28, v: rng(), kind: 'rock', h: 1.4 * rs };
+      var rk = { x: rx, z: rz, y: rh, s: rs, r: 0.8 * rs, rot: rng() * 6.28, v: rng(), kind: 'rock', h: 1.4 * rs };      // радиус столкновения — по видимому краю валуна (раньше 0,6: динозавр «влезал» в камень)
       if (!W.ocean) { var wet = false; for (var q = 0; q < 8 && !wet; q++) { var qa = q / 8 * 6.2832; if (heightAt(rx + Math.cos(qa) * rk.r, rz + Math.sin(qa) * rk.r) < W.waterY + 0.05) wet = true; } if (wet) continue; }   // валун у самой воды уходил под воду, а столкновение оставалось — невидимый блок
-      W.rocks.push(rk); if (!W.ocean) addObstacle(W, rk);
+      W.rocks.push(rk); if (W.ocean) rk.sub = 1; addObstacle(W, rk);
     }
     // ближайшее дерево, на которое можно залезть
     W.treeNear = function (x, z, maxD) {
@@ -411,6 +413,11 @@
     return 0.36 * Math.pow(1.9 / 0.36, Math.pow((l - 1) / (CF.MAX_LEVEL - 1), 0.9));   // плавный рост: 0.36 на 1 уровне → 1.9 на 30
   }
   // характеристики из класса, уровня и эволюции (evo: {ветка: ранг}); одинаково считаются на клиенте и сервере
+  // арена: свой уровень с 1-го и без эволюции; вместо эволюции здоровье и урон растут с уровнем арены (ARENA.PL_K за уровень)
+  function arenaStats(cls, level) {
+    var st = statsFor(cls, level, {}), k = 1 + ((CF.ARENA && CF.ARENA.PL_K) || 0) * (Math.max(1, level) - 1);
+    st.hp = Math.round(st.hp * k); st.dmg *= k; st.regen *= k; return st;
+  }
   function statsFor(cls, level, evo) {
     var c = CF.CLASSES[cls] || CF.CLASSES.carn;
     level = clamp(level | 0 || 1, 1, CF.MAX_LEVEL);
@@ -463,12 +470,15 @@
   }
 
   var _r = { x: 0, z: 0 };
-  function resolve(W, x, z, r) {
+  // твёрдые предметы (стволы, валуны, камни арены): круглые коллайдеры — тело упирается и скользит вдоль края, сквозь не проходит.
+  // y (необязательно) — высота тела: подводные камни можно переплыть сверху (выше вершины — не мешают), но не пройти насквозь.
+  function resolve(W, x, z, r, y) {
     if (W.obstacles.length) {
       for (var k = 0; k < 2; k++) {
         var near = obstaclesNear(W, x, z, r + 3);
         for (var i = 0; i < near.length; i++) {
-          var o = near[i], dx = x - o.x, dz = z - o.z, d = Math.sqrt(dx * dx + dz * dz), m = o.r + r;
+          var o = near[i]; if (o.sub && (y === undefined || y > o.y + o.h * 0.9)) continue;
+          var dx = x - o.x, dz = z - o.z, d = Math.sqrt(dx * dx + dz * dz), m = o.r + r;
           if (d < m) {
             if (d < 1e-4) { dx = 1; dz = 0; d = 1; }
             x = o.x + dx / d * m; z = o.z + dz / d * m;
@@ -539,19 +549,23 @@
       p.dsh = Math.max(0, p.dsh - dt); mvx = p.dvx; mvz = p.dvz;
     } else if (moving) { mvx = dx * speed; mvz = dz * speed; }
     else if (flying) { mvx = Math.sin(p.face) * st.flySpd * CF.SPEED_SCALE * 0.38; mvz = Math.cos(p.face) * st.flySpd * CF.SPEED_SCALE * 0.38; }
+    if ((mvx !== 0 || mvz !== 0) && !flying && !swimMode && !deep && p.onGround && p.dsh <= 0) {   // склон: в гору медленнее (до −25 %), под гору чуть быстрее (до +8 %)
+      var mv0 = Math.hypot(mvx, mvz), gr = (W.heightAt(ox + mvx / mv0, oz + mvz / mv0) - W.heightAt(ox, oz));
+      var sk = gr > 0 ? Math.max(0.75, 1 / (1 + 0.45 * gr)) : 1 + Math.min(0.08, -gr * 0.08); mvx *= sk; mvz *= sk;
+    }
     if (mvx !== 0 || mvz !== 0) {
       var nx = ox + mvx * dt, nz = oz + mvz * dt;
-      var r = resolve(W, nx, nz, st.radius), cx = r.x, cz = r.z;
+      var ry = flying ? undefined : p.y, r = resolve(W, nx, nz, st.radius, ry), cx = r.x, cz = r.z;
       if (!flying && p.onGround && W.heightAt(cx, cz) - p.y > 0.55) {  // слишком крутой подъём — скользим по осям
-        var r1 = resolve(W, nx, oz, st.radius), ax = r1.x, az = r1.z, okX = W.heightAt(ax, az) - p.y <= 0.55;
-        var r2 = resolve(W, ox, nz, st.radius), bx = r2.x, bz = r2.z, okZ = W.heightAt(bx, bz) - p.y <= 0.55;
+        var r1 = resolve(W, nx, oz, st.radius, ry), ax = r1.x, az = r1.z, okX = W.heightAt(ax, az) - p.y <= 0.55;
+        var r2 = resolve(W, ox, nz, st.radius, ry), bx = r2.x, bz = r2.z, okZ = W.heightAt(bx, bz) - p.y <= 0.55;
         if (okX) { cx = ax; cz = az; } else if (okZ) { cx = bx; cz = bz; } else { cx = ox; cz = oz; }
       }
       if (swimMode && (W.caveSolid || true)) {                         // под водой: стены холмов и порода свода не пропускают (раньше «выталкивало» наверх или пускало внутрь)
         var blk = function (qx, qz) { return (W.caveSolid && W.caveSolid(qx, p.y, qz)) || W.heightAt(qx, qz) - p.y > 0.8; };
         if (blk(cx, cz) && !blk(ox, oz)) {
-          if (!blk(nx, oz)) { var r3 = resolve(W, nx, oz, st.radius); cx = r3.x; cz = r3.z; if (blk(cx, cz)) { cx = ox; cz = oz; } }
-          else if (!blk(ox, nz)) { var r4 = resolve(W, ox, nz, st.radius); cx = r4.x; cz = r4.z; if (blk(cx, cz)) { cx = ox; cz = oz; } }
+          if (!blk(nx, oz)) { var r3 = resolve(W, nx, oz, st.radius, ry); cx = r3.x; cz = r3.z; if (blk(cx, cz)) { cx = ox; cz = oz; } }
+          else if (!blk(ox, nz)) { var r4 = resolve(W, ox, nz, st.radius, ry); cx = r4.x; cz = r4.z; if (blk(cx, cz)) { cx = ox; cz = oz; } }
           else { cx = ox; cz = oz; }
         }
       }
@@ -604,10 +618,15 @@
       p.y += (target - p.y) * Math.min(1, 6 * dt);
       p.vy = 0; p.onGround = false;
     } else {
-      if (jump && p.onGround && !p.grd) { p.vy = CF.JUMP_V; p.onGround = false; }
-      p.vy -= CF.GRAVITY * dt;
+      // по суше: гравитация с пределом скорости падения; вниз по склону — «прилипаем» к земле (раньше динозавр на спуске подпрыгивал
+      // мелкими падениями), с уступа круче ~50° — честное падение; приземление запоминает силу удара (клиент делает мягкое приседание)
+      var wasG = p.onGround, hmv = Math.hypot(p.x - ox, p.z - oz);
+      if (jump && p.onGround && !p.grd) { p.vy = CF.JUMP_V; p.onGround = false; wasG = false; }
+      p.vy -= CF.GRAVITY * dt; if (p.vy < -CF.FALL_MAX) p.vy = -CF.FALL_MAX;
       p.y += p.vy * dt;
-      if (p.y <= ground) { p.y = ground; p.vy = 0; p.onGround = true; } else if (p.y > ground + 0.02) p.onGround = false;
+      if (p.y <= ground) { if (!wasG && p.vy < -6) p.imp = -p.vy; p.y = ground; p.vy = 0; p.onGround = true; }
+      else if (wasG && p.vy <= 0 && p.y - ground <= 0.08 + hmv * 1.2) { p.y = ground; p.vy = 0; p.onGround = true; }
+      else p.onGround = false;
     }
     return p;
   }
@@ -791,6 +810,8 @@
     if (!Array.isArray(p.codes)) p.codes = []; p.codes = p.codes.filter(function (x) { return typeof x === 'string'; }).slice(0, 50);
     if (!Array.isArray(p.claimed)) p.claimed = []; if (!Array.isArray(p.titles)) p.titles = [];
     if (p.titles.indexOf('king') >= 0) { if (CF.worldKings(p, 'land') >= 6 && p.titles.indexOf('landking') < 0) p.titles.push('landking'); if (p.title === 'king') p.title = CF.worldKings(p, 'land') >= 6 ? 'landking' : ''; }      // старый титул «Король биома» заменён на «Король суши»
+    p.titles = p.titles.filter(function (t) { return t !== 'tough' && t !== 'forestking' && t !== 'friend'; }); if (p.title && p.titles.indexOf(p.title) < 0 && p.title !== 'lord') p.title = p.titles[0] || '';   // убранные бесполезные титулы
+    var ti = p.titles.indexOf('lord'); if (ti >= 0) { p.titles.splice(ti, 1); if (p.titles.indexOf('epoch_lord') < 0) p.titles.push('epoch_lord'); if (p.title === 'lord') p.title = 'epoch_lord'; }   // «Владыка эпох» был двумя титулами — теперь один
     p.titles = p.titles.filter(function (x) { return CF.TITLES[x]; }); if (!p.title || p.titles.indexOf(p.title) < 0) p.title = '';
     ['patc', 'rfx', 'morph', 'eggskin'].forEach(function (f) { if (typeof p[f] !== 'string' || (p[f] && p.cosmetics.indexOf(p[f]) < 0)) p[f] = ''; });
     if (typeof p.cosmetic !== 'string' || (p.cosmetic && p.cosmetics.indexOf(p.cosmetic) < 0)) p.cosmetic = '';
@@ -800,7 +821,8 @@
     if (!p.nest || typeof p.nest !== 'object') p.nest = {}; if (!Array.isArray(p.nest.items)) p.nest.items = []; if (!Array.isArray(p.nest.put)) p.nest.put = [];
     p.nest.items = p.nest.items.filter(function (x, i, a) { return CF.NEST_ITEMS[x] && a.indexOf(x) === i; });
     p.nest.put = p.nest.put.filter(function (x, i, a) { return (CF.nestOwned(p, x) || (x.indexOf('tr_') === 0 && CF.nestItem(x))) && a.indexOf(x) === i; }).slice(0, CF.NEST_MAX);
-    if (!Array.isArray(p.pets)) p.pets = []; p.pets = p.pets.filter(function (x) { return CF.PETS[x]; });
+    if (!Array.isArray(p.pets)) p.pets = []; p.pets = p.pets.map(function (x) { return x === 'puffer' ? 'octopus' : x; }).filter(function (x, i, a) { return CF.PETS[x] && a.indexOf(x) === i; });   // фугу заменён осьминогом (сохранения не теряются)
+    if (p.pet === 'puffer') p.pet = 'octopus';
     if (!p.pet || p.pets.indexOf(p.pet) < 0) p.pet = '';
     if (p.cls === 'aqua') p.cls = 'mosa';                  // старый морской динозавр стал мозазавром
     if (p.cls && !CF.CLASSES[p.cls]) p.cls = 'carn';
@@ -884,7 +906,7 @@
     CONFIG: CF, clamp: clamp, smooth: smooth, lerp: lerp, wrap: wrap, mulberry32: mulberry32, vnoise: vnoise, fbm: fbm,
     getWorld: getWorld, obstaclesNear: obstaclesNear, DEF: DEF,
     step: step, newPlayer: newPlayer, exportState: exportState, importState: importState, applyLock: applyLock, resolve: resolve,
-    cleanInput: cleanInput, statsFor: statsFor, scaleOf: scaleOf,
+    cleanInput: cleanInput, statsFor: statsFor, arenaStats: arenaStats, scaleOf: scaleOf,
     shopOp: shopOp, eloUpdate: eloUpdate, seasonRoll: seasonRoll, dailyRoll: dailyRoll, questAdd: questAdd, fixDaily: fixDaily, dayNum: dayNum,
     defaultProfile: defaultProfile, fixProfile: fixProfile, unlockedBiomes: unlockedBiomes, canEnterBiome: canEnterBiome, landDone: landDone, typeFits: typeFits, switchType: switchType, typeUnlocked: typeUnlocked, typeLevel: typeLevel, isLord: isLord, homeBiome: homeBiome,
     enemyScale: enemyScale, enemySizeMul: enemySizeMul, xpReward: xpReward, xpShare: xpShare, findShare: findShare, killsPerLevel: killsPerLevel, TREE_H: TREE_H

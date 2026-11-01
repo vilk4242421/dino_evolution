@@ -11,7 +11,7 @@ export function connectOnline(o, h) {
   };
   try { ws = new WebSocket(wsUrl()); } catch (e) { setTimeout(() => h.onclose('error'), 0); return conn; }
   let opened = false;
-  ws.onopen = () => { opened = true; ws.send(JSON.stringify({ t: 'hello', token: o.token, biome: o.biome, cls: o.cls, mode: o.mode, code: o.code })); h.onopen && h.onopen(); };
+  ws.onopen = () => { opened = true; ws.send(JSON.stringify({ t: 'hello', token: o.token, biome: o.biome, cls: o.cls, mode: o.mode, code: o.code, resume: o.resume ? 1 : 0 })); h.onopen && h.onopen(); };
   ws.onmessage = e => { let m; try { m = JSON.parse(e.data); } catch (x) { return; } h.onmsg(m); };
   ws.onclose = e => { if (!closed) h.onclose(opened ? 'lost' : 'error'); closed = true; };
   ws.onerror = () => { /* onclose сообщит */ };
@@ -31,7 +31,7 @@ export function connectLocal(o, h) {
       try { if (fake.player) hub.leave(fake.player); } catch (e) { /* ignore */ }
     }
   };
-  const res = hub.join({ profile: o.profile, conn: fake, userId: 0, admin: false, biome: o.biome, cls: o.cls, mode: o.mode === 'rush' ? 'rush' : 'solo', code: null });
+  const res = hub.join({ profile: o.profile, conn: fake, userId: 0, admin: false, biome: o.biome, cls: o.cls, mode: o.mode === 'rush' || o.mode === 'arena' ? o.mode : 'solo', code: null });
   if (res.error) { setTimeout(() => h.onclose(res.error), 0); closed = true; return conn; }
   fake.player = res.player; if (typeof window !== 'undefined') window.__fakePlayer = res.player;      // для отладки и автотестов
   const dt = 1000 / CONFIG.TICK_RATE;

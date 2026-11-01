@@ -6,6 +6,7 @@ const P = new Float64Array(new Float32Array(vb.buffer, vb.byteOffset, vb.length 
 let F = new Int32Array(fb.buffer.slice(fb.byteOffset, fb.byteOffset + fb.length));
 const nV = P.length / 3, nF = F.length / 3, target = +tgtS;
 const LOCK = process.env.DEC_LOCK ? fs.readFileSync(process.env.DEC_LOCK) : null;   // необязательно: Uint8 на вершину, 1 — не трогать (границы UV-островов)
+const GRP = process.env.DEC_GRP ? (b => new Int32Array(b.buffer, b.byteOffset, b.length / 4))(fs.readFileSync(process.env.DEC_GRP)) : null;   // необязательно: группа вершины (главная кость) — схлопываем только внутри группы, чтобы веса не перескакивали
 const Q = new Float64Array(nV * 10);            // квадрики вершин
 const alive = new Uint8Array(nF).fill(1), vAlive = new Uint8Array(nV).fill(1), ver = new Int32Array(nV);
 const vf = Array.from({ length: nV }, () => []);  // вершина -> грани
@@ -79,6 +80,7 @@ while (faces > target && H.c.length && guard++ < 5e6) {
   const nu = neighbors(u), nv = neighbors(v); let common = 0; for (const w of nu) if (nv.has(w)) common++;
   if (common !== 2) continue;
   if (LOCK && (LOCK[u] || LOCK[v])) continue;
+  if (GRP && GRP[u] !== GRP[v]) continue;
   let bad = false; const ou = [P[u * 3], P[u * 3 + 1], P[u * 3 + 2]], ov = [P[v * 3], P[v * 3 + 1], P[v * 3 + 2]];
   for (const w of [u, v]) for (const f of vf[w]) {
     if (!alive[f]) continue; const a = F[f * 3], b = F[f * 3 + 1], c = F[f * 3 + 2];

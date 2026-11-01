@@ -102,9 +102,9 @@ function liveProfile(user) { const p = online.get(user.id); return p && p.profil
 let lbCache = { at: 0, data: null };
 async function leaderboard() {
   if (lbCache.data && Date.now() - lbCache.at < 8000) return lbCache.data;
-  const [wins, kings, elo, coins] = await Promise.all([store.topWins(50), store.topKings(50), store.topElo(50), store.topCoins(50)]);
+  const [wins, kings, elo, coins, arena, arenaT] = await Promise.all([store.topWins(50), store.topKings(50), store.topElo(50), store.topCoins(50), store.topArena(50, 'arena'), store.topArena(50, 'arenaT')]);
   const mark = rows => rows.map(r => (isAdmin(r.nickKey) ? Object.assign({}, r, { admin: true }) : r));
-  lbCache = { at: Date.now(), data: { wins: mark(wins), kings: mark(kings), elo: mark(elo), coins: mark(coins) } };
+  lbCache = { at: Date.now(), data: { wins: mark(wins), kings: mark(kings), elo: mark(elo), coins: mark(coins), arena: mark(arena), arenaT: mark(arenaT) } };
   return lbCache.data;
 }
 
@@ -251,7 +251,8 @@ setInterval(flushSaves, 5000).unref();
 
 const hub = new Rooms.Hub({
   onSave(p) { if (p && !p.bot && p.userId) pendingSave.set(p.userId, p.profile); },
-  onGone(p) { if (online.get(p.userId) === p) online.delete(p.userId); }
+  onGone(p) { if (online.get(p.userId) === p) online.delete(p.userId); },
+  onMoved(p) { if (p && !p.bot && p.userId) online.set(p.userId, p); }       // переход (портал, лобби): сервер знает новую комнату игрока
 });
 setInterval(() => { try { hub.tick(); } catch (e) { console.error('[tick]', e); } }, 1000 / CONFIG.TICK_RATE);
 
@@ -260,7 +261,7 @@ function sendConn(conn, obj) { try { conn.send(JSON.stringify(obj)); } catch (e)
 attach(server, '/ws', conn => {
   let helloing = false, count = 0;
   const rateTimer = setInterval(() => { count = 0; }, 1000);
-  const helloTimer = setTimeout(() => { if (!conn.player) conn.close(4000); }, 5000);
+  const helloTimer = setTimeout(() => { if (!conn.player) conn.close(4000); }, 10000);   // 10 с: медленный телефон после обрыва успевает представиться
   const pingTimer = setInterval(() => { if (Date.now() - conn.lastRecv > 45000) conn.kill(); else conn.ping(); }, 15000);
 
   conn.onmessage = async raw => {
@@ -278,6 +279,15 @@ attach(server, '/ws', conn => {
         if (!conn.open) return;
         const prev = online.get(user.id);
         let profile = user.profile;
+        // обрыв связи (VPN, смена сети): возвращаем в тот же мир, на то же место. Сервер мог ещё не заметить обрыв
+        // (полуоткрытое TCP-соединение) — тогда старое соединение тихо закрываем и тоже возвращаем игрока
+        if (prev && prev.room && m.resume && prev.room.mode !== 'duel' && !prev.bot) {
+          const pc = prev.conn; if (pc && pc !== conn) { pc.player = null; try { pc.close(4004); } catch (e) { /* ignore */ } }
+          if (!prev.gone) hub.disconnect(prev);
+        }
+        if (prev && prev.room && prev.gone && !prev.conn && m.resume && prev.room.mode !== 'duel' && hub.resume(prev, conn)) {
+          conn.player = prev; user.profile = prev.profile; pendingSave.set(user.id, prev.profile); helloing = false; return;
+        }
         if (prev && prev.room) {                       // второй вход выбивает первый
           profile = prev.profile;
           const pc = prev.conn; prev.conn = null;
@@ -285,7 +295,7 @@ attach(server, '/ws', conn => {
           hub.leave(prev);
           online.delete(user.id);
         }
-        const mode = ['public', 'code', 'solo', 'rush'].includes(m.mode) ? m.mode : 'public';
+        const mode = ['public', 'code', 'solo', 'rush', 'arena', 'arenat', 'lobby'].includes(m.mode) ? m.mode : 'public';
         const res = hub.join({ profile, conn, userId: user.id, admin: isAdmin(user.nick), biome: m.biome, cls: typeof m.cls === 'string' ? m.cls : undefined, mode: mode, code: m.code });
         if (res.error) { sendConn(conn, { t: 'err', m: res.error }); helloing = false; return; }
         conn.player = res.player;

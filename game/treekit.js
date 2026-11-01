@@ -60,11 +60,11 @@ function rngOf(seed) {
 }
 
 /* ---------- wind (shared uniforms, bend grows with height above the tree base) ---------- */
-const U = { uTime: { value: 0 }, uWind: { value: 0.8 }, uTramp: { value: Array.from({ length: 14 }, () => new T.Vector4(0, -9999, 0, 0)) } };
+const U = { uTime: { value: 0 }, uWind: { value: 0.8 }, uWindDir: { value: new T.Vector2(0.8, 0.6) }, uTramp: { value: Array.from({ length: 24 }, () => new T.Vector4(0, -9999, 0, 0)) }, uTrampV: { value: Array.from({ length: 24 }, () => new T.Vector4(0, 0, 0, 0)) } };
 function windify(mat, k, flutter) {
   mat.onBeforeCompile = sh => {
-    sh.uniforms.uTime = U.uTime; sh.uniforms.uWind = U.uWind;
-    sh.vertexShader = 'uniform float uTime;\nuniform float uWind;\n' + sh.vertexShader.replace('#include <project_vertex>', `
+    sh.uniforms.uTime = U.uTime; sh.uniforms.uWind = U.uWind; sh.uniforms.uWindDir = U.uWindDir;
+    sh.vertexShader = 'uniform float uTime;\nuniform float uWind;\nuniform vec2 uWindDir;\n' + sh.vertexShader.replace('#include <project_vertex>', `
       vec4 mvPosition = vec4(transformed, 1.0);
       #ifdef USE_INSTANCING
         mvPosition = instanceMatrix * mvPosition;
@@ -72,12 +72,11 @@ function windify(mat, k, flutter) {
       float h = max(mvPosition.y, 0.0);
       vec4 wp = modelMatrix * mvPosition;
       vec4 base = modelMatrix * vec4(0.0, 0.0, 0.0, 1.0);
-      float ph = base.x * 0.13 + base.z * 0.07;
-      float gust = 0.55 + 0.45 * sin(uTime * 0.4 + ph);
-      float s = sin(uTime * 1.3 + wp.x * 0.3 + wp.z * 0.2) * 0.55 + sin(uTime * 2.4 + wp.z * 0.5) * 0.25 + 0.55;
-      float b = ${k.toFixed(5)} * h * h * uWind * gust;
-      wp.x += b * s;
-      wp.z += b * 0.35 * sin(uTime * 1.1 + wp.x * 0.3);
+      // ветер одного направления (uWindDir): постоянный наклон по ветру + порывы, которые волной бегут по местности
+      float ph = base.x * 0.37 + base.z * 0.23, fr = dot(base.xz, uWindDir) * 0.045 - uTime * 0.62;
+      float gust = clamp(0.5 + 0.5 * sin(fr) * (0.65 + 0.35 * sin(fr * 0.41 + 1.3)), 0.0, 1.0);
+      float b = ${k.toFixed(5)} * h * h * uWind;
+      wp.xz += uWindDir * b * (0.3 + 0.6 * gust + 0.15 * sin(uTime * 1.9 + ph)) + vec2(-uWindDir.y, uWindDir.x) * b * 0.08 * sin(uTime * 1.4 + ph * 1.9);
       wp.xyz += ${flutter.toFixed(4)} * uWind * vec3(sin(uTime * 7.0 + wp.y * 9.0 + wp.x * 5.0), 0.6 * sin(uTime * 8.3 + wp.z * 7.0), cos(uTime * 6.4 + wp.x * 8.0));
       mvPosition = viewMatrix * wp;
       gl_Position = projectionMatrix * mvPosition;`);
@@ -392,8 +391,8 @@ function bake(species, seed, lodIdx) {
 // ветер для копий: изгиб растёт с высотой над основанием КАЖДОГО дерева (а не над нулём мира)
 function windInst(mat, k, flutter, tramp) {
   mat.onBeforeCompile = sh => {
-    sh.uniforms.uTime = U.uTime; sh.uniforms.uWind = U.uWind; if (tramp) sh.uniforms.uTramp = U.uTramp;
-    sh.vertexShader = 'uniform float uTime;\nuniform float uWind;\n' + (tramp ? 'uniform vec4 uTramp[14];\n' : '') + sh.vertexShader.replace('#include <project_vertex>', `
+    sh.uniforms.uTime = U.uTime; sh.uniforms.uWind = U.uWind; sh.uniforms.uWindDir = U.uWindDir; if (tramp) { sh.uniforms.uTramp = U.uTramp; sh.uniforms.uTrampV = U.uTrampV; }
+    sh.vertexShader = 'uniform float uTime;\nuniform float uWind;\nuniform vec2 uWindDir;\n' + (tramp ? 'uniform vec4 uTramp[24];\nuniform vec4 uTrampV[24];\n' : '') + sh.vertexShader.replace('#include <project_vertex>', `
       vec4 mvPosition = vec4(transformed, 1.0);
       float sy = 1.0;
       #ifdef USE_INSTANCING
@@ -406,41 +405,48 @@ function windInst(mat, k, flutter, tramp) {
       #ifdef USE_INSTANCING
         base = modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0);
       #endif
-      float ph = base.x * 0.13 + base.z * 0.07;
-      float gust = 0.55 + 0.45 * sin(uTime * 0.4 + ph);
-      float s = sin(uTime * 1.3 + wp.x * 0.3 + wp.z * 0.2) * 0.55 + sin(uTime * 2.4 + wp.z * 0.5) * 0.25 + 0.55;
-      float b = ${k.toFixed(5)} * h * h * uWind * gust;
-      wp.x += b * s;
-      wp.z += b * 0.35 * sin(uTime * 1.1 + wp.x * 0.3);
+      // ветер одного направления (uWindDir): постоянный наклон по ветру + порывы, которые волной бегут по местности
+      float ph = base.x * 0.37 + base.z * 0.23, fr = dot(base.xz, uWindDir) * 0.045 - uTime * 0.62;
+      float gust = clamp(0.5 + 0.5 * sin(fr) * (0.65 + 0.35 * sin(fr * 0.41 + 1.3)), 0.0, 1.0);
+      float b = ${k.toFixed(5)} * h * h * uWind;
+      wp.xz += uWindDir * b * (0.3 + 0.6 * gust + 0.15 * sin(uTime * 1.9 + ph)) + vec2(-uWindDir.y, uWindDir.x) * b * 0.08 * sin(uTime * 1.4 + ph * 1.9);
       wp.xyz += ${flutter.toFixed(4)} * uWind * vec3(sin(uTime * 7.0 + wp.y * 9.0 + wp.x * 5.0), 0.6 * sin(uTime * 8.3 + wp.z * 7.0), cos(uTime * 6.4 + wp.x * 8.0));
       ${tramp ? `
-      // примятая трава: траву в радиусе от динозавров (и по их следу) пригибает к земле и отталкивает от центра
-      float hf = clamp(h / 0.45, 0.0, 1.0);
-      for (int i = 0; i < 14; i++) {
+      // высокая трава: тело пригибает её к земле и раздвигает, по ходу движения клонит сильнее (по скорости); после прохода — пружинит
+      // несколькими затухающими покачиваниями и выпрямляется (возраст касания — uTramp[i].y, скорость — uTrampV[i].xy)
+      float hf = clamp(h / 0.45, 0.0, 1.0); vec2 gsh = vec2(0.0); float gdn = 0.0;
+      for (int i = 0; i < 24; i++) {
         vec4 tr = uTramp[i];
         if (tr.w > 0.01) {
           vec2 dd = base.xz - tr.xz; float dl = length(dd);
           float f = 1.0 - smoothstep(tr.w * 0.25, tr.w, dl);
-          vec2 dir = dl > 0.001 ? dd / dl : vec2(0.0, 1.0);
-          wp.xz += dir * f * hf * 0.55 * min(1.0, h * 2.2);
-          wp.y -= f * hf * h * 0.62;
+          if (f > 0.0) {
+            vec2 dir = dl > 0.001 ? dd / dl : vec2(0.0, 1.0);
+            vec2 vv = uTrampV[i].xy; float sp = length(vv); vec2 vd = sp > 0.01 ? vv / sp : vec2(0.0);
+            float a = tr.y, spring = exp(-a * 1.9) * cos(a * 7.0), press = exp(-a * 3.0);
+            gsh += (dir * 0.55 + vd * clamp(sp / 7.0, 0.0, 1.0) * 0.5) * f * hf * min(1.0, h * ${tramp === 2 ? '0.8' : '2.2'}) * spring;
+            gdn += f * hf * h * ${tramp === 2 ? '0.12' : '0.62'} * press;
+          }
         }
-      }` : ''}
+      }
+      float gl = length(gsh); if (gl > 0.8) gsh *= 0.8 / gl;
+      wp.xz += gsh; wp.y -= min(gdn, h * 0.7);` : ''}
       mvPosition = viewMatrix * wp;
       gl_Position = projectionMatrix * mvPosition;`);
   };
-  mat.customProgramCacheKey = () => 'tree_winst_' + k + '_' + flutter + '_' + mat.type + (mat.alphaTest ? 'a' : '') + (tramp ? 't' : '');
+  mat.customProgramCacheKey = () => 'tree_winst_' + k + '_' + flutter + '_' + mat.type + (mat.alphaTest ? 'a' : '') + (tramp ? 't' + tramp : '');
   return mat;
 }
 const MATS = {};
-function materials(species) {
-  if (MATS[species]) return MATS[species];
-  const P = SPECIES[species], tex = textures();
-  const bark = windInst(new T.MeshStandardMaterial({ map: tex[P.bark], bumpMap: tex[P.bark], bumpScale: 0.04, roughness: 0.95 }), P.wind, 0);
-  const barkD = windInst(new T.MeshDepthMaterial({ depthPacking: T.RGBADepthPacking }), P.wind, 0);
-  const leaf = windInst(new T.MeshStandardMaterial({ map: tex[P.leaf], alphaTest: 0.5, side: T.DoubleSide, roughness: 0.65, vertexColors: true }), P.wind, 0.012);
-  const leafD = windInst(new T.MeshDepthMaterial({ depthPacking: T.RGBADepthPacking, map: tex[P.leaf], alphaTest: 0.5 }), P.wind, 0.012);
-  return (MATS[species] = { bark, barkD, leaf, leafD });
+function materials(species, soft) {      // soft — куст: ветви раздвигаются телом и пружинят (как трава, но почти не приминаются); дерево — твёрдое
+  const key = species + (soft ? ':s' : '');
+  if (MATS[key]) return MATS[key];
+  const P = SPECIES[species], tex = textures(), tr = soft ? 2 : 0;
+  const bark = windInst(new T.MeshStandardMaterial({ map: tex[P.bark], bumpMap: tex[P.bark], bumpScale: 0.04, roughness: 0.95 }), P.wind, 0, tr);
+  const barkD = windInst(new T.MeshDepthMaterial({ depthPacking: T.RGBADepthPacking }), P.wind, 0, tr);
+  const leaf = windInst(new T.MeshStandardMaterial({ map: tex[P.leaf], alphaTest: 0.5, side: T.DoubleSide, roughness: 0.65, vertexColors: true }), P.wind, 0.012, tr);
+  const leafD = windInst(new T.MeshDepthMaterial({ depthPacking: T.RGBADepthPacking, map: tex[P.leaf], alphaTest: 0.5 }), P.wind, 0.012, tr);
+  return (MATS[key] = { bark, barkD, leaf, leafD });
 }
 let GRASS_MAT = null;
 function grassMaterial() { return GRASS_MAT || (GRASS_MAT = windInst(new T.MeshStandardMaterial({ vertexColors: true, side: T.DoubleSide, roughness: 0.85 }), 1.1, 0.006, true)); }
@@ -454,7 +460,7 @@ global.Tree = {
   createGround,
   createGrass,
   update(seconds) { U.uTime.value = seconds; },
-  tramp: U.uTramp.value,
+  tramp: U.uTramp.value, trampV: U.uTrampV.value, windDir: U.uWindDir.value,
   get wind() { return U.uWind.value; },
   set wind(v) { U.uWind.value = v; }
 };

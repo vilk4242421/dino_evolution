@@ -60,8 +60,8 @@ const mixC = (out, a, b, t) => out.copy(a).lerp(b, clamp(t));
 
 /* ------------------------------------------------------------------ shared material (wind / current + glow + caustics) */
 let LITE = false;
-const uniforms = { uTime: { value: 0 }, uWind: { value: 1 }, uGlow: { value: 1 }, uFreq: { value: 1.3 }, uTramp: { value: Array.from({ length: 14 }, () => new T.Vector4(0, -9999, 0, 0)) } };
-const VERT_HEAD = 'attribute vec3 aPlant;\nuniform float uTime;\nuniform float uWind;\nuniform float uFreq;\nuniform vec4 uTramp[14];\nvarying float vGlow;\nvarying vec3 vWP;\n';
+const uniforms = { uTime: { value: 0 }, uWind: { value: 1 }, uWindDir: { value: new T.Vector2(0.8, 0.6) }, uGlow: { value: 1 }, uFreq: { value: 1.3 }, uTramp: { value: Array.from({ length: 24 }, () => new T.Vector4(0, -9999, 0, 0)) }, uTrampV: { value: Array.from({ length: 24 }, () => new T.Vector4(0, 0, 0, 0)) } };
+const VERT_HEAD = 'attribute vec3 aPlant;\nuniform float uTime;\nuniform float uWind;\nuniform vec2 uWindDir;\nuniform float uFreq;\nuniform vec4 uTramp[24];\nuniform vec4 uTrampV[24];\nvarying float vGlow;\nvarying vec3 vWP;\n';
 const VERT_BODY = `
   vec3 transformed = vec3(position);
   vGlow = aPlant.z;
@@ -72,37 +72,56 @@ const VERT_BODY = `
   o4 = modelMatrix * o4;
   float ph = o4.x * 0.37 + o4.z * 0.23;
   float tt = uTime * uFreq;
-  float sw = sin(tt + ph) * 0.65 + sin(tt * 2.13 + ph * 1.7) * 0.25 + 0.35;
-  transformed.x += aPlant.x * uWind * sw;
-  transformed.z += aPlant.x * uWind * 0.45 * sin(tt * 0.83 + ph * 1.3);
+  {                                                    // ветер/течение одного направления (uWindDir, мировые оси) + порывы волной по местности
+    float fr = dot(o4.xz, uWindDir) * 0.045 - tt * 0.48;
+    float gust = clamp(0.5 + 0.5 * sin(fr) * (0.65 + 0.35 * sin(fr * 0.41 + 1.3)), 0.0, 1.0);
+    float am = aPlant.x * uWind * (0.3 + 0.75 * gust + 0.25 * sin(tt + ph));
+    vec3 wv = vec3(uWindDir.x, 0.0, uWindDir.y) * am + vec3(-uWindDir.y, 0.0, uWindDir.x) * aPlant.x * uWind * 0.12 * sin(tt * 0.83 + ph * 1.3);
+    mat3 Mw = mat3(modelMatrix);
+    #ifdef USE_INSTANCING
+      Mw = Mw * mat3(instanceMatrix);
+    #endif
+    transformed += (transpose(Mw) * wv) / max(dot(Mw[0], Mw[0]), 1e-4) * length(Mw[0]);
+  }
   transformed += aPlant.y * uWind * 0.05 * vec3(sin(uTime * 6.7 + position.y * 8.0 + ph), 0.5 * sin(uTime * 7.9 + position.x * 7.0), cos(uTime * 6.1 + position.z * 8.0));
-  {                                                    // раздвигаем растения вокруг динозавров (и под водой — водоросли расходятся, когда проплываешь между ними)
+  #ifndef RIGID
+  {                                                    // мягкие растения (кусты, папоротники, водоросли): тело динозавра/рыбы раздвигает их и наклоняет по ходу
+    // движения (чем быстрее — тем сильнее), а после прохода растение пружинит: несколько затухающих покачиваний и возврат на место.
+    // uTramp[i] = (x, возраст касания, z, радиус): возраст 0 — тело сейчас здесь; uTrampV[i] = (скорость x, скорость z, —, —).
+    // Твёрдые виды (кораллы, ракушки, кристаллы — изгиб 0) и деревья не гнутся.
     float hh = max(position.y, 0.0), sy = 1.0;
     mat3 Mx = mat3(modelMatrix);
     #ifdef USE_INSTANCING
       Mx = Mx * mat3(instanceMatrix); sy = length(instanceMatrix[1].xyz);
     #endif
-    float wt = min(1.0, hh * sy * 1.1);
+    float wt = min(1.0, hh * sy * 1.1) * step(0.00001, aPlant.x);
     vec3 pd = vec3(0.0);
-    for (int i = 0; i < 14; i++) {
+    for (int i = 0; i < 24; i++) {
       vec4 tr = uTramp[i];
       if (tr.w > 0.01) {
         vec2 dd = o4.xz - tr.xz; float dl = length(dd);
         float f = 1.0 - smoothstep(0.0, tr.w * 1.25, dl); f *= f * (3.0 - 2.0 * f);
-        vec2 dir = dl > 0.001 ? dd / dl : vec2(0.0, 1.0);
-        pd.xz += dir * f * wt * 0.9;
+        if (f > 0.0) {
+          vec2 dir = dl > 0.001 ? dd / dl : vec2(0.0, 1.0);
+          vec2 vv = uTrampV[i].xy; float sp = length(vv); vec2 vd = sp > 0.01 ? vv / sp : vec2(0.0);
+          float a = tr.y, spring = exp(-a * 1.7) * cos(a * 6.3);          // затухающая пружина: 1 при касании → колебания → 0
+          pd.xz += (dir * 0.75 + vd * clamp(sp / 7.0, 0.0, 1.0) * 0.9) * f * wt * spring;
+        }
       }
     }
+    float pl = length(pd.xz); if (pl > 1.1) pd.xz *= 1.1 / pl;
     transformed += (transpose(Mx) * pd) / max(dot(Mx[0], Mx[0]), 1e-4);
   }
+  #endif
   vec4 wp4 = vec4(transformed, 1.0);
   #ifdef USE_INSTANCING
     wp4 = instanceMatrix * wp4;
   #endif
   vWP = (modelMatrix * wp4).xyz;
 `;
-function patchMaterial(mat, caustic) {
+function patchMaterial(mat, caustic, rigid) {
   const cu = { value: caustic || 0 };
+  if (rigid) mat.defines = Object.assign({}, mat.defines, { RIGID: 1 });
   mat.userData.caustic = cu;
   mat.onBeforeCompile = sh => {
     Object.assign(sh.uniforms, uniforms, { uCaustic: cu });
@@ -118,15 +137,17 @@ function patchMaterial(mat, caustic) {
         }`);
     }
   };
-  mat.customProgramCacheKey = () => 'biomekit_' + mat.type;
+  mat.customProgramCacheKey = () => 'biomekit_' + mat.type + (rigid ? '_r' : '');
   return mat;
 }
-let _plantMat = null, _depthMat = null;
-function plantMaterial() {
+let _plantMat = null, _depthMat = null, _plantMatR = null, _depthMatR = null;
+function plantMaterial(rigid) {      // rigid — для деревьев (твёрдые: не гнутся от шагов, только ветер)
+  if (rigid) return _plantMatR || (_plantMatR = patchMaterial(new T.MeshStandardMaterial({ vertexColors: true, roughness: 0.82, metalness: 0, side: T.DoubleSide }), 0, true));
   if (!_plantMat) _plantMat = patchMaterial(new T.MeshStandardMaterial({ vertexColors: true, roughness: 0.82, metalness: 0, side: T.DoubleSide }));
   return _plantMat;
 }
-function depthMaterial() {
+function depthMaterial(rigid) {
+  if (rigid) return _depthMatR || (_depthMatR = patchMaterial(new T.MeshDepthMaterial({ depthPacking: T.RGBADepthPacking }), 0, true));
   if (!_depthMat) _depthMat = patchMaterial(new T.MeshDepthMaterial({ depthPacking: T.RGBADepthPacking }));
   return _depthMat;
 }

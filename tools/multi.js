@@ -1,5 +1,5 @@
 'use strict';
-/* Версия для превью-артефакта (лимит 16 МБ на файл): index.html + скрипты отдельными файлами, bundle.js разрезан на две части по границе модулей.
+/* Версия для превью-артефакта (лимит 16 МБ на файл): index.html + скрипты отдельными файлами, bundle.js разрезан на части (≤ ~12 МБ) по границе модулей.
    Запуск: node tools/build.js && node tools/multi.js  →  dist/multi/ */
 const fs = require('fs'), path = require('path');
 const G = path.join(__dirname, '..', 'game'), OUT = path.join(__dirname, '..', 'dist', 'multi');
@@ -12,10 +12,14 @@ const b = fs.readFileSync(path.join(G, 'bundle.js'), 'utf8');
 const head = b.slice(0, b.indexOf('__m["') ), tail = '})();\n';
 const body = b.slice(head.length, b.length - tail.length);
 const cuts = []; const re = /\n__m\["[^"]+"\]=\(function\(\)\{/g; let m; while ((m = re.exec(body))) cuts.push(m.index + 1);
-const mid = body.length / 2; let cut = cuts.reduce((a, c) => Math.abs(c - mid) < Math.abs(a - mid) ? c : a, cuts[0]);
-fs.writeFileSync(path.join(OUT, 'bundle1.js'), head.replace('var __m={};', 'var __m=window.__dm={};') + body.slice(0, cut) + tail);
-fs.writeFileSync(path.join(OUT, 'bundle2.js'), '(function(){\n"use strict";\nvar __m=window.__dm;\n' + body.slice(cut) + tail);
-html = html.replace('<script src="bundle.js"', '<script src="bundle1.js"></script>\n<script src="bundle2.js"');
+const NP = Math.max(2, Math.ceil(body.length / 12e6)), parts = [0];             // сколько частей нужно, чтобы каждая была ≤ ~12 МБ (лимит артефакта 16 МБ на файл)
+for (let k = 1; k < NP; k++) { const tgt = body.length * k / NP; parts.push(cuts.reduce((a, c) => Math.abs(c - tgt) < Math.abs(a - tgt) ? c : a, cuts[0])); }
+parts.push(body.length);
+for (let k = 0; k < NP; k++) {
+  const pre = k === 0 ? head.replace('var __m={};', 'var __m=window.__dm={};') : '(function(){\n"use strict";\nvar __m=window.__dm;\n';
+  fs.writeFileSync(path.join(OUT, 'bundle' + (k + 1) + '.js'), pre + body.slice(parts[k], parts[k + 1]) + tail);
+}
+html = html.replace('<script src="bundle.js"', Array.from({ length: NP }, (_, k) => '<script src="bundle' + (k + 1) + '.js"').join('></script>\n'));
 fs.writeFileSync(path.join(OUT, 'index.html'), html);
 const others = ['config.js', 'sim.js', 'rooms.js', 'ai.js', 'boss.js', 'duel.js', 'i18n.js'];
 others.forEach(f => fs.copyFileSync(path.join(G, f), path.join(OUT, f)));

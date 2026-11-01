@@ -22,8 +22,15 @@
     var p = Math.min(1, Math.max(0, (req - 10) / 20)), land = CF.OCEANS.indexOf(biome) < 0, hk = land ? 1.2 + 3.6 * p : 1, dk = land ? (1.5 - 0.6 * p) * ({ snow: 0.7, mountain: 0.85, desert: 0.5, swamp: 0.5, volcano: 0.65 }[biome] || 1) : 1;
     return { hp: Math.round(dps * BOSS_TUNE.time * hk / 50) * 50, dmgK: BOSS_TUNE.hit * dk * st.hp / Math.max(1, sd / Math.max(1, sw)) };
   };
+  // нормировка босса под произвольный уровень (арена: бойцы растут с 1-го уровня, эволюции нет)
+  RP.bossNormLv = function (bossId, lv, ocean) {
+    var def = CF.BOSSES[bossId]; if (!def) return null;
+    var st = Sim.statsFor(ocean ? 'mosa' : 'carn', Math.max(1, Math.round(lv)), {}), dps = st.dmg / st.atkCd * 2, sw = 0, sd = 0;
+    def.attacks.forEach(function (a) { var w = a.wt || 1; sw += w; sd += w * (a.dmg || 0); });
+    return { hp: Math.round(dps * CF.ARENA.BOSS_T / 10) * 10, dmgK: CF.ARENA.BOSS_HIT * st.hp / Math.max(1, sd / Math.max(1, sw)) };
+  };
   RP.makeBoss = function (bossId, mult) {
-    var def = CF.BOSSES[bossId], W = this.W, nm = this.mode === 'rush' ? null : this.bossNorm(bossId, this.biome), hp0 = nm ? nm.hp : def.hp;
+    var def = CF.BOSSES[bossId], W = this.W, nm = this.mode === 'rush' || this.isArena() ? null : this.bossNorm(bossId, this.biome), hp0 = nm ? nm.hp : def.hp;
     var b = {
       id: newId(), kind: 'b', bossId: bossId, def: def, team: 'e', st: { x: 0, y: W.heightAt(0, 0), z: 0, face: W.portalIn ? Math.atan2(W.portalIn.x, W.portalIn.z) : 0 },
       hp: hp0 * mult, mhp: hp0 * mult, baseHp: hp0 * mult, dmgK: nm ? nm.dmgK : 0.85, mult: mult, phase: 0, state: 'idle', inv: true, radius: def.size * 0.85, big: true, dead: false,
@@ -32,7 +39,7 @@
     return b;
   };
   RP.initBoss = function () {
-    if (this.mode === 'rush' || this.mode === 'duel') return;
+    if (this.mode === 'rush' || this.mode === 'duel' || this.isArena()) return;
     var id = this.W.cfg.boss;
     this.boss = this.makeBoss(id, 1);
     this.ents.set(this.boss.id, this.boss);
@@ -45,10 +52,23 @@
   RP.startFight = function (n) {
     var b = this.boss; if (!b || b.state !== 'idle') return;
     b.state = 'fight'; b.inv = false; b.fn = n;
-    b.mhp = b.baseHp * (1 + CF.BOSS_HP_PER_PLAYER * (n - 1)); b.hp = b.mhp; b.phase = 0;
+    this.bossScale(b, n);
+    b.mhp = b.baseHp * b.lvK * (1 + CF.BOSS_HP_PER_PLAYER * (n - 1)); b.hp = b.mhp; b.phase = 0;
     b.nextAtk = this.t + 7.5; b.action = null; b.noFightT = 0; b.inv = true; b.phaseUntil = this.t + 6;   // ролик перед боссом (~6 с): никто никого не бьёт
     var rt = this.t; this.players.forEach(function (p) { if (!p.bot && !p.gone) p.shield = Math.max(p.shield || 0, rt + 6.2); });
     this.events.push(['boss', b.id, 'start']);
+  };
+  // сила босса под уровень бойцов: эталон — требуемый уровень биома; перекачанные игроки убивают босса быстрее,
+  // но не в разы (HP растёт как (dps/dps_эталон)^0.6, удар — как (HP/HP_эталон)^0.6); в команде босс бьёт сильнее (+10 % за игрока)
+  RP.bossScale = function (b, n) {
+    b.lvK = 1; b.lvD = 1; b.teamK = 1 + CF.BOSS_TEAM_DMG * Math.max(0, (n || 1) - 1);
+    if (this.mode === 'rush' || this.mode === 'duel' || this.isArena()) { b.teamK = 1; return; }
+    var req = CF.BOSS_LEVEL[this.biome]; if (!req) return;
+    var hs = this.bossFighters().filter(function (p) { return !p.bot && p.profile; }); if (!hs.length) return;
+    var L = hs.reduce(function (a, p) { return a + (p.profile.level || 1); }, 0) / hs.length;
+    var cls = CF.OCEANS.indexOf(this.biome) >= 0 ? 'mosa' : 'carn', s0 = Sim.statsFor(cls, req, {}), s1 = Sim.statsFor(cls, Math.round(L), {});
+    if (L > req) { b.lvK = Math.pow((s1.dmg / s1.atkCd) / (s0.dmg / s0.atkCd), CF.BOSS_LV_EXP); b.lvD = Math.pow(s1.hp / s0.hp, CF.BOSS_LV_EXP); }
+    b.lvL = L;
   };
   RP.resetBoss = function () {
     var b = this.boss; if (!b) return;
@@ -167,7 +187,7 @@
 
   RP.updateBoss = function () {
     var b = this.boss, t = this.t, self = this;
-    if (!b) { if (this.bossCool && t >= this.bossCool && this.mode !== 'rush') { this.bossCool = 0; this.initBoss(); } return; }
+    if (!b) { if (this.bossCool && t >= this.bossCool && this.mode !== 'rush' && !this.isArena()) { this.bossCool = 0; this.initBoss(); } return; }
     if (b.dead) return;
     var fighters = this.bossFighters();
     if (b.state === 'idle') {
@@ -179,7 +199,8 @@
     else b.noFightT = 0;
     var humansIn = fighters.filter(function (p) { return !p.bot; }).length;
     if (humansIn > b.fn) {                                                  // новый игрок вошёл в бой: HP босса растёт
-      var add = b.baseHp * CF.BOSS_HP_PER_PLAYER * (humansIn - b.fn); b.mhp += add; b.hp += add; b.fn = humansIn;
+      var add = b.baseHp * (b.lvK || 1) * CF.BOSS_HP_PER_PLAYER * (humansIn - b.fn); b.mhp += add; b.hp += add; b.fn = humansIn;
+      if (b.teamK) b.teamK = 1 + CF.BOSS_TEAM_DMG * (humansIn - 1);
     }
     this.tickDots(b);
     if (b.dead) return;
@@ -225,6 +246,7 @@
     this.events.push(['boss', b.id, 'dead']); this.events.push(['shake', 1.5]);
     this.ents.delete(b.id); this.boss = null;
     if (this.mode === 'rush') { this.rushWaveDone(b); return; }
+    if (this.isArena()) { this.clearMinions(b); this.zones = []; return; }
     var wld = CF.worldOf(this.biome), wl = CF.worldList(wld), idx = wl.indexOf(this.biome), req = CF.BOSS_LEVEL[this.biome], parts = [];
     this.players.forEach(function (p) {
       if (p.bot || p.gone) return;
@@ -264,7 +286,7 @@
 
   // ---------------------------------------------------------------- порталы и запоры арены
   RP.lockFor = function (p) {
-    if (this.mode === 'rush') return 1;
+    if (this.mode === 'rush' || this.isArena()) return 1;
     var b = this.boss; if (!b) return 0;
     var d = Math.hypot(p.st.x, p.st.z);
     if (b.state === 'fight') return d < AR - 1 ? 1 : 2;
@@ -272,7 +294,7 @@
   };
   RP.updatePortals = function () {
     var self = this, b = this.boss, W = this.W;
-    if (this.mode === 'rush' || this.mode === 'duel') return;
+    if (this.mode === 'rush' || this.mode === 'duel' || this.isArena()) return;
     this.players.forEach(function (p) {
       if (p.bot || !p.alive || p.gone) return;
       var s = p.st, pr = p.profile;
@@ -312,6 +334,7 @@
   RP.slowFor = function (p) {
     var k = (p.slowT > this.t ? 0.65 : 1) * (p.ultT > this.t ? p.ultSpd : 1) * (p.scentT > this.t ? 1.12 : 1), hz = this.W.cfg.hazard;
     if (p.buffK === 'speed' && p.buffT > this.t) k *= 1.2;
+    if (p.aSpdT > this.t) k *= CF.ARENA.SPD_K;                                  // бонус арены «скорость»
     if (this.mode === 'duel') return k;
     if (p.profile && p.profile.pet === 'seahorse') k *= 1.1;
     if ((hz === 'cold' || hz === 'heat') && this.wx > 0.5) k *= 1 - 0.18 * this.wx * (1 - p.stats.resist * 0.5);
@@ -371,20 +394,186 @@
       this.players.forEach(function (p) { if (!p.bot) self.sendTo(p, { t: 'rushend', wave: R.wave }); });
     }
   };
-  RP.noRespawn = function () { return this.mode === 'rush'; };
+
+  // ---------------------------------------------------------------- АРЕНА: волны врагов (соло и совместная), бонусы, передышка, рекорды
+  // Комната mode === 'arena' (одиночная) или 'arenat' (совместная, до CF.MAX_ROOM игроков). Бой — внутри круга арены в центре локации.
+  // Волна n: врагов (3 + 1,5n) × (1 + 0,6 на каждого игрока сверх первого), здоровье и урон растут с номером; каждая 5-я — мини-босс,
+  // каждая 10-я — босс локации (суши или океана), сильнее с каждым десятком. Между волнами — 10 с передышки, здоровье восстанавливается
+  // (CF.ARENA.HEAL за перерыв), бонусы на земле исчезают. Во время волны на арене появляются бонусы: аптечка, ярость (урон ×1,5), скорость.
+  // Рекорд (пройдено волн) пишется в профиль (stats.arena / stats.arenaT) при гибели и в конце; профиль сохраняется в базе — из него таблица рекордов.
+  var A = CF.ARENA;
+  RP.isArena = function () { return this.mode === 'arena' || this.mode === 'arenat'; };
+  RP.initArena = function () {
+    this.arena = { wave: 0, state: 'break', nextT: this.t + A.PREP, over: false, q: [], bonus: [], bonusT: 0, team: this.mode === 'arenat', best: 0 };
+  };
+  RP.arenaPool = function () {
+    var W = this.W, table = W.cfg.spawn, out = [], id, a;
+    for (id in table) { a = ARCH[id]; if (!a || a.tiny || a.role !== 'hostile' || !!a.water !== !!W.ocean || (a.fly && W.ocean)) continue; out.push(a); }
+    if (!out.length) for (id in ARCH) { a = ARCH[id]; if (a && !a.tiny && a.role === 'hostile' && !!a.water === !!W.ocean && !a.fly) out.push(a); }
+    return out;
+  };
+  RP.arenaAvgLv = function () { var n = 0, s = 0; this.players.forEach(function (p) { if (!p.bot && !p.gone) { n++; s += p.arLv || 1; } }); return n ? s / n : 1; };
+  RP.arenaPoint = function (rMin, rMax, ang) {
+    var W = this.W, k, a, r, x, z;
+    for (k = 0; k < 30; k++) {
+      // ang — желаемое направление (равномерный разнос спавна по кругу); если там вода/камень — ищем рядом, потом где угодно
+      a = ang !== undefined && k < 18 ? ang + (this.rng() - 0.5) * (0.35 + k * 0.06) : this.rng() * 6.2832; r = rMin + this.rng() * (rMax - rMin); x = Math.cos(a) * r; z = Math.sin(a) * r;
+      if (W.ocean ? !W.isDeep(x, z) : W.isWater(x, z)) continue;
+      var nb = Sim.obstaclesNear(W, x, z, 2), ok = true;
+      for (var j = 0; j < nb.length; j++) if (Math.hypot(nb[j].x - x, nb[j].z - z) < nb[j].r + 1.2) { ok = false; break; }
+      if (ok) return { x: x, z: z };
+    }
+    return { x: Math.cos(a) * rMin, z: Math.sin(a) * rMin };
+  };
+  RP.startArenaWave = function () {
+    var R = this.arena, n = ++R.wave, H = Math.max(1, this.humans()), pool = this.arenaPool(), self = this;
+    // уровень врагов растёт мягче (+0.4 за волну) и не уходит дальше чем на 8 выше среднего уровня бойцов — исход решает игра, а не разрыв в уровнях
+    var avg = this.arenaAvgLv(), lv = clamp(Math.round(Math.min(avg * A.LV_K + n * A.LV_STEP, avg + A.LV_GAP)), 1, CF.MAX_LEVEL);
+    var ek = (A.EARLY && A.EARLY[n - 1]) || 1;                                // первые волны мягче: бойцы начинают с 1 уровня без эволюции
+    var tk = Math.max(0, H - 1), hpK = (1 + A.HP_STEP * (n - 1)) * (1 + A.TEAM_HP * tk) * ek, dmgK = (1 + A.DMG_STEP * (n - 1)) * ek;
+    var boss = n % 10 === 0, mini = n % 5 === 0 && !boss, cnt = Math.min(A.MAX_ENEMIES + 6 * tk, Math.round((A.CNT0 + A.CNT_W * n) * (1 + A.TEAM_CNT * tk) * (boss ? 0.5 : 1)));
+    R.state = 'fight'; R.q = []; R.clearAt = 0; R.spA = this.rng() * 6.2832; R.spI = 0; R.spN = cnt + (mini ? 1 : 0); R.bk = R.bk || 0;
+    // сила врагов — от силы самих бойцов арены (их здоровья и урона в секунду на уровне арены): враг выдерживает SEC секунд атак бойца,
+    // его удар снимает HIT долю здоровья бойца; оба числа растут с волной. Так сложность ровно растёт, а не зависит от кривых уровней.
+    var sh = 0, sd = 0, k = 0; this.players.forEach(function (p) { if (!p.bot && !p.gone && p.stats) { sh += p.stats.hp; sd += p.stats.dmg / p.stats.atkCd; k++; } });
+    var pHp = k ? sh / k : 110, pDmg = k ? sd / k : 28, mh = 0, md = 0; pool.forEach(function (a) { mh += a.hp; md += a.dmg; }); mh /= Math.max(1, pool.length); md /= Math.max(1, pool.length);
+    var hits = (A.SEC0 + A.SEC_W * (n - 1)) * ek * (1 + A.TEAM_HP * tk), hitF = (A.HIT0 + A.HIT_W * (n - 1)) * ek;
+    for (var i = 0; i < cnt; i++) { var ar_ = pool[(this.rng() * pool.length) | 0]; R.q.push({ t: this.t + 0.4 + i * Math.min(0.6, 7 / cnt), arch: ar_, lv: lv, hpK: hpK, dmgK: dmgK, hpN: pDmg * hits * Math.sqrt(ar_.hp / mh), dmgN: pHp * hitF * Math.sqrt(ar_.dmg / md) }); }
+    if (mini && pool.length) {                                                  // мини-босс: самый крепкий вид локации, крупнее и намного живучее; в команде — пропорционально крепче
+      var big = pool.slice().sort(function (a, b) { return b.hp - a.hp; })[0];
+      R.q.push({ t: this.t + 2.5, arch: big, lv: Math.min(CF.MAX_LEVEL, lv + 6), hpK: (1 + A.HP_STEP * (n - 1)) * A.MINI_HP * (1 + A.MINI_TEAM * tk), dmgK: dmgK * A.MINI_DMG, mini: true,
+        hpN: pDmg * (A.SEC0 + A.SEC_W * (n - 1)) * ek * A.MINI_HP * (1 + A.MINI_TEAM * tk), dmgN: pHp * (A.HIT0 + A.HIT_W * (n - 1)) * ek * A.MINI_DMG });
+    }
+    if (boss && this.W.cfg.boss) {                                              // финальный босс суши/океана этой локации; с каждым десятком волн сильнее
+      var mult = 1 + A.BOSS_STEP * (n / 10 - 1);
+      this.boss = this.makeBoss(this.W.cfg.boss, mult); this.ents.set(this.boss.id, this.boss);
+      { var bn = this.bossNormLv(this.W.cfg.boss, avg, !!this.W.ocean); if (bn) { this.boss.baseHp = this.boss.hp = this.boss.mhp = bn.hp * mult; this.boss.dmgK = bn.dmgK; } }
+      this.boss.state = 'idle'; this.startFight(H); this.boss.arena = true;
+    }
+    R.bonus = []; R.bonusT = this.t + A.BONUS_FIRST;
+    this.events.push(['arena', 'wave', n, mini ? 1 : boss ? 2 : 0]);
+  };
+  RP.arenaSpawn = function (q) {
+    // спавн равномерно по кругу (шаг — 360° / число врагов волны): враги не идут одной кучей, в команде давят со всех сторон
+    var R = this.arena, W = this.W, p = this.arenaPoint(AR - 7, AR - 2, R.spA + (R.spI++) * 6.2832 / Math.max(3, R.spN || 8)), e = this.makeEnt(q.arch, p.x, p.z, q.lv, { hpMult: q.hpK, dmgMult: q.dmgK, free: true });
+    e.wave = true; e.home = { x: 0, z: 0 }; e.lastHurt = this.t;
+    if (q.hpN) { e.hp = e.mhp = Math.max(1, Math.round(q.hpN)); e.dmg = q.dmgN; }
+    if (q.mini) { e.mini = true; e.radius *= 1.5; }
+    if (W.ocean && q.arch.water) {       // под водой враги появляются на глубине бойцов (±3 м), а не у дна — их видно сразу
+      var g = W.heightAt(p.x, p.z), ys = 0, yn = 0; this.players.forEach(function (pp) { if (!pp.bot && pp.alive && !pp.gone) { ys += pp.st.y; yn++; } });
+      var yc = yn ? ys / yn : W.waterY - 4; e.swimY = clamp(yc + (this.rng() - 0.5) * 6, g + 1.5, W.waterY - 1.5); e.st.y = e.swimY; }
+    this.events.push(['arena', 'spawn', r1(p.x), r1(e.st.y), r1(p.z)]);
+  };
+  RP.arenaLeft = function () { var n = 0; this.ents.forEach(function (e) { if (e.wave && !e.dead) n++; }); return n + this.arena.q.length + (this.boss && !this.boss.dead ? 1 : 0); };
+  // бонусы по потребности, а не по жребию: при просевшем здоровье команды — аптечка (недалеко от самого раненого, но до неё надо добежать),
+  // иначе ярость и скорость по очереди; интервал короче, когда тяжело
+  RP.arenaNeed = function () {
+    var miss = 0, n = 0, worst = null, wf = 2;
+    this.players.forEach(function (q) { if (q.bot || q.gone || !q.alive) return; var f = q.hp / q.stats.hp; miss += 1 - f; n++; if (f < wf) { wf = f; worst = q; } });
+    return { miss: n ? miss / n : 0, worst: worst, wf: wf };
+  };
+  RP.arenaBonusKind = function (nd) {
+    var R = this.arena, heals = 0; R.bonus.forEach(function (b) { if (b.k === 'heal') heals++; });
+    if ((nd.miss > A.NEED_HEAL || nd.wf < 0.4) && heals < 2) return 'heal';
+    if (nd.miss > 0.15 && R.bk % 3 === 2 && !heals) { R.bk++; return 'heal'; }
+    return (R.bk++ % 2) ? 'spd' : 'dmg';
+  };
+  RP.arenaBonusSpawn = function () {
+    var R = this.arena, W = this.W, nd = this.arenaNeed(), k = this.arenaBonusKind(nd), p;
+    if (k === 'heal' && nd.worst) { var wa = Math.atan2(nd.worst.st.z, nd.worst.st.x), wr = Math.hypot(nd.worst.st.x, nd.worst.st.z); p = this.arenaPoint(Math.max(4, Math.min(AR - 8, wr - 3)), Math.min(AR - 6, wr + 3), wa + (this.rng() < 0.5 ? -1 : 1) * (6 + this.rng() * 3) / Math.max(6, wr)); }
+    else p = this.arenaPoint(4, AR - 6);
+    var y = W.heightAt(p.x, p.z) + 0.9;
+    if (W.ocean) { var ys = []; this.players.forEach(function (q) { if (q.alive && !q.gone) ys.push(q.st.y); }); var g = W.heightAt(p.x, p.z); y = clamp(ys.length ? ys[(this.rng() * ys.length) | 0] + (this.rng() - 0.5) * 3 : g + 3, g + 1.2, W.waterY - 1.5); }
+    R.bonus.push({ id: newId(), k: k, x: r1(p.x), y: r1(y), z: r1(p.z), t0: this.t });
+  };
+  RP.arenaPick = function (p, b) {
+    var t = this.t;
+    if (b.k === 'heal') p.hp = Math.min(p.stats.hp, p.hp + p.stats.hp * A.HEAL_K);
+    else if (b.k === 'dmg') p.aDmgT = Math.max(p.aDmgT || 0, t) + A.DMG_T;
+    else p.aSpdT = Math.max(p.aSpdT || 0, t) + A.SPD_T;
+    // совместная арена: бонус полезен всей группе — живые союзники получают долю (лечение A.TEAM_HEAL, баффы на A.TEAM_BUFF длительности)
+    if (this.arena && this.arena.team) this.players.forEach(function (q) {
+      if (q === p || q.bot || q.gone || !q.alive) return;
+      if (b.k === 'heal') q.hp = Math.min(q.stats.hp, q.hp + q.stats.hp * A.TEAM_HEAL);
+      else if (b.k === 'dmg') q.aDmgT = Math.max(q.aDmgT || 0, t) + A.DMG_T * A.TEAM_BUFF;
+      else q.aSpdT = Math.max(q.aSpdT || 0, t) + A.SPD_T * A.TEAM_BUFF;
+    });
+    this.events.push(['arena', 'pick', p.id, b.k, b.x, b.y, b.z]);
+  };
+  RP.arenaRecord = function (p) {
+    var R = this.arena; if (!R || p.bot) return;
+    var key = R.team ? 'arenaT' : 'arena', done = Math.max(0, R.wave - (R.state === 'fight' ? 1 : 0)), st = p.profile.stats;
+    p.arenaBest = Math.max(p.arenaBest || 0, done);
+    if (done > (st[key] | 0)) { st[key] = done; st[key + 'Cls'] = p.cls; st[key + 'At'] = Date.now(); this.markDirty(p); }
+    this.flushProfile(p, true);                                                 // сразу в базу (через сервер): таблица рекордов берёт данные отсюда
+    return done;
+  };
+  RP.arenaDeath = function (p) {
+    if (!this.arena || p.bot) return;
+    var w = this.arenaRecord(p);
+    this.sendTo(p, { t: 'arenadead', w: w, team: this.arena.team ? 1 : 0, best: p.profile.stats[this.arena.team ? 'arenaT' : 'arena'] | 0 });
+  };
+  RP.updateArena = function () {
+    var R = this.arena, self = this, t = this.t; if (!R || R.over) return;
+    var alive = 0; this.players.forEach(function (p) { if (!p.bot && p.alive && !p.gone) alive++; });
+    if (!alive && this.hasHuman()) {                                            // все погибли — конец, рекорды в базу
+      R.over = true;
+      this.players.forEach(function (p) { if (!p.bot) { var w = self.arenaRecord(p); self.sendTo(p, { t: 'arenaend', w: Math.max(w, p.arenaBest || 0), team: R.team ? 1 : 0, best: p.profile.stats[R.team ? 'arenaT' : 'arena'] | 0 }); } });
+      R.state = 'over'; this.ents.forEach(function (e) { if (e.wave) self.ents.delete(e.id); }); R.bonus = [];
+      return;
+    }
+    if (R.state === 'break') {
+      // передышка: здоровье понемногу восстанавливается (за весь перерыв — CF.ARENA.HEAL от максимума)
+      var k = A.HEAL / A.BREAK * DT;
+      this.players.forEach(function (p) { if (p.alive && !p.gone) p.hp = Math.min(p.stats.hp, p.hp + p.stats.hp * k); });
+      if (t >= R.nextT) this.startArenaWave();
+      return;
+    }
+    // волна: враги появляются по очереди, бонусы — время от времени
+    while (R.q.length && R.q[0].t <= t) this.arenaSpawn(R.q.shift());
+    if (t >= R.bonusT && R.bonus.length < A.BONUS_MAX + (R.team ? 1 : 0)) { var nd = this.arenaNeed(); this.arenaBonusSpawn(); R.bonusT = t + (R.team ? A.BONUS_EVERY[0] : A.BONUS_EVERY[1]) * (nd.miss > 0.5 ? 0.6 : 1); }
+    for (var i = R.bonus.length - 1; i >= 0; i--) {
+      var b = R.bonus[i], took = null;
+      if (t - b.t0 < 0.6) continue;                                             // ещё «проявляется»
+      this.players.forEach(function (p) { if (!took && p.alive && !p.gone && Math.hypot(p.st.x - b.x, p.st.z - b.z) < 1.4 + p.stats.radius && Math.abs(p.st.y + 0.6 - b.y) < 2.2 + p.stats.radius) took = p; });
+      if (took) { this.arenaPick(took, b); R.bonus.splice(i, 1); }
+    }
+    if (!this.arenaLeft()) {                                                    // волна пройдена: награда, бонусы исчезают, передышка; павших (в совместной) поднимаем
+      R.state = 'break'; R.nextT = t + A.BREAK; R.bonus = [];
+      var coins = 15 + 8 * R.wave, team = R.team;
+      this.players.forEach(function (p) {
+        if (p.bot || p.gone) return;
+        if (!p.alive && team) { self.respawnPlayer(p); p.hp = p.stats.hp * 0.5; var a = self.rng() * 6.28; p.st.x = Math.cos(a) * 4; p.st.z = Math.sin(a) * 4; p.st.y = self.W.ocean ? (self.W.waterY + self.W.heightAt(p.st.x, p.st.z)) / 2 : self.W.heightAt(p.st.x, p.st.z); p.rs++; }
+        if (!p.alive) return;
+        p.arLv = Math.min(CF.MAX_LEVEL, (p.arLv || 1) + A.LV_UP); self.refreshStats(p, true); self.events.push(['lv', p.id, p.arLv]); self.broadcast({ t: 'upd', p: { id: p.id, level: p.arLv } }, p.id);
+        self.gainCoins(p, coins); self.gainXp(p, Math.round(CF.xpForLevel(Math.max(5, p.profile.level)) * 0.12));
+        self.arenaRecord(p);
+      });
+      this.events.push(['arena', 'clear', R.wave, coins]);
+    }
+  };
+  RP.arenaSnap = function (p, msg) {
+    var R = this.arena; if (!R) return;
+    var bn = []; for (var i = 0; i < R.bonus.length; i++) { var b = R.bonus[i]; bn.push([b.id, b.k, b.x, b.y, b.z]); }
+    msg.ar = { lv: p.arLv || 1, w: R.wave, st: R.state, nt: R.state === 'break' ? r1(Math.max(0, R.nextT - this.t)) : 0, left: R.state === 'fight' ? this.arenaLeft() : 0, team: R.team ? 1 : 0, bn: bn,
+      ad: p.aDmgT > this.t ? r1(p.aDmgT - this.t) : 0, as: p.aSpdT > this.t ? r1(p.aSpdT - this.t) : 0, best: p.profile.stats[R.team ? 'arenaT' : 'arena'] | 0 };
+  };
+  RP.noRespawn = function () { return this.mode === 'rush' || this.isArena(); };
   RP.onHumanJoin = (function (prev) {
     return function (p) {
       prev.call(this, p);
       if (this.mode === 'rush') { p.st.x = (this.humans() - 1) * 4 - 2; p.st.z = 6; p.st.y = this.W.heightAt(p.st.x, p.st.z); p.shield = this.t + 4; p.rs++; }
+      if (this.isArena()) { p.arLv = Math.max(1, Math.round(this.arena && this.arena.wave > 1 ? this.arenaAvgLv() : 1)); this.refreshStats(p); p.hp = p.stats.hp; var ja = this.rng() * 6.28; p.st.x = Math.cos(ja) * 4; p.st.z = Math.sin(ja) * 4; p.st.y = this.W.ocean ? (this.W.waterY + this.W.heightAt(p.st.x, p.st.z)) / 2 : this.W.heightAt(p.st.x, p.st.z); p.shield = this.t + 4; p.rs++; }
     };
   })(RP.onHumanJoin);
-  RP.initSpawns = (function (prev) { return function () { if (this.mode === 'rush') return; prev.call(this); }; })(RP.initSpawns);
-  RP.initPlants = (function (prev) { return function () { if (this.mode === 'rush') return; prev.call(this); }; })(RP.initPlants);
+  RP.initSpawns = (function (prev) { return function () { if (this.mode === 'rush' || this.isArena()) return; prev.call(this); }; })(RP.initSpawns);
+  RP.initPlants = (function (prev) { return function () { if (this.mode === 'rush' || this.isArena()) return; prev.call(this); }; })(RP.initPlants);
 
   RP.updateBossAndZones = function () {
     if (this.mode === 'duel') return;
     this.updateBoss(); this.updateZones(); this.updatePortals();
     if (this.rush) this.updateRush();
+    if (this.arena) this.updateArena();
   };
   RP.extraSnapshot = function (p, msg) {
     var b = this.boss;
@@ -392,6 +581,7 @@
     var wl = CF.worldList(CF.worldOf(this.biome)), idx = wl.indexOf(this.biome), pr = p.profile;
     msg.pt = { req: CF.BOSS_LEVEL[this.biome], boss: b && !b.dead ? 1 : 0, next: pr.kings.indexOf(this.biome) >= 0 && idx < wl.length - 1 ? 1 : 0, cool: this.bossCool ? Math.max(0, Math.round(this.bossCool - this.t)) : 0 };
     if (this.rush) msg.rush = { w: this.rush.wave + 1, st: this.rush.state };
+    if (this.arena) this.arenaSnap(p, msg);
     if (p.hzT && this.t - p.hzT < 0.5) msg.mp.hz = p.hz;
     if (this.duel) this.duelSnapshot(p, msg);
     // союзники и их хозяин — подсветка списка союзников

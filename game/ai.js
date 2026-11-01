@@ -20,7 +20,7 @@
   RP.makeEnt = function (arch, x, z, lv, o) {
     o = o || {};
     // потолок уровня врагов на локации — уровень её босса (в первой локации не выше 10)
-    var cap = CF.BOSS_LEVEL && CF.BOSS_LEVEL[this.biome]; if (cap && !o.owner) lv = Math.min(lv, cap);
+    var cap = CF.BOSS_LEVEL && CF.BOSS_LEVEL[this.biome]; if (cap && !o.owner && !o.free) lv = Math.min(lv, cap);
     var W = this.W, sc = Sim.enemyScale(lv), y;
     var water = !!arch.water, swimY;
     // в океане водные плавают на разной глубине (своя «полка»), в озёрах суши — у поверхности, как раньше
@@ -35,7 +35,21 @@
       wx: x, wz: z, swimY: swimY, dots: [], hitBy: null, moving: false, dead: false, lastHurt: -99, bob: this.rng() * 6.28, owner: o.owner || null, expire: o.expire || 0, big: arch.size >= 1.4
     };
     this.ents.set(e.id, e);
+    if (e.team === 'e' && !e.owner) { e.bHp = e.mhp; e.bDmg = e.dmg; this.teamFit(e, this.teamN || 1); }
     return e;
+  };
+  // командная игра: обычные враги крепче и злее с каждым игроком в мире (+30 % HP, +8 % урона за игрока).
+  // Арена масштабирует волны сама. Отключившийся на время (VPN) игрок ещё считается — враги не «мигают» силой.
+  RP.teamFit = function (e, n) {
+    if (this.arena || this.mode === 'duel' || !e.bHp) return;
+    var k = Math.max(0, n - 1), frac = e.mhp > 0 ? e.hp / e.mhp : 1;
+    e.mhp = e.bHp * (1 + CF.TEAM_ENEMY_HP * k); e.hp = Math.max(0.01, e.mhp * frac); e.dmg = e.bDmg * (1 + CF.TEAM_ENEMY_DMG * k);
+  };
+  RP.teamUpdate = function () {
+    var n = 0; this.players.forEach(function (p) { if (!p.bot) n++; }); n = Math.max(1, n);
+    if (n === this.teamN) return;
+    this.teamN = n; var self = this;
+    this.ents.forEach(function (e) { if (e.kind === 'e' && !e.dead && e.bHp) self.teamFit(e, n); });
   };
   RP.spawnEnemy = function (archId, pos) {
     var arch = ARCH[archId], W = this.W, p = pos;
@@ -65,7 +79,7 @@
     return null;
   };
   RP.eliteFill = function (humans) {
-    if (this.mode === 'rush' || this.W.duel) return;
+    if (this.mode === 'rush' || this.arena || this.W.duel) return;
     var topL = 1, cnt = 0, i, self = this;
     for (i = 0; i < humans.length; i++) if (humans[i].alive && !humans[i].gone) topL = Math.max(topL, humans[i].profile.level | 0);
     this.ents.forEach(function (e) { if (e.elite && !e.dead) cnt++; });
@@ -79,7 +93,7 @@
       if (ARCH[id].water && !this.W.randomWater(this.rng)) continue;            // в этом биоме нет глубокой воды
       for (var i = 0; i < n; i++) this.spawnEnemy(id);
     }
-    if (this.mode !== 'rush' && !this.W.duel) for (var j = 0; j < this.eliteWant(1); j++) this.spawnElite(1);
+    if (this.mode !== 'rush' && !this.arena && !this.W.duel) for (var j = 0; j < this.eliteWant(1); j++) this.spawnElite(1);
   };
   // защищает от падения при отсутствии воды: если воды нет — рыбу не создаём
   RP.queueRespawn = function (archId) { this.respawnQ.push({ t: this.t + (CF.RESPAWN_MIN || 22) + this.rng() * (CF.RESPAWN_RND || 22), id: archId }); };
@@ -112,7 +126,7 @@
         this.markDirty(p);
       }
     }
-    if (this.mode !== 'rush' && !e.fill) this.queueRespawn(arch.id);
+    if (this.mode !== 'rush' && !this.arena && !e.fill) this.queueRespawn(arch.id);
   };
 
   // ---------------------------------------------------------------- движение
@@ -129,19 +143,26 @@
     var dx = tx - s.x, dz = tz - s.z, d = Math.hypot(dx, dz);
     if (d < 0.05) { e.moving = false; return d; }
     var base = Math.atan2(dx, dz), tries = [0, 0.6, -0.6, 1.2, -1.2, 2.0, -2.0], i, nx, nz, ang;
+    if (a.water && !e.boss) {                                                   // водные: курс поворачивает плавно, по дуге (а не разворот на месте), в крутом повороте — тише
+      if (e.hd === undefined) e.hd = s.face || base;
+      var rate = (e.target ? 3.2 : 2.0) + (d < 3 ? 2 : 0), dh = wrap(base - e.hd), stp = rate * DT;
+      e.hd = wrap(e.hd + Math.max(-stp, Math.min(stp, dh)));
+      sp *= 0.45 + 0.55 * Math.max(0, Math.cos(dh)); base = e.hd;
+    }
     for (i = 0; i < tries.length; i++) {
       ang = base + tries[i];
       nx = s.x + Math.sin(ang) * sp * DT; nz = s.z + Math.cos(ang) * sp * DT;
       if (!this.groundOK(e, nx, nz)) continue;
-      var n = W.nest; if (e.team === 'e' && !e.boss && Math.hypot(nx - n.x, nz - n.z) < 22 && Math.hypot(s.x - n.x, s.z - n.z) > Math.hypot(nx - n.x, nz - n.z)) continue;   // у гнезда безопасно
+      var n = W.nest; if (e.team === 'e' && !e.boss && !e.wave && Math.hypot(nx - n.x, nz - n.z) < 22 && Math.hypot(s.x - n.x, s.z - n.z) > Math.hypot(nx - n.x, nz - n.z)) continue;   // у гнезда безопасно
       if (!a.fly && !a.water && W.heightAt(nx, nz) - W.heightAt(s.x, s.z) > 0.9) continue;
-      if (!e.boss && !e.owner && Math.hypot(nx, nz) < CF.ARENA_R + 4 && Math.hypot(s.x, s.z) > CF.ARENA_R + 4) continue;   // в арену не заходят
+      if (!e.boss && !e.owner && !e.wave && Math.hypot(nx, nz) < CF.ARENA_R + 4 && Math.hypot(s.x, s.z) > CF.ARENA_R + 4) continue;   // в арену не заходят
       break;
     }
     if (i === tries.length) { e.moving = false; return d; }
-    var r = Sim.resolve(W, nx, nz, a.fly ? 0.1 : e.radius * 0.8);
+    var r = Sim.resolve(W, nx, nz, a.fly ? 0.1 : e.radius * 0.8, a.water ? s.y : undefined);
     s.x = r.x; s.z = r.z;
-    s.face = wrap(s.face + wrap(ang - s.face) * Math.min(1, 9 * DT));
+    s.face = a.water && !e.boss ? ang : wrap(s.face + wrap(ang - s.face) * Math.min(1, 9 * DT));
+    if (a.water && !e.boss) e.hd = ang;
     e.moving = true;
     this.fixY(e);
     return d;
@@ -182,7 +203,7 @@
   // в биоме, где игрок уже король, враги чуть слабее бьют
   RP.kingDmgK = function (e, p) { return !e.boss && !e.fromBoss && p && p.profile && (p.profile.kings || []).indexOf(this.biome) >= 0 ? 0.85 : 1; };
   RP.friendly = function (e, p) {
-    if (this.mode === 'rush') return false;
+    if (this.mode === 'rush' || this.arena) return false;
     if (e.boss || e.fromBoss) return false;
     return false;   // хищники нападают и на короля биома
   };
@@ -303,7 +324,9 @@
     } else {
       if (e.fleeT > t) { var fa = e.fleeFrom && e.fleeFrom.st ? Math.atan2(s.x - e.fleeFrom.st.x, s.z - e.fleeFrom.st.z) : 0; this.moveEnt(e, s.x + Math.sin(fa) * 10, s.z + Math.cos(fa) * 10, 1.0); return; }
       if (tgt && (tgt.hp <= 0 || tgt.alive === false || tgt.gone || (tgt.kind === 'p' && (this.friendly(e, tgt) || tgt.shield > t || !this.canHitAir(e, tgt))))) { tgt = e.target = null; }
-      if (!tgt || (this.tick + e.id) % 8 === 0) {
+      if (e.wave) {                                                           // враг арены: всегда идёт на ближайшего живого игрока (без лимита преследователей и «не заметил»)
+        if (!tgt || (this.tick + e.id) % 10 === 0) { var wb = null, wd = 1e9, me_ = this; this.players.forEach(function (q) { if (!q.alive || q.gone || q.bot || !me_.canHitAir(e, q)) return; var dq = dist(e.st, q.st); if (dq < wd) { wd = dq; wb = q; } }); tgt = e.target = wb; }
+      } else if (!tgt || (this.tick + e.id) % 8 === 0) {
         var np = this.pickTarget(e);
         if (np) { tgt = e.target = np; e.lostT = t; }
         else if (tgt && !this.canSee(e, tgt, (a.aggro || 20) * 1.6 * (CF.AGGRO_MULT || 0.75) * (tgt.kind === 'p' ? this.aggroK(e, tgt) : 1))) { if (t - (e.lostT || 0) > 4) tgt = e.target = null; }
@@ -312,7 +335,7 @@
     if (tgt) {
       d = dist(e.st, tgt.st);
       var home = Math.hypot(s.x - e.home.x, s.z - e.home.z);
-      if (home > 95) { e.target = null; e.aggroT = 0; this.moveEnt(e, e.home.x, e.home.z, 1.0); return; }
+      if (home > 95 && !e.wave) { e.target = null; e.aggroT = 0; this.moveEnt(e, e.home.x, e.home.z, 1.0); return; }
       var reach = e.radius + (tgt.stats ? tgt.stats.radius : 0.6) + 1.0;
       if (a.fly) {
         e.diveTo = d < 9 ? -(a.alt || 8) + 1.5 : 0;
@@ -443,7 +466,7 @@
   RP.isNight = function () { return this.tod < 0.22 || this.tod > 0.78; };
   RP.isStorm = function () { return this.wx > 0.6; };
   RP.levelFill = function (humans) {
-    if (this.mode === 'rush' || this.W.duel) return;
+    if (this.mode === 'rush' || this.arena || this.W.duel) return;
     this.eliteFill(humans);
     var W = this.W, self = this, table = W.cfg.spawn, ids = [];
     for (var id in table) if (ARCH[id] && ARCH[id].role !== 'bug') ids.push(id);
@@ -507,10 +530,10 @@
 
   // ---------------------------------------------------------------- гроза и секреты
   // в грозу шанс редкой находки (монеты) при победе и еде
-  // морские питомцы, срабатывающие при ударе по хозяину: фугу (при здоровье < 25 %) и медуза (шанс оглушить напавшего)
+  // морские питомцы, срабатывающие при ударе по хозяину: осьминог (при здоровье < 25 %) и медуза (шанс оглушить напавшего)
   RP.petDefend = function (p, src) {
     var pt = p.profile.pet, t = this.t, self = this;
-    if (pt === 'puffer' && p.hp < p.stats.hp * 0.25 && t > (p.pufT || 0)) {
+    if (pt === 'octopus' && p.hp < p.stats.hp * 0.25 && t > (p.pufT || 0)) {
       p.pufT = t + 45; var n = 0;
       this.ents.forEach(function (e) { if (e.kind === 'e' && !e.dead && e.hp > 0 && e.team !== p.team && !e.big && dist(e.st, p.st) < 7) { e.stunT = t + 1.2; n++; } });
       this.events.push(['pet', p.id, 3, n]);
@@ -524,7 +547,7 @@
   RP.petAct = function (p) {
     var pt = p.profile.pet, s = p.st, self = this;
     if ((pt === 'chick' || pt === 'seahorse') && p.hp < p.stats.hp && this.t - (p.lastHurt || 0) > 4) { p.hp = Math.min(p.stats.hp, p.hp + p.stats.hp * 0.04); this.events.push(['pet', p.id, 0]); }
-    else if (pt === 'hedgehog' || pt === 'puffer') {
+    else if (pt === 'hedgehog' || pt === 'octopus') {
       var best = null, bd = 8;
       this.ents.forEach(function (e) {
         if (!(e.hp > 0) || e.dead || e.team === p.team || e.kind === 'b' || e.role === 'bug' || e.kind !== 'e' || e.role === 'herd' || e.role === 'prey') return;
@@ -538,7 +561,7 @@
     var c = 12 + ((this.rng() * 28) | 0); this.gainCoins(p, c); this.events.push(['rare', p.id, c]);
   };
   RP.updateStorm = function () {
-    if (!this.isStorm() || this.W.duel || this.mode === 'rush' || this.t < (this.boltT || 0)) return;
+    if (!this.isStorm() || this.W.duel || this.mode === 'rush' || this.arena || this.t < (this.boltT || 0)) return;
     this.boltT = this.t + 5 + this.rng() * 8;
     var hs = []; this.players.forEach(function (q) { if (!q.bot && q.alive && !q.gone) hs.push(q); });
     if (!hs.length) return;
@@ -560,7 +583,7 @@
     return null;
   };
   RP.updateSecrets = function (humans) {
-    if (this.W.duel || this.mode === 'rush') return;
+    if (this.W.duel || this.mode === 'rush' || this.arena) return;
     if (!this.secrets) {
       this.secrets = [];
       // в океане сокровищ больше: 10 сундуков, 3 золотых плода и 4 жемчужины в гигантских раковинах
