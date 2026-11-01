@@ -819,6 +819,7 @@
     if (!p.trophies || typeof p.trophies !== 'object') p.trophies = {};
     p.elo = Math.max(0, Math.min(4000, +p.elo || 1000)); p.dw = Math.max(0, p.dw | 0); p.dl = Math.max(0, p.dl | 0); if (typeof p.season !== 'string') p.season = '';
     if (!p.nest || typeof p.nest !== 'object') p.nest = {}; if (!Array.isArray(p.nest.items)) p.nest.items = []; if (!Array.isArray(p.nest.put)) p.nest.put = [];
+    if (p.nest.items.indexOf('mushrooms') >= 0) { p.coins = (p.coins | 0) + 100; p.nest.items = p.nest.items.filter(function (x) { return x !== 'mushrooms'; }); }      // грибы убраны из игры — вернули 100 монет
     p.nest.items = p.nest.items.filter(function (x, i, a) { return CF.NEST_ITEMS[x] && a.indexOf(x) === i; });
     p.nest.put = p.nest.put.filter(function (x, i, a) { return (CF.nestOwned(p, x) || (x.indexOf('tr_') === 0 && CF.nestItem(x))) && a.indexOf(x) === i; }).slice(0, CF.NEST_MAX);
     if (!Array.isArray(p.pets)) p.pets = []; p.pets = p.pets.map(function (x) { return x === 'puffer' ? 'octopus' : x; }).filter(function (x, i, a) { return CF.PETS[x] && a.indexOf(x) === i; });   // фугу заменён осьминогом (сохранения не теряются)

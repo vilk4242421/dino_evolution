@@ -223,7 +223,7 @@ function startSession(o) {
   if (S) endSession(true);
   UI.closeAll();
   const seaW = CONFIG.OCEANS.indexOf(o.biome) >= 0;
-  UI.showLoading(true, { sea: seaW, ico: seaW ? '🌊' : '🦖', msg: T(seaW ? 'load_sea' : 'load_land'), det: true });
+  UI.showLoading(true, o.mode === 'lobby' ? { ico: '🥚', ttl: T('lobby_creating'), msg: T('lobby_creating_sub'), det: true } : { sea: seaW, ico: seaW ? '🌊' : '🦖', msg: T(seaW ? 'load_sea' : 'load_land'), det: true });
   const prof = o.online ? Profile.state.profile : Profile.state.local;
   if (!prof || !prof.hatched) { UI.showLoading(false); UI.toast(T('no_character')); UI.showMenu(); return; }
   if (ctl.pendingHatch) o.hatch = true;
@@ -320,7 +320,8 @@ function handleMsg(m) {
     case 'info': UI.toast(T(m.m)); if (m.m === 'duel_start') Audio.sfx('duelgo'); break;
     case 'err': onErr(m); break;
     case 'lobbyblock': UI.lobbyBlock(m.names || []); break;
-    case 'lobbygo': UI.openLobbyPick(m.dest || {}); break;
+    case 'lobbygo': S.lobbyDest = m.dest || {}; lobbyHud(S.room); UI.openLobbyPick(S.lobbyDest); break;
+    case 'lobbycancel': S.lobbyDest = null; lobbyHud(S.room); UI.closeLobbyPick(); UI.toast(T('lobby_cancel')); break;
     case 'pong': S.ping = Math.round(performance.now() - m.n); break;
     case 'rushend': UI.banner(T('rush_end', { n: m.wave }), 4000); break;
     case 'arenadead': case 'arenaend': arenaEnd(m); break;
@@ -354,11 +355,12 @@ function lobbyHud(room) {
   if (!room || !room.lobby) return;
   b = document.createElement('button'); b.id = 'lobbybtn';
   const host = S.host === S.id;
-  b.innerHTML = host ? '🚀 ' + T('lobby_where') + ' · 🔑 ' + room.code : '⏳ ' + T('lobby_wait') + ' · 🔑 ' + room.code;
-  b.style.cssText = 'position:fixed;left:50%;top:max(10px,env(safe-area-inset-top));transform:translateX(-50%);z-index:40;width:auto;padding:10px 18px;border-radius:14px;font-weight:800;' + (host ? 'background:linear-gradient(180deg,#ffe08a,#f2b83a);color:#2a1a04;border-color:#ffe39a;box-shadow:0 4px 0 #9a6a14' : 'background:rgba(0,0,0,.5);color:#fff');
-  if (host) b.onclick = () => UI.openLobbyDest(); else b.disabled = true;
+  const go = S.lobbyDest, lbl = host ? '🚀 ' + T('lobby_where') : go ? '🦖 ' + T('lobby_pick') : '⏳ ' + T('lobby_wait');
+  b.innerHTML = lbl + ' · 🔑 ' + room.code;
+  b.style.cssText = 'position:fixed;left:50%;top:max(58px,calc(env(safe-area-inset-top) + 48px));transform:translateX(-50%);z-index:40;width:auto;padding:7px 14px;font-size:14px;border-radius:14px;font-weight:800;' + (host || go ? 'background:linear-gradient(180deg,#ffe08a,#f2b83a);color:#2a1a04;border-color:#ffe39a;box-shadow:0 4px 0 #9a6a14' : 'background:rgba(0,0,0,.5);color:#fff');      // ниже подсказки управления — не закрывает другие кнопки
+  if (host) b.onclick = () => (S.lobbyDest ? UI.openLobbyPick(S.lobbyDest) : UI.openLobbyDest()); else if (go) b.onclick = () => UI.openLobbyPick(go); else b.disabled = true;
   document.body.appendChild(b);
-  UI.banner(host ? T('lobby_host', { c: room.code }) : T('lobby_joined'), 4200);
+  if (!S.lobbyShown) { S.lobbyShown = 1; UI.banner(host ? T('lobby_host', { c: room.code }) : T('lobby_joined'), 4200); }
 }
 // кто победил: враг/босс — его название на языке игрока, игрок — его ник (сервер шлёт { id } / { boss } / { name })
 function killerName(by) {
@@ -378,7 +380,7 @@ function onWelcome(m) {
   for (const p of S.players.values()) p.actor && p.actor.dispose();
   for (const e of S.ents.values()) e.group && e.group.parent && e.group.parent.remove(e.group);
   S.players.clear(); S.ents.clear(); S.pending.length = 0; S.lastRs = null; S.off = { x: 0, y: 0, z: 0 }; S.drops = []; S.zones.forEach(z => z.mesh.parent && z.mesh.parent.remove(z.mesh)); S.zones = [];
-  S.nestGrp = null; S.nestKey = ''; S.bs = null; S.du = null; S.rush = null; S.pt = null; S.al = null; S.ar = null; S.arLB = null; S.arEnd = null; S.seaAr = null; arenaReset(); if (S.secM) { for (const m of S.secM.values()) scene.remove(m); S.secM.clear(); } prevNight = prevStorm = null;
+  S.nestGrp = null; S.nestKey = ''; buildLobbyNest(); S.bs = null; S.du = null; S.rush = null; S.pt = null; S.al = null; S.ar = null; S.arLB = null; S.arEnd = null; S.seaAr = null; arenaReset(); if (S.secM) { for (const m of S.secM.values()) scene.remove(m); S.secM.clear(); } prevNight = prevStorm = null;
   S.me = Sim.newPlayer(S.W, m.me.x, m.me.z); Sim.importState(S.me, m.me); S.lastPos = null;
   onProfile(m.prof, true);
   if (m.login) setTimeout(() => showLogin(m.login), 1800);
@@ -1187,14 +1189,6 @@ function nestItemMesh(id) {
       const head = new THREE.Group(); head.position.set(x + lean * h, h, z); head.rotation.set(0.35, a, 0); g.add(head);
       for (let p = 0; p < k.n; p++) { const pa = p / k.n * Math.PI * 2, pt = new THREE.Mesh(SG(1, 6, 4), mat(k.pet, 0, { roughness: 0.5, side: THREE.DoubleSide })); pt.scale.set(k.w, 0.012, k.len); pt.position.set(Math.cos(pa) * k.len * 0.9, 0, Math.sin(pa) * k.len * 0.9); pt.rotation.y = -pa + Math.PI / 2; pt.rotation.z = 0.0; pt.castShadow = true; head.add(pt); }
       const mid = new THREE.Mesh(SG(0.045, 8, 6), mat(k.mid, 0.1, { roughness: 0.9 })); mid.scale.y = 0.6; mid.position.y = 0.012; head.add(mid); }
-  } else if (id === 'mushrooms') {   // мухомор, лисичка и белый гриб с настоящей формой шляпки
-    const species = [{ cap: 0xd2302a, stem: 0xf3ecd8, k: 1, spots: true, gills: 0xf0e0c0 }, { cap: 0xe0a02a, stem: 0xf0d890, k: 0.62, gills: 0xe8b860 }, { cap: 0x9a6a3e, stem: 0xe9dcc0, k: 0.8, gills: 0xefe2c4 }];
-    [[0, 0, 0], [0.34, 0.1, 1], [-0.26, 0.22, 2], [0.12, -0.3, 1], [-0.12, -0.2, 0]].forEach(([x, z, si], i) => { const sp = species[si], k = sp.k * (i > 2 ? 0.55 : 1);
-      const sp1 = []; for (let j = 0; j <= 8; j++) { const t = j / 8; sp1.push(new THREE.Vector2(0.05 + 0.03 * Math.pow(1 - t, 2) + 0.02 * Math.sin(t * 3), t * 0.4)); } const stem = new THREE.Mesh(new THREE.LatheGeometry(sp1, 12), mat(sp.stem, 0, { roughness: 0.85 })); stem.scale.setScalar(k); stem.position.set(x, 0, z); stem.castShadow = true; g.add(stem);
-      const cp = []; for (let j = 0; j <= 10; j++) { const t = j / 10, a = t * Math.PI / 2; cp.push(new THREE.Vector2(Math.sin(a) * 0.27 * (si === 1 ? 1.15 : 1), Math.cos(a) * 0.17 * (si === 1 ? 0.8 : 1))); } cp.push(new THREE.Vector2(0.0001, 0));
-      const cap = new THREE.Mesh(new THREE.LatheGeometry(cp, 16), mat(sp.cap, 0, { roughness: 0.55, side: THREE.DoubleSide })); cap.scale.setScalar(k); cap.position.set(x, 0.37 * k, z); cap.rotation.z = (i % 2 ? 0.06 : -0.05); cap.castShadow = true; g.add(cap);
-      const gl = new THREE.Mesh(new THREE.CircleGeometry(0.25 * k, 14), mat(sp.gills, 0, { side: THREE.DoubleSide })); gl.rotation.x = Math.PI / 2; gl.position.set(x, 0.372 * k, z); g.add(gl);
-      if (sp.spots) for (let s = 0; s < 9; s++) { const sa = s * 2.4, sr = 0.05 + (s % 3) * 0.07, h = Math.cos(Math.asin(Math.min(0.95, sr / 0.27))) * 0.17; const d = new THREE.Mesh(SG(0.022 + (s % 2) * 0.012, 6, 5), mat(0xfaf5e6, 0, { roughness: 0.8 })); d.scale.y = 0.4; d.position.set(x + Math.cos(sa) * sr * k, 0.37 * k + h * k, z + Math.sin(sa) * sr * k); g.add(d); } });
   } else if (id === 'moss') {        // мягкие моховые подушки из множества бугорков
     const pal = [0x3f8a34, 0x5aa244, 0x6fb24e, 0x2f7230];
     [[0, 0, 0.5], [0.42, 0.12, 0.34], [-0.38, 0.2, 0.38], [0.1, -0.38, 0.3]].forEach(([x, z, r], i) => { for (let k = 0; k < 14; k++) { const a = k * 2.4 + i, d = Math.sqrt(k / 14) * r * 0.85, br = r * (0.28 + ((k * 7) % 5) * 0.045); add(lumpGeo(br, 1, 0.35, k + i * 9), mat(pal[(k + i) % 4], 0, { roughness: 1 }), x + Math.cos(a) * d, br * 0.35, z + Math.sin(a) * d, 0, 0, 0, 1, 0.62, 1); } });
@@ -1225,6 +1219,16 @@ function nestItemMesh(id) {
     add(SG(0.04, 8, 6), mat(0xfff2b0, 0xffe080, { emissiveIntensity: 2 }), lx, ly - 0.04, 0);
     add(CO(0.13, 0.12, 4), iron, lx, ly + 0.18, 0, 0, Math.PI / 4, 0); add(new THREE.TorusGeometry(0.03, 0.008, 6, 10), iron, lx, ly + 0.27, 0, Math.PI / 2, 0, 0);
     add(SG(0.34, 10, 8), new THREE.MeshBasicMaterial({ color: 0xffb040, transparent: true, opacity: 0.14, depthWrite: false, blending: THREE.AdditiveBlending }), lx, ly, 0);
+  } else if (it && it.env) {            // модель из присланных GLB: пучок растений / камней / кораллов на земле
+    const [mn, cnt, th, rad] = it.env;
+    if (EnvKit.has(mn)) {
+      const nv = EnvKit.variants(mn);
+      for (let i = 0; i < cnt; i++) {
+        const v = i % nv, k = th / EnvKit.height(mn, v) * (i ? 0.78 + ((i * 37) % 5) * 0.07 : 1), a = i * 2.4, r = cnt > 1 ? rad * Math.sqrt((i + 0.5) / cnt) : 0, o = new THREE.Group();
+        for (const pt of EnvKit.parts(mn, v, 0, false)) { const m = new THREE.Mesh(pt.geo, pt.mat); m.castShadow = true; m.customDepthMaterial = pt.dm; o.add(m); }
+        o.scale.setScalar(k); o.position.set(Math.cos(a) * r, 0, Math.sin(a) * r); o.rotation.y = i * 1.7; g.add(o);
+      }
+    }
   } else if (bossHeadTrophy(it.trophy, g, mat, add, CG, col)) {      // трофей босса: настоящая голова босса этого биома на деревянном щите
   } else {       // трофей босса: череп хищника на деревянной подставке
     const bone = mat(0xe8e0c8, 0, { roughness: 0.8 }), dark = mat(0x151210, 0, { roughness: 1 }), wood = mat(0x5a3e24, 0, { roughness: 1 });
@@ -1261,7 +1265,7 @@ function nestView(cv, prof, put) {
   EnvKit.fitEggs(kit.eggs);
   kit.group.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } }); kit.group.scale.setScalar(3.4); sc.add(kit.group);
   const list = (put || []).filter(id => CONFIG.nestItem(id));
-  list.forEach((id, i) => { const m = nestItemMesh(id), a = 0.5 + i / list.length * Math.PI * 2; m.position.set(Math.cos(a) * 4.4, -0.03, Math.sin(a) * 4.4); m.rotation.y = -a + Math.PI / 2; m.scale.setScalar(2.0); sc.add(m); });
+  list.forEach((id, i) => { const m = nestItemMesh(id), a = 0.5 + i / list.length * Math.PI * 2; m.position.set(Math.cos(a) * 4.4, -0.03, Math.sin(a) * 4.4); m.rotation.y = -a + Math.PI / 2; m.scale.setScalar(CONFIG.nestItem(id).trophy ? 1.55 : 2.0); sc.add(m); });
   const cam = new THREE.PerspectiveCamera(42, W0 / H0, 0.1, 120);
   const st = { yaw: 0.6, pit: 0.5, dist: 13, drag: null, idle: 0, run: true }, look = new THREE.Vector3(0, 0.9, 0);
   const pd = e => { st.drag = { x: e.clientX, y: e.clientY }; st.idle = 0; cv.setPointerCapture && cv.setPointerCapture(e.pointerId); cv.style.cursor = 'grabbing'; };
@@ -1281,18 +1285,26 @@ function nestView(cv, prof, put) {
   const stop = () => { if (!st.run) return; st.run = false; sc.traverse(o => { o.geometry && o.geometry.dispose(); if (o.material) [].concat(o.material).forEach(m => { m.map && m.map.dispose(); m.dispose(); }); }); R.dispose(); R.forceContextLoss && R.forceContextLoss(); if (nestView3 && nestView3.stop === stop) nestView3 = null; };
   nestView3 = { stop }; requestAnimationFrame(frame);
 }
+// лобби: на плоской площадке в центре стоит гнездо (как в окне «Гнездо»), вокруг — украшения создателя
+function buildLobbyNest() {
+  if (S.lobbyG) { scene.remove(S.lobbyG); S.lobbyG.traverse(o => { o.geometry && o.geometry.dispose(); }); S.lobbyG = null; }
+  if (!S.room || !S.room.lobby) return;
+  const g = new THREE.Group(), y = S.W.heightAt(0, 0), kit = DinoNest.create({ seed: 11, layout: 'ring', eggs: 8, shell: NEST_SHELL_V[S.biome] || 'sand', diameter: 1.8, hatching: false, surroundings: true, groundR: 2.4, eggDetail: 26, edgeColor: NEST_GROUND_V[S.biome] || 0x4f7a2b });
+  EnvKit.fitEggs(kit.eggs); kit.group.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+  kit.group.scale.setScalar(3.4); g.add(kit.group); g.position.set(0, y, 0); scene.add(g); S.lobbyG = g;
+}
 function updateNestDeco() {
   if (!S || !S.world || !S.W) return;
-  const list = nestOwnerList(), key = S.biome + '|' + list.join(',');
+  const list = nestOwnerList(), key = S.biome + '|' + (S.room && S.room.lobby ? 'L' : '') + list.join(',');
   if (S.nestKey === key) return; S.nestKey = key;
   if (S.nestGrp) { scene.remove(S.nestGrp); S.nestGrp.traverse(o => { o.geometry && o.geometry.dispose(); o.material && o.material.dispose(); }); S.nestGrp = null; }
   if (!list.length) return;
-  const g = new THREE.Group(), n = S.W.nest, R = 4.4;
+  const g = new THREE.Group(), n = S.room && S.room.lobby ? { x: 0, z: 0 } : S.W.nest, R = S.room && S.room.lobby ? 5.2 : 4.4;
   list.forEach((id, i) => {
     if (!CONFIG.nestItem(id)) return; const m = nestItemMesh(id), a = 0.5 + i / list.length * Math.PI * 2, x = n.x + Math.cos(a) * R, z = n.z + Math.sin(a) * R;
     const gh = S.world && S.world.meshH ? S.world.meshH : S.W.heightAt; let gy = gh(x, z);
     for (let q = 0; q < 8; q++) { const qa = q * 0.7854; gy = Math.min(gy, gh(x + Math.cos(qa) * 0.9, z + Math.sin(qa) * 0.9)); }
-    m.position.set(x, gy - 0.03, z); m.rotation.y = -a + Math.PI / 2; m.scale.setScalar(2.0); g.add(m);
+    m.position.set(x, gy - 0.03, z); m.rotation.y = -a + Math.PI / 2; m.scale.setScalar(CONFIG.nestItem(id).trophy ? 1.55 : 2.0); g.add(m);
   });
   scene.add(g); S.nestGrp = g;
 }
@@ -1791,7 +1803,7 @@ function friendMark(g, x, y, r, info, bot, rot) {
 const miniCv = $('mini-cv'), miniCtx = miniCv.getContext('2d');
 function drawMinimap() {
   { const bb = $('mini-boss'), rq = CONFIG.BOSS_LEVEL[S.biome], pf = S.profile; let tx = '', ok = false;
-    if (rq && pf && !(S.W && S.W.duel) && !S.ar && !S.rush) { if ((pf.kings || []).indexOf(S.biome) >= 0) tx = T('boss_done'); else if (pf.level >= rq) { tx = T('boss_avail'); ok = true; } else tx = T('boss_need', { n: rq }); }
+    if (rq && pf && !(S.W && S.W.duel) && !S.ar && !S.rush && !(S.room && S.room.lobby)) { if ((pf.kings || []).indexOf(S.biome) >= 0) tx = T('boss_done'); else if (pf.level >= rq) { tx = T('boss_avail'); ok = true; } else tx = T('boss_need', { n: rq }); }
     if (bb._t !== tx) { bb._t = tx; bb.textContent = tx; bb.style.display = tx ? 'block' : 'none'; } bb.classList.toggle('ok', ok); }
   const g = miniCtx, N = miniCv.width, c = N / 2, R = 160, k = c / R, w = S.world, me = S.me;
   g.clearRect(0, 0, N, N); g.save(); g.beginPath(); g.arc(c, c, c, 0, TWO_PI); g.clip(); g.fillStyle = '#0a1410'; g.fillRect(0, 0, N, N);

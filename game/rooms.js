@@ -82,6 +82,7 @@
   RP.spawnPoint = function (index) {
     if (this.W.duel) { var s = index % 2 ? 1 : -1; return { x: s * (CF.DUEL_R - 7), z: 0 }; }
     // первый игрок появляется в центре гнезда (там его яйцо), остальные — вокруг
+    if (this.isLobby) { var la = index * 1.25 + 0.4; return { x: Math.cos(la) * 6, z: Math.sin(la) * 6 }; }      // лобби — круглая площадка с гнездом в центре
     var n = this.W.nest, a = index * 1.57, rr = index ? 4 : 0;
     return { x: n.x + Math.cos(a) * rr, z: n.z + Math.sin(a) * rr };
   };
@@ -103,6 +104,7 @@
     return out;
   };
   RP.removePlayer = function (p) {
+    if (p.lobbyCls && p.profile && p.profile.cls !== p.lobbyCls && Sim.typeUnlocked(p.profile, p.lobbyCls)) { Sim.switchType(p.profile, p.lobbyCls); p.profile.biome = Sim.typeFits(p.lobbyCls, p.profile.biome) ? p.profile.biome : Sim.homeBiome(p.profile); p.lobbyCls = ''; this.flushProfile(p, true); }      // вернули настоящего питомца
     this.releaseAllies(p);
     this.players.delete(p.id);
     this.broadcast({ t: 'leave', id: p.id });
@@ -175,6 +177,11 @@
         var cs = ''; for (var ci = 0; ci < 6; ci++) cs += String.fromCharCode(65 + ((this.rng() * 26) | 0));
         this.lobbyGo = { mode: dm, biome: db, code: cs, t: this.t };
         this.broadcast({ t: 'lobbygo', dest: dest });
+        break;
+      }
+      case 'lobbycancel': {                                                     // создатель нажал «Назад» в выборе динозавра — снова выбирает место
+        if (!this.isLobby || p.id !== this.hostId || !this.lobbyGo) break;
+        this.lobbyGo = null; this.broadcast({ t: 'lobbycancel' }, p.id);
         break;
       }
       case 'lobbypick': {                                                       // каждый выбрал динозавра — переезжает в выбранное место (одна комната по новому коду)
@@ -916,7 +923,7 @@
       Sim.switchType(pr, o.cls);
     }
     var biome = CF.ALL_BIOMES.indexOf(o.biome) >= 0 ? o.biome : (CF.ALL_BIOMES.indexOf(pr.biome) >= 0 && Sim.typeFits(pr.cls, pr.biome) ? pr.biome : Sim.homeBiome(pr)), mode = o.mode || 'public', room = null;
-    if (mode !== 'rush' && !Sim.typeFits(pr.cls, biome)) return { error: 'bad_type' };
+    if (mode !== 'rush' && mode !== 'lobby' && !Sim.typeFits(pr.cls, biome)) return { error: 'bad_type' };
     if (mode === 'rush' && CF.isAqua(pr.cls)) return { error: 'bad_type' };
     if (mode === 'rush' && !Sim.isLord(pr)) return { error: 'locked' };
     if (mode !== 'rush' && !Sim.canEnterBiome(pr, biome)) return { error: 'locked' };
@@ -931,7 +938,7 @@
     if (mode === 'lobby') {                                                     // «Создать игру»: лобби в мире создателя, у его гнезда; друзья входят по коду
       if (!code) return { error: 'bad_code' };
       room = this.findCode(code); if (room) return { error: 'bad_code' };
-      room = this.createRoom({ biome: biome, code: code, mode: 'code', lobby: true });
+      room = this.createRoom({ biome: CF.worldOf(biome) === 'sea' ? 'forest' : biome, code: code, mode: 'code', lobby: true });      // лобби — всегда на суше: плоская площадка с гнездом
     } else if (mode === 'code' || (mode === 'rush' && code)) {
       if (!code) return { error: 'bad_code' };
       room = this.findCode(code);
@@ -945,8 +952,15 @@
     } else {
       room = this.findPublic(biome) || this.createRoom({ biome: biome, mode: 'public' });
     }
-    pr.biome = room.biome;
+    var lobbyOrig = '';
+    if (room.isLobby && !Sim.typeFits(pr.cls, room.biome)) {                    // водный питомец не должен оказаться на суше (и наоборот): в лобби временно — подходящий открытый тип, потом вернём
+      var fitCls = Object.keys(CF.CLASSES).filter(function (t) { return Sim.typeUnlocked(pr, t) && Sim.typeFits(t, room.biome); })[0];
+      if (!fitCls) return { error: 'bad_type' };
+      lobbyOrig = pr.cls; Sim.switchType(pr, fitCls);
+    }
+    if (!room.isLobby) pr.biome = room.biome;
     var player = room.addPlayer(pr, o.conn, { userId: o.userId, admin: o.admin, index: room.humans() });
+    if (lobbyOrig) player.lobbyCls = lobbyOrig;
     return { room: room, player: player };
   };
   HP.leave = function (player) {

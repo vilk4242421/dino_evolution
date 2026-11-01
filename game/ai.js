@@ -79,7 +79,7 @@
     return null;
   };
   RP.eliteFill = function (humans) {
-    if (this.mode === 'rush' || this.arena || this.W.duel) return;
+    if (this.mode === 'rush' || this.arena || this.W.duel || this.isLobby) return;
     var topL = 1, cnt = 0, i, self = this;
     for (i = 0; i < humans.length; i++) if (humans[i].alive && !humans[i].gone) topL = Math.max(topL, humans[i].profile.level | 0);
     this.ents.forEach(function (e) { if (e.elite && !e.dead) cnt++; });
@@ -466,7 +466,7 @@
   RP.isNight = function () { return this.tod < 0.22 || this.tod > 0.78; };
   RP.isStorm = function () { return this.wx > 0.6; };
   RP.levelFill = function (humans) {
-    if (this.mode === 'rush' || this.arena || this.W.duel) return;
+    if (this.mode === 'rush' || this.arena || this.W.duel || this.isLobby) return;
     this.eliteFill(humans);
     var W = this.W, self = this, table = W.cfg.spawn, ids = [];
     for (var id in table) if (ARCH[id] && ARCH[id].role !== 'bug') ids.push(id);

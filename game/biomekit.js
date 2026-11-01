@@ -425,7 +425,7 @@ def('forest', 'flowers', 'Ромашки и колокольчики', 'Matricar
   }
   return B.build(0.12);
 });
-def('forest', 'amanita', 'Мухомор', 'Amanita muscaria', 0.01, r => {
+def('forest_off', 'amanita', 'Мухомор', 'Amanita muscaria', 0.01, r => {
   const B = new Builder(), s = r.seed() & 0xffff;
   for (let k = 0; k < r.int(1, 3); k++) {
     const sc = k ? r.range(0.5, 0.75) : 1, p = new V3(k ? r.range(-0.2, 0.2) : 0, 0, k ? r.range(-0.2, 0.2) : 0);

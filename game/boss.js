@@ -39,7 +39,7 @@
     return b;
   };
   RP.initBoss = function () {
-    if (this.mode === 'rush' || this.mode === 'duel' || this.isArena()) return;
+    if (this.mode === 'rush' || this.mode === 'duel' || this.isArena() || this.isLobby) return;
     var id = this.W.cfg.boss;
     this.boss = this.makeBoss(id, 1);
     this.ents.set(this.boss.id, this.boss);
@@ -286,7 +286,7 @@
 
   // ---------------------------------------------------------------- порталы и запоры арены
   RP.lockFor = function (p) {
-    if (this.mode === 'rush' || this.isArena()) return 1;
+    if (this.mode === 'rush' || this.isArena() || this.isLobby) return 1;
     var b = this.boss; if (!b) return 0;
     var d = Math.hypot(p.st.x, p.st.z);
     if (b.state === 'fight') return d < AR - 1 ? 1 : 2;
@@ -294,7 +294,7 @@
   };
   RP.updatePortals = function () {
     var self = this, b = this.boss, W = this.W;
-    if (this.mode === 'rush' || this.mode === 'duel' || this.isArena()) return;
+    if (this.mode === 'rush' || this.mode === 'duel' || this.isArena() || this.isLobby) return;
     this.players.forEach(function (p) {
       if (p.bot || !p.alive || p.gone) return;
       var s = p.st, pr = p.profile;
@@ -566,8 +566,8 @@
       if (this.isArena()) { p.arLv = Math.max(1, Math.round(this.arena && this.arena.wave > 1 ? this.arenaAvgLv() : 1)); this.refreshStats(p); p.hp = p.stats.hp; var ja = this.rng() * 6.28; p.st.x = Math.cos(ja) * 4; p.st.z = Math.sin(ja) * 4; p.st.y = this.W.ocean ? (this.W.waterY + this.W.heightAt(p.st.x, p.st.z)) / 2 : this.W.heightAt(p.st.x, p.st.z); p.shield = this.t + 4; p.rs++; }
     };
   })(RP.onHumanJoin);
-  RP.initSpawns = (function (prev) { return function () { if (this.mode === 'rush' || this.isArena()) return; prev.call(this); }; })(RP.initSpawns);
-  RP.initPlants = (function (prev) { return function () { if (this.mode === 'rush' || this.isArena()) return; prev.call(this); }; })(RP.initPlants);
+  RP.initSpawns = (function (prev) { return function () { if (this.mode === 'rush' || this.isArena() || this.isLobby) return; prev.call(this); }; })(RP.initSpawns);
+  RP.initPlants = (function (prev) { return function () { if (this.mode === 'rush' || this.isArena() || this.isLobby) return; prev.call(this); }; })(RP.initPlants);
 
   RP.updateBossAndZones = function () {
     if (this.mode === 'duel') return;

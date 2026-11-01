@@ -88,7 +88,7 @@ export const UI = {
   showLoading(on, o) {      // окно загрузки: o = { sea, ico, msg, det }; det — полоска с процентами (загрузка мира); закрытие — без параметров
     const el = $('loading'); el.style.display = on ? 'flex' : 'none';
     if (on) {
-      $('loaderr').textContent = ''; o = o || {}; el.classList.toggle('sea', !!o.sea); $('loadico').textContent = o.ico || '🦖'; $('loadmsg').textContent = o.msg || T('loading'); $('loadhint').textContent = o.hint || '';
+      $('loaderr').textContent = ''; o = o || {}; el.classList.toggle('sea', !!o.sea); $('loadico').textContent = o.ico || '🦖'; $('loadttl').textContent = o.ttl || 'Dino Evolution'; $('loadmsg').textContent = o.msg || T('loading'); $('loadhint').textContent = o.hint || '';
       const bar = $('loadbar'), f = $('loadfill'); bar.classList.toggle('det', !!o.det); f.style.transition = 'none'; f.style.transform = ''; $('loadpct').textContent = o.det ? '0%' : '';
     }
   },
@@ -103,7 +103,7 @@ export const UI = {
   toast(msg, ms) { const t = $('toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(toastT); toastT = setTimeout(() => { t.style.display = 'none'; }, ms || 2600); },
   banner(msg, ms) { const b = $('banner'); b.textContent = msg; b.classList.add('on'); clearTimeout(bannerT); bannerT = setTimeout(() => b.classList.remove('on'), ms || 2200); },
   note(msg) { const n = document.createElement('div'); n.textContent = msg; $('notes').appendChild(n); setTimeout(() => n.remove(), 4600); while ($('notes').children.length > 5) $('notes').firstChild.remove(); },
-  closeAll, showMenu, openLobbyDest, openLobbyPick, lobbyBlock, openSea, openAbout, openChange, openEvo, openShop, openAch, openLeaders, arenaTable, openPlayPanel, openSettings, openPause, openPlayers, duelRequest,
+  closeAll, showMenu, openLobbyDest, openLobbyPick, closeLobbyPick, lobbyBlock, openSea, openAbout, openChange, openEvo, openShop, openAch, openLeaders, arenaTable, openPlayPanel, openSettings, openPause, openPlayers, duelRequest,
   refreshOpen() { if (openName && openRender) openRender(); }
 };
 
@@ -187,7 +187,7 @@ function goPlay(kind) {
   if (ctl.pendingHatch && kind !== 'code') { ctl.start({ online, biome: Sim.homeBiome(prof), mode: online && !solo ? 'public' : 'solo' }); return; }   // морской вылупляется в океане
   if (ctl.pendingHatch) ctl.fade(false, 600);
   if (kind === 'online') {      // «Создать игру»: лобби у своего гнезда — друзья входят по коду, потом создатель выбирает, куда идти
-    const b = Sim.canEnterBiome(prof, prof.biome) && Sim.typeFits(prof.cls, prof.biome) ? prof.biome : Sim.homeBiome(prof);
+    const b0 = Sim.canEnterBiome(prof, prof.biome) && Sim.typeFits(prof.cls, prof.biome) ? prof.biome : Sim.homeBiome(prof), b = CONFIG.worldOf(b0) === 'sea' ? 'forest' : b0;      // лобби всегда на суше
     ctl.start({ online: true, biome: b, cls: prof.cls, mode: 'lobby', code: randCode() }); return;
   }
   openPlayPanel(online, kind === 'code', solo);
@@ -221,10 +221,13 @@ function openLobbyPick(dest) {
   const where = dest.mode === 'arenat' ? T('arena_team') : dest.mode === 'rush' ? T('boss_rush') : TN(CONFIG.BIOME[dest.biome].n);
   const card = k => { const I = CONFIG.CLS_INFO[k], lv = Sim.typeLevel(pr, k), can = ok(k);
     return `<div class="tp ${can ? '' : 'lock'}" ${can ? `data-pk="${k}"` : ''} style="${can ? '' : 'opacity:.4'}"><i>${cIco(k, true)}</i><b>${esc(TN(I.n))}</b><small>${can ? (lv ? T('level_short') + lv : T('type_new')) : '🔒'}</small></div>`; };
-  openPanel('lobbypick', `<h2>🦖 ${T('lobby_pick')}</h2><div class="ar-info"><span>${esc(where)}</span></div><div class="types">${CONFIG.TYPES[world].map(card).join('')}</div>`, root => {
+  const host = S.host === S.id;
+  openPanel('lobbypick', `<h2>🦖 ${T('lobby_pick')}</h2><div class="ar-info"><span>${esc(where)}</span></div><div class="types">${CONFIG.TYPES[world].map(card).join('')}</div><button id="lp-x" style="margin-top:10px">⬅️ ${T('back')}</button>`, root => {
     btnClick(root, '[data-pk]', b => { ctl.send({ t: 'lobbypick', cls: b.dataset.pk }); panelClose(); UI.toast(T('lobby_going')); });
+    $('lp-x').onclick = () => { if (host) { ctl.send({ t: 'lobbycancel' }); S.lobbyDest = null; panelClose(); openLobbyDest(); } else panelClose(); };      // создатель возвращается к выбору места, остальные просто закрывают окно (кнопка наверху откроет его снова)
   });
 }
+function closeLobbyPick() { if (openName === 'lobbypick') panelClose(); }
 function lobbyBlock(names) { if (openName === 'lobby') openLobbyDest(names); else UI.toast(T('lobby_block', { n: names.join(', ') })); }
 
 // ---------------------------------------------------------------- вход

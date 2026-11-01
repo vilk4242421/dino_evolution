@@ -313,7 +313,7 @@
 </head>
 <body>
 <canvas id="c"></canvas>
-<div id="loading"><div class="ico" id="loadico">🦖</div><div class="ttl">Dino Evolution</div><div class="bar" id="loadbar"><i id="loadfill"></i></div><div class="pct" id="loadpct"></div><div class="msg" id="loadmsg"></div><div class="hint" id="loadhint"></div><div id="loaderr" style="font-size:14px;color:#e8573f;max-width:80vw;text-align:center"></div></div>
+<div id="loading"><div class="ico" id="loadico">🦖</div><div class="ttl" id="loadttl">Dino Evolution</div><div class="bar" id="loadbar"><i id="loadfill"></i></div><div class="pct" id="loadpct"></div><div class="msg" id="loadmsg"></div><div class="hint" id="loadhint"></div><div id="loaderr" style="font-size:14px;color:#e8573f;max-width:80vw;text-align:center"></div></div>
 <script>(function(){var h=document.documentElement,on=function(e){if(e.button===0||e.button===undefined)h.classList.add('pdown');},off=function(){h.classList.remove('pdown');};addEventListener('pointerdown',on,true);addEventListener('pointerup',off,true);addEventListener('pointercancel',off,true);addEventListener('blur',off);})();</script>
 <script>(function(){try{var ru=/^ru|^uk|^be/i.test(navigator.language||'ru'),seen=localStorage.getItem('dino_seen')==='1';document.getElementById('loadmsg').textContent=ru?'Загрузка игры…':'Loading the game…';document.getElementById('loadhint').textContent=seen?'':(ru?'Первый запуск немного дольше — игра загружает динозавров и мир. Дальше она будет открываться быстрее.':'The first launch takes a little longer while the game loads dinosaurs and the world. After that it opens faster.');}catch(e){}})();</script>
 
